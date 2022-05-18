@@ -40,6 +40,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    - name: Display crypto settings
+      run: sysctl crypto
+
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v2
