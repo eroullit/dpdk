@@ -222,10 +222,16 @@ struct rte_event;
 
 /* Event device capability bitmap flags */
 #define RTE_EVENT_DEV_CAP_QUEUE_QOS           (1ULL << 0)
-/**< Event scheduling prioritization is based on the priority associated with
- *  each event queue.
+/**< Event scheduling prioritization is based on the priority and weight
+ * associated with each event queue. Events from a queue with highest priority
+ * is scheduled first. If the queues are of same priority, weight of the queues
+ * are considered to select a queue in a weighted round robin fashion.
+ * Subsequent dequeue calls from an event port could see events from the same
+ * event queue, if the queue is configured with an affinity count. Affinity
+ * count is the number of subsequent dequeue calls, in which an event port
+ * should use the same event queue if the queue is non-empty
  *
- *  @see rte_event_queue_setup()
+ *  @see rte_event_queue_setup(), rte_event_queue_attr_set()
  */
 #define RTE_EVENT_DEV_CAP_EVENT_QOS           (1ULL << 1)
 /**< Event scheduling prioritization is based on the priority associated with
@@ -307,6 +313,13 @@ struct rte_event;
  * global pool, or process signaling related to load balancing.
  */
 
+#define RTE_EVENT_DEV_CAP_RUNTIME_QUEUE_ATTR (1ULL << 11)
+/**< Event device is capable of changing the queue attributes at runtime i.e
+ * after rte_event_queue_setup() or rte_event_start() call sequence. If this
+ * flag is not set, eventdev queue attributes can only be configured during
+ * rte_event_queue_setup().
+ */
+
 /* Event device priority levels */
 #define RTE_EVENT_DEV_PRIORITY_HIGHEST   0
 /**< Highest priority expressed across eventdev subsystem
@@ -322,6 +335,26 @@ struct rte_event;
 /**< Lowest priority expressed across eventdev subsystem
  * @see rte_event_queue_setup(), rte_event_enqueue_burst()
  * @see rte_event_port_link()
+ */
+
+/* Event queue scheduling weights */
+#define RTE_EVENT_QUEUE_WEIGHT_HIGHEST 255
+/**< Highest weight of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
+ */
+#define RTE_EVENT_QUEUE_WEIGHT_LOWEST 0
+/**< Lowest weight of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
+ */
+
+/* Event queue scheduling affinity */
+#define RTE_EVENT_QUEUE_AFFINITY_HIGHEST 255
+/**< Highest scheduling affinity of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
+ */
+#define RTE_EVENT_QUEUE_AFFINITY_LOWEST 0
+/**< Lowest scheduling affinity of an event queue
+ * @see rte_event_queue_attr_get(), rte_event_queue_attr_set()
  */
 
 /**
@@ -677,6 +710,14 @@ rte_event_queue_setup(uint8_t dev_id, uint8_t queue_id,
  * The schedule type of the queue.
  */
 #define RTE_EVENT_QUEUE_ATTR_SCHEDULE_TYPE 4
+/**
+ * The weight of the queue.
+ */
+#define RTE_EVENT_QUEUE_ATTR_WEIGHT 5
+/**
+ * Affinity of the queue.
+ */
+#define RTE_EVENT_QUEUE_ATTR_AFFINITY 6
 
 /**
  * Get an attribute from a queue.
@@ -701,6 +742,29 @@ rte_event_queue_setup(uint8_t dev_id, uint8_t queue_id,
 int
 rte_event_queue_attr_get(uint8_t dev_id, uint8_t queue_id, uint32_t attr_id,
 			uint32_t *attr_value);
+
+/**
+ * Set an event queue attribute.
+ *
+ * @param dev_id
+ *   Eventdev id
+ * @param queue_id
+ *   Eventdev queue id
+ * @param attr_id
+ *   The attribute ID to set
+ * @param attr_value
+ *   The attribute value to set
+ *
+ * @return
+ *   - 0: Successfully set attribute.
+ *   - -EINVAL: invalid device, queue or attr_id.
+ *   - -ENOTSUP: device does not support setting the event attribute.
+ *   - <0: failed to set event queue attribute
+ */
+__rte_experimental
+int
+rte_event_queue_attr_set(uint8_t dev_id, uint8_t queue_id, uint32_t attr_id,
+			 uint64_t attr_value);
 
 /* Event port specific APIs */
 
@@ -829,6 +893,42 @@ rte_event_port_default_conf_get(uint8_t dev_id, uint8_t port_id,
 int
 rte_event_port_setup(uint8_t dev_id, uint8_t port_id,
 		     const struct rte_event_port_conf *port_conf);
+
+typedef void (*rte_eventdev_port_flush_t)(uint8_t dev_id,
+					  struct rte_event event, void *arg);
+/**< Callback function prototype that can be passed during
+ * rte_event_port_release(), invoked once per a released event.
+ */
+
+/**
+ * Quiesce any core specific resources consumed by the event port.
+ *
+ * Event ports are generally coupled with lcores, and a given Hardware
+ * implementation might require the PMD to store port specific data in the
+ * lcore.
+ * When the application decides to migrate the event port to another lcore
+ * or teardown the current lcore it may to call `rte_event_port_quiesce`
+ * to make sure that all the data associated with the event port are released
+ * from the lcore, this might also include any prefetched events.
+ * While releasing the event port from the lcore, this function calls the
+ * user-provided flush callback once per event.
+ *
+ * @note Invocation of this API does not affect the existing port configuration.
+ *
+ * @param dev_id
+ *   The identifier of the device.
+ * @param port_id
+ *   The index of the event port to setup. The value must be in the range
+ *   [0, nb_event_ports - 1] previously supplied to rte_event_dev_configure().
+ * @param release_cb
+ *   Callback function invoked once per flushed event.
+ * @param args
+ *   Argument supplied to callback.
+ */
+__rte_experimental
+void
+rte_event_port_quiesce(uint8_t dev_id, uint8_t port_id,
+		       rte_eventdev_port_flush_t release_cb, void *args);
 
 /**
  * The queue depth of the port on the enqueue side

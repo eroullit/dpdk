@@ -505,6 +505,73 @@ pipeline_event_tx_adapter_setup(struct evt_options *opt,
 	return ret;
 }
 
+static void
+pipeline_vector_array_free(struct rte_event events[], uint16_t num)
+{
+	uint16_t i;
+
+	for (i = 0; i < num; i++) {
+		rte_pktmbuf_free_bulk(events[i].vec->mbufs,
+				      events[i].vec->nb_elem);
+		rte_mempool_put(rte_mempool_from_obj(events[i].vec),
+				events[i].vec);
+	}
+}
+
+static void
+pipeline_event_port_flush(uint8_t dev_id __rte_unused, struct rte_event ev,
+			  void *args __rte_unused)
+{
+	if (ev.event_type & RTE_EVENT_TYPE_VECTOR)
+		pipeline_vector_array_free(&ev, 1);
+	else
+		rte_pktmbuf_free(ev.mbuf);
+}
+
+void
+pipeline_worker_cleanup(uint8_t dev, uint8_t port, struct rte_event ev[],
+			uint16_t enq, uint16_t deq)
+{
+	int i;
+
+	if (!(deq - enq))
+		return;
+
+	if (deq) {
+		for (i = enq; i < deq; i++) {
+			if (ev[i].op == RTE_EVENT_OP_RELEASE)
+				continue;
+			if (ev[i].event_type & RTE_EVENT_TYPE_VECTOR)
+				pipeline_vector_array_free(&ev[i], 1);
+			else
+				rte_pktmbuf_free(ev[i].mbuf);
+		}
+
+		for (i = 0; i < deq; i++)
+			ev[i].op = RTE_EVENT_OP_RELEASE;
+
+		rte_event_enqueue_burst(dev, port, ev, deq);
+	}
+
+	rte_event_port_quiesce(dev, port, pipeline_event_port_flush, NULL);
+}
+
+void
+pipeline_ethdev_rx_stop(struct evt_test *test, struct evt_options *opt)
+{
+	uint16_t i, j;
+	RTE_SET_USED(test);
+
+	if (opt->prod_type == EVT_PROD_TYPE_ETH_RX_ADPTR) {
+		RTE_ETH_FOREACH_DEV(i) {
+			rte_event_eth_rx_adapter_stop(i);
+			rte_event_eth_rx_adapter_queue_del(i, i, -1);
+			for (j = 0; j < opt->eth_queues; j++)
+				rte_eth_dev_rx_queue_stop(i, j);
+		}
+	}
+}
+
 void
 pipeline_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
 {
@@ -513,8 +580,9 @@ pipeline_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
 	RTE_SET_USED(opt);
 
 	RTE_ETH_FOREACH_DEV(i) {
-		rte_event_eth_rx_adapter_stop(i);
 		rte_event_eth_tx_adapter_stop(i);
+		rte_event_eth_tx_adapter_queue_del(i, i, -1);
+		rte_eth_dev_tx_queue_stop(i, 0);
 		rte_eth_dev_stop(i);
 	}
 }

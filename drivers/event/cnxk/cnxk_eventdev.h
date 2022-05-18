@@ -38,6 +38,11 @@
 #define CNXK_SSO_XAQ_CACHE_CNT (0x7)
 #define CNXK_SSO_XAQ_SLACK     (8)
 #define CNXK_SSO_WQE_SG_PTR    (9)
+#define CNXK_SSO_PRIORITY_CNT  (0x8)
+#define CNXK_SSO_WEIGHT_MAX    (0x3f)
+#define CNXK_SSO_WEIGHT_MIN    (0x3)
+#define CNXK_SSO_WEIGHT_CNT    (CNXK_SSO_WEIGHT_MAX - CNXK_SSO_WEIGHT_MIN + 1)
+#define CNXK_SSO_AFFINITY_CNT  (0x10)
 
 #define CNXK_TT_FROM_TAG(x)	    (((x) >> 32) & SSO_TT_EMPTY)
 #define CNXK_TT_FROM_EVENT(x)	    (((x) >> 38) & SSO_TT_EMPTY)
@@ -54,6 +59,10 @@
 #define CN10K_GW_MODE_PREF     1
 #define CN10K_GW_MODE_PREF_WFE 2
 
+#define CNXK_QOS_NORMALIZE(val, min, max, cnt)                                 \
+	(min + val / ((max + cnt - 1) / cnt))
+#define CNXK_SSO_FLUSH_RETRY_MAX 0xfff
+
 #define CNXK_VALID_DEV_OR_ERR_RET(dev, drv_name)                               \
 	do {                                                                   \
 		if (strncmp(dev->driver->name, drv_name, strlen(drv_name)))    \
@@ -69,14 +78,19 @@ typedef int (*cnxk_sso_unlink_t)(void *dev, void *ws, uint16_t *map,
 				 uint16_t nb_link);
 typedef void (*cnxk_handle_event_t)(void *arg, struct rte_event ev);
 typedef void (*cnxk_sso_hws_reset_t)(void *arg, void *ws);
-typedef void (*cnxk_sso_hws_flush_t)(void *ws, uint8_t queue_id, uintptr_t base,
-				     cnxk_handle_event_t fn, void *arg);
+typedef int (*cnxk_sso_hws_flush_t)(void *ws, uint8_t queue_id, uintptr_t base,
+				    cnxk_handle_event_t fn, void *arg);
 
 struct cnxk_sso_qos {
 	uint16_t queue;
 	uint16_t xaq_prcnt;
 	uint16_t taq_prcnt;
 	uint16_t iaq_prcnt;
+};
+
+struct cnxk_sso_mlt_prio {
+	uint8_t weight;
+	uint8_t affinity;
 };
 
 struct cnxk_sso_evdev {
@@ -108,6 +122,7 @@ struct cnxk_sso_evdev {
 	uint64_t *timer_adptr_sz;
 	uint16_t vec_pool_cnt;
 	uint64_t *vec_pools;
+	struct cnxk_sso_mlt_prio mlt_prio[RTE_EVENT_MAX_QUEUES_PER_DEV];
 	/* Dev args */
 	uint32_t xae_cnt;
 	uint8_t qos_queue_cnt;
@@ -234,6 +249,12 @@ void cnxk_sso_queue_def_conf(struct rte_eventdev *event_dev, uint8_t queue_id,
 int cnxk_sso_queue_setup(struct rte_eventdev *event_dev, uint8_t queue_id,
 			 const struct rte_event_queue_conf *queue_conf);
 void cnxk_sso_queue_release(struct rte_eventdev *event_dev, uint8_t queue_id);
+int cnxk_sso_queue_attribute_get(struct rte_eventdev *event_dev,
+				 uint8_t queue_id, uint32_t attr_id,
+				 uint32_t *attr_value);
+int cnxk_sso_queue_attribute_set(struct rte_eventdev *event_dev,
+				 uint8_t queue_id, uint32_t attr_id,
+				 uint64_t attr_value);
 void cnxk_sso_port_def_conf(struct rte_eventdev *event_dev, uint8_t port_id,
 			    struct rte_event_port_conf *port_conf);
 int cnxk_sso_port_setup(struct rte_eventdev *event_dev, uint8_t port_id,

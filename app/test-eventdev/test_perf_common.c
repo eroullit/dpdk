@@ -985,6 +985,31 @@ perf_opt_dump(struct evt_options *opt, uint8_t nb_queues)
 	evt_dump("prod_enq_burst_sz", "%d", opt->prod_enq_burst_sz);
 }
 
+static void
+perf_event_port_flush(uint8_t dev_id __rte_unused, struct rte_event ev,
+		      void *args)
+{
+	rte_mempool_put(args, ev.event_ptr);
+}
+
+void
+perf_worker_cleanup(struct rte_mempool *const pool, uint8_t dev_id,
+		    uint8_t port_id, struct rte_event events[], uint16_t nb_enq,
+		    uint16_t nb_deq)
+{
+	int i;
+
+	if (nb_deq) {
+		for (i = nb_enq; i < nb_deq; i++)
+			rte_mempool_put(pool, events[i].event_ptr);
+
+		for (i = 0; i < nb_deq; i++)
+			events[i].op = RTE_EVENT_OP_RELEASE;
+		rte_event_enqueue_burst(dev_id, port_id, events, nb_deq);
+	}
+	rte_event_port_quiesce(dev_id, port_id, perf_event_port_flush, pool);
+}
+
 void
 perf_eventdev_destroy(struct evt_test *test, struct evt_options *opt)
 {
@@ -1087,7 +1112,8 @@ perf_ethdev_setup(struct evt_test *test, struct evt_options *opt)
 	return 0;
 }
 
-void perf_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
+void
+perf_ethdev_rx_stop(struct evt_test *test, struct evt_options *opt)
 {
 	uint16_t i;
 	RTE_SET_USED(test);
@@ -1095,6 +1121,23 @@ void perf_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
 	if (opt->prod_type == EVT_PROD_TYPE_ETH_RX_ADPTR) {
 		RTE_ETH_FOREACH_DEV(i) {
 			rte_event_eth_rx_adapter_stop(i);
+			rte_event_eth_rx_adapter_queue_del(i, i, -1);
+			rte_eth_dev_rx_queue_stop(i, 0);
+		}
+	}
+}
+
+void
+perf_ethdev_destroy(struct evt_test *test, struct evt_options *opt)
+{
+	uint16_t i;
+	RTE_SET_USED(test);
+
+	if (opt->prod_type == EVT_PROD_TYPE_ETH_RX_ADPTR) {
+		RTE_ETH_FOREACH_DEV(i) {
+			rte_event_eth_tx_adapter_stop(i);
+			rte_event_eth_tx_adapter_queue_del(i, i, -1);
+			rte_eth_dev_tx_queue_stop(i, 0);
 			rte_eth_dev_stop(i);
 		}
 	}

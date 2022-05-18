@@ -342,6 +342,46 @@ typedef void (*eventdev_queue_release_t)(struct rte_eventdev *dev,
 		uint8_t queue_id);
 
 /**
+ * Get an event queue attribute at runtime.
+ *
+ * @param dev
+ *   Event device pointer
+ * @param queue_id
+ *   Event queue index
+ * @param attr_id
+ *   Event queue attribute id
+ * @param[out] attr_value
+ *   Event queue attribute value
+ *
+ * @return
+ *  - 0: Success.
+ *  - <0: Error code on failure.
+ */
+typedef int (*eventdev_queue_attr_get_t)(struct rte_eventdev *dev,
+					 uint8_t queue_id, uint32_t attr_id,
+					 uint32_t *attr_value);
+
+/**
+ * Set an event queue attribute at runtime.
+ *
+ * @param dev
+ *   Event device pointer
+ * @param queue_id
+ *   Event queue index
+ * @param attr_id
+ *   Event queue attribute id
+ * @param attr_value
+ *   Event queue attribute value
+ *
+ * @return
+ *  - 0: Success.
+ *  - <0: Error code on failure.
+ */
+typedef int (*eventdev_queue_attr_set_t)(struct rte_eventdev *dev,
+					 uint8_t queue_id, uint32_t attr_id,
+					 uint64_t attr_value);
+
+/**
  * Retrieve the default event port configuration.
  *
  * @param dev
@@ -380,6 +420,23 @@ typedef int (*eventdev_port_setup_t)(struct rte_eventdev *dev,
  *
  */
 typedef void (*eventdev_port_release_t)(void *port);
+
+/**
+ * Quiesce any core specific resources consumed by the event port
+ *
+ * @param dev
+ *   Event device pointer.
+ * @param port
+ *   Event port pointer.
+ * @param flush_cb
+ *   User-provided event flush function.
+ * @param args
+ *   Arguments to be passed to the user-provided event flush function.
+ *
+ */
+typedef void (*eventdev_port_quiesce_t)(struct rte_eventdev *dev, void *port,
+					rte_eventdev_port_flush_t flush_cb,
+					void *args);
 
 /**
  * Link multiple source event queues to destination event port.
@@ -1211,6 +1268,10 @@ struct eventdev_ops {
 	/**< Set up an event queue. */
 	eventdev_queue_release_t queue_release;
 	/**< Release an event queue. */
+	eventdev_queue_attr_get_t queue_attr_get;
+	/**< Get an event queue attribute. */
+	eventdev_queue_attr_set_t queue_attr_set;
+	/**< Set an event queue attribute. */
 
 	eventdev_port_default_conf_get_t port_def_conf;
 	/**< Get default port configuration. */
@@ -1218,6 +1279,8 @@ struct eventdev_ops {
 	/**< Set up an event port. */
 	eventdev_port_release_t port_release;
 	/**< Release an event port. */
+	eventdev_port_quiesce_t port_quiesce;
+	/**< Quiesce an event port. */
 
 	eventdev_port_link_t port_link;
 	/**< Link event queues to an event port. */
