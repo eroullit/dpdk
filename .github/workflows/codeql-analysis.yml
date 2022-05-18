@@ -40,12 +40,6 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Display crypto settings
-      run: |
-           ls -al /proc/sys/crypto
-           ls -al /proc/sys/crypto/fips_enabled
-           cat /proc/sys/crypto/fips_enabled
-
     # Initializes the CodeQL tools for scanning.
     - name: Initialize CodeQL
       uses: github/codeql-action/init@v2
