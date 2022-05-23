@@ -24,6 +24,9 @@ jobs:
   analyze:
     name: Analyze
     runs-on: ubuntu-latest
+    env:
+      DEF_LIB: shared
+
     permissions:
       actions: read
       contents: read
