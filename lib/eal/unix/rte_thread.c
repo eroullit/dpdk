@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2021 Mellanox Technologies, Ltd
+ * Copyright (C) 2022 Microsoft Corporation
  */
 
 #include <errno.h>
@@ -14,6 +15,18 @@
 struct eal_tls_key {
 	pthread_key_t thread_index;
 };
+
+rte_thread_t
+rte_thread_self(void)
+{
+	RTE_BUILD_BUG_ON(sizeof(pthread_t) > sizeof(uintptr_t));
+
+	rte_thread_t thread_id;
+
+	thread_id.opaque_id = (uintptr_t)pthread_self();
+
+	return thread_id;
+}
 
 int
 rte_thread_key_create(rte_thread_key *key, void (*destructor)(void *))
@@ -88,4 +101,20 @@ rte_thread_value_get(rte_thread_key key)
 		return NULL;
 	}
 	return pthread_getspecific(key->thread_index);
+}
+
+int
+rte_thread_set_affinity_by_id(rte_thread_t thread_id,
+		const rte_cpuset_t *cpuset)
+{
+	return pthread_setaffinity_np((pthread_t)thread_id.opaque_id,
+		sizeof(*cpuset), cpuset);
+}
+
+int
+rte_thread_get_affinity_by_id(rte_thread_t thread_id,
+		rte_cpuset_t *cpuset)
+{
+	return pthread_getaffinity_np((pthread_t)thread_id.opaque_id,
+		sizeof(*cpuset), cpuset);
 }

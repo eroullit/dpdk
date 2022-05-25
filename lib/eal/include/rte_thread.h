@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2021 Mellanox Technologies, Ltd
+ * Copyright (C) 2022 Microsoft Corporation
  */
+
+#include <stdint.h>
 
 #include <rte_os.h>
 #include <rte_compat.h>
@@ -21,11 +24,72 @@ extern "C" {
 #endif
 
 /**
+ * Thread id descriptor.
+ */
+typedef struct {
+	uintptr_t opaque_id; /**< thread identifier */
+} rte_thread_t;
+
+/**
  * TLS key type, an opaque pointer.
  */
 typedef struct eal_tls_key *rte_thread_key;
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Get the id of the calling thread.
+ *
+ * @return
+ *   Return the thread id of the calling thread.
+ */
+__rte_experimental
+rte_thread_t rte_thread_self(void);
+
 #ifdef RTE_HAS_CPUSET
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Set the affinity of thread 'thread_id' to the cpu set
+ * specified by 'cpuset'.
+ *
+ * @param thread_id
+ *    Id of the thread for which to set the affinity.
+ *
+ * @param cpuset
+ *   Pointer to CPU affinity to set.
+ *
+ * @return
+ *   On success, return 0.
+ *   On failure, return a positive errno-style error number.
+ */
+__rte_experimental
+int rte_thread_set_affinity_by_id(rte_thread_t thread_id,
+		const rte_cpuset_t *cpuset);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Get the affinity of thread 'thread_id' and store it
+ * in 'cpuset'.
+ *
+ * @param thread_id
+ *    Id of the thread for which to get the affinity.
+ *
+ * @param cpuset
+ *   Pointer for storing the affinity value.
+ *
+ * @return
+ *   On success, return 0.
+ *   On failure, return a positive errno-style error number.
+ */
+__rte_experimental
+int rte_thread_get_affinity_by_id(rte_thread_t thread_id,
+		rte_cpuset_t *cpuset);
 
 /**
  * Set core affinity of the current thread.
