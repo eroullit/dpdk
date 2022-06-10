@@ -74,7 +74,7 @@
  * rte_eth_rx_queue_setup()), it must call rte_eth_dev_stop() first to stop the
  * device and then do the reconfiguration before calling rte_eth_dev_start()
  * again. The transmit and receive functions should not be invoked when the
- * device is stopped.
+ * device or the queue is stopped.
  *
  * Please note that some configuration is not stored between calls to
  * rte_eth_dev_stop()/rte_eth_dev_start(). The following configuration will
@@ -1931,6 +1931,13 @@ struct rte_eth_rxq_info {
 	uint8_t queue_state;        /**< one of RTE_ETH_QUEUE_STATE_*. */
 	uint16_t nb_desc;           /**< configured number of RXDs. */
 	uint16_t rx_buf_size;       /**< hardware receive buffer size. */
+	/**
+	 * Available Rx descriptors threshold defined as percentage
+	 * of Rx queue size. If number of available descriptors is lower,
+	 * the event RTE_ETH_EVENT_RX_AVAIL_THESH is generated.
+	 * Value 0 means that the threshold monitoring is disabled.
+	 */
+	uint8_t avail_thresh;
 } __rte_cache_min_aligned;
 
 /**
@@ -2272,9 +2279,6 @@ rte_eth_find_next_sibling(uint16_t port_id_start, uint16_t ref_port_id);
 		port_id = rte_eth_find_next_sibling(port_id + 1, ref_port_id))
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice.
- *
  * Get a new unique owner identifier.
  * An owner identifier is used to owns Ethernet devices by only one DPDK entity
  * to avoid multiple management of device by different entities.
@@ -2284,13 +2288,9 @@ rte_eth_find_next_sibling(uint16_t port_id_start, uint16_t ref_port_id);
  * @return
  *   Negative errno value on error, 0 on success.
  */
-__rte_experimental
 int rte_eth_dev_owner_new(uint64_t *owner_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice.
- *
  * Set an Ethernet device owner.
  *
  * @param	port_id
@@ -2300,14 +2300,10 @@ int rte_eth_dev_owner_new(uint64_t *owner_id);
  * @return
  *  Negative errno value on error, 0 on success.
  */
-__rte_experimental
 int rte_eth_dev_owner_set(const uint16_t port_id,
 		const struct rte_eth_dev_owner *owner);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice.
- *
  * Unset Ethernet device owner to make the device ownerless.
  *
  * @param	port_id
@@ -2317,14 +2313,10 @@ int rte_eth_dev_owner_set(const uint16_t port_id,
  * @return
  *  0 on success, negative errno value on error.
  */
-__rte_experimental
 int rte_eth_dev_owner_unset(const uint16_t port_id,
 		const uint64_t owner_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice.
- *
  * Remove owner from all Ethernet devices owned by a specific owner.
  *
  * @param	owner_id
@@ -2332,13 +2324,9 @@ int rte_eth_dev_owner_unset(const uint16_t port_id,
  * @return
  *  0 on success, negative errno value on error.
  */
-__rte_experimental
 int rte_eth_dev_owner_delete(const uint64_t owner_id);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice.
- *
  * Get the owner of an Ethernet device.
  *
  * @param	port_id
@@ -2348,7 +2336,6 @@ int rte_eth_dev_owner_delete(const uint64_t owner_id);
  * @return
  *  0 on success, negative errno value on error..
  */
-__rte_experimental
 int rte_eth_dev_owner_get(const uint16_t port_id,
 		struct rte_eth_dev_owner *owner);
 
@@ -3174,9 +3161,13 @@ int rte_eth_xstats_get_names(uint16_t port_id,
  * @param xstats
  *   A pointer to a table of structure of type *rte_eth_xstat*
  *   to be filled with device statistics ids and values.
- *   This parameter can be set to NULL if n is 0.
+ *   This parameter can be set to NULL if and only if n is 0.
  * @param n
  *   The size of the xstats array (number of elements).
+ *   If lower than the required number of elements, the function returns
+ *   the required number of elements.
+ *   If equal to zero, the xstats must be NULL, the function returns the
+ *   required number of elements.
  * @return
  *   - A positive value lower or equal to n: success. The return value
  *     is the number of entries filled in the stats table.
@@ -3668,6 +3659,65 @@ int rte_eth_dev_get_vlan_offload(uint16_t port_id);
  */
 int rte_eth_dev_set_vlan_pvid(uint16_t port_id, uint16_t pvid, int on);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Set Rx queue available descriptors threshold.
+ *
+ * @param port_id
+ *  The port identifier of the Ethernet device.
+ * @param queue_id
+ *  The index of the receive queue.
+ * @param avail_thresh
+ *  The available descriptors threshold is percentage of Rx queue size
+ *  which describes the availability of Rx queue for hardware.
+ *  If the Rx queue availability is below it,
+ *  the event RTE_ETH_EVENT_RX_AVAIL_THRESH is triggered.
+ *  [1-99] to set a new available descriptors threshold.
+ *  0 to disable threshold monitoring.
+ *
+ * @return
+ *   - 0 if successful.
+ *   - (-ENODEV) if @p port_id is invalid.
+ *   - (-EINVAL) if bad parameter.
+ *   - (-ENOTSUP) if available Rx descriptors threshold is not supported.
+ *   - (-EIO) if device is removed.
+ */
+__rte_experimental
+int rte_eth_rx_avail_thresh_set(uint16_t port_id, uint16_t queue_id,
+			       uint8_t avail_thresh);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Find Rx queue with RTE_ETH_EVENT_RX_AVAIL_THRESH event pending.
+ *
+ * @param port_id
+ *  The port identifier of the Ethernet device.
+ * @param[inout] queue_id
+ *  On input starting Rx queue index to search from.
+ *  If the queue_id is bigger than maximum queue ID of the port,
+ *  search is started from 0. So that application can keep calling
+ *  this function to handle all pending events with a simple increment
+ *  of queue_id on the next call.
+ *  On output if return value is 1, Rx queue index with the event pending.
+ * @param[out] avail_thresh
+ *  Location for available descriptors threshold of the found Rx queue.
+ *
+ * @return
+ *   - 1 if an Rx queue with pending event is found.
+ *   - 0 if no Rx queue with pending event is found.
+ *   - (-ENODEV) if @p port_id is invalid.
+ *   - (-EINVAL) if bad parameter (e.g. @p queue_id is NULL).
+ *   - (-ENOTSUP) if operation is not supported.
+ *   - (-EIO) if device is removed.
+ */
+__rte_experimental
+int rte_eth_rx_avail_thresh_query(uint16_t port_id, uint16_t *queue_id,
+				 uint8_t *avail_thresh);
+
 typedef void (*buffer_tx_error_fn)(struct rte_mbuf **unsent, uint16_t count,
 		void *userdata);
 
@@ -3873,6 +3923,11 @@ enum rte_eth_event_type {
 	RTE_ETH_EVENT_DESTROY,  /**< port is released */
 	RTE_ETH_EVENT_IPSEC,    /**< IPsec offload related event */
 	RTE_ETH_EVENT_FLOW_AGED,/**< New aged-out flows is detected */
+	/**
+	 * Number of available Rx descriptors is smaller than the threshold.
+	 * @see rte_eth_rx_avail_thresh_set()
+	 */
+	RTE_ETH_EVENT_RX_AVAIL_THRESH,
 	RTE_ETH_EVENT_MAX       /**< max value of this enum */
 };
 

@@ -7,10 +7,17 @@
 #include <string.h>
 #include <errno.h>
 
+#include <rte_common.h>
+
 #include "rte_swx_pipeline.h"
 
-#define MAX_LINE_LENGTH RTE_SWX_INSTRUCTION_SIZE
-#define MAX_TOKENS RTE_SWX_INSTRUCTION_TOKENS_MAX
+#ifndef MAX_LINE_LENGTH
+#define MAX_LINE_LENGTH 2048
+#endif
+
+#ifndef MAX_TOKENS
+#define MAX_TOKENS 256
+#endif
 
 #define STRUCT_BLOCK 0
 #define ACTION_BLOCK 1
@@ -22,7 +29,8 @@
 #define LEARNER_BLOCK 7
 #define LEARNER_KEY_BLOCK 8
 #define LEARNER_ACTIONS_BLOCK 9
-#define APPLY_BLOCK 10
+#define LEARNER_TIMEOUT_BLOCK 10
+#define APPLY_BLOCK 11
 
 /*
  * extobj.
@@ -532,7 +540,7 @@ action_block_parse(struct action_spec *s,
 /*
  * table.
  *
- * table {
+ * table TABLE_NAME {
  *	key {
  *		MATCH_FIELD_NAME exact | wildcard | lpm
  *		...
@@ -541,7 +549,7 @@ action_block_parse(struct action_spec *s,
  *		ACTION_NAME [ @tableonly | @defaultonly ]
  *		...
  *	}
- *	default_action ACTION_NAME args none | ARGS_BYTE_ARRAY [ const ]
+ *	default_action ACTION_NAME args none | ARG0_NAME ARG0_VALUE ... [ const ]
  *	instanceof TABLE_TYPE_NAME
  *	pragma ARGS
  *	size SIZE
@@ -558,7 +566,7 @@ struct table_spec {
 static void
 table_spec_free(struct table_spec *s)
 {
-	uintptr_t default_action_name;
+	uintptr_t default_action_name, default_action_args;
 	uint32_t i;
 
 	if (!s)
@@ -593,8 +601,9 @@ table_spec_free(struct table_spec *s)
 	free((void *)default_action_name);
 	s->params.default_action_name = NULL;
 
-	free(s->params.default_action_data);
-	s->params.default_action_data = NULL;
+	default_action_args = (uintptr_t)s->params.default_action_args;
+	free((void *)default_action_args);
+	s->params.default_action_args = NULL;
 
 	free(s->params.action_is_for_table_entries);
 	s->params.action_is_for_table_entries = NULL;
@@ -805,6 +814,94 @@ table_actions_block_parse(struct table_spec *s,
 }
 
 static int
+table_default_action_statement_parse(struct table_spec *s,
+				     char **tokens,
+				     uint32_t n_tokens,
+				     uint32_t n_lines,
+				     uint32_t *err_line,
+				     const char **err_msg)
+{
+	uint32_t i;
+	int status = 0, duplicate = 0;
+
+	/* Check format. */
+	if ((n_tokens < 4) ||
+	    strcmp(tokens[2], "args")) {
+		status = -EINVAL;
+		goto error;
+	}
+
+	if (s->params.default_action_name) {
+		duplicate = 1;
+		status = -EINVAL;
+		goto error;
+	}
+
+	s->params.default_action_name = strdup(tokens[1]);
+	if (!s->params.default_action_name) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	if (strcmp(tokens[3], "none")) {
+		char buffer[MAX_LINE_LENGTH];
+		uint32_t n_tokens_args = n_tokens - 3;
+
+		if (!strcmp(tokens[n_tokens - 1], "const"))
+			n_tokens_args--;
+
+		if (!n_tokens_args) {
+			status = -EINVAL;
+			goto error;
+		}
+
+		buffer[0] = 0;
+		for (i = 0; i < n_tokens_args; i++) {
+			if (i)
+				strcat(buffer, " ");
+
+			strcat(buffer, tokens[3 + i]);
+		}
+
+		s->params.default_action_args = strdup(buffer);
+		if (!s->params.default_action_args) {
+			status = -ENOMEM;
+			goto error;
+		}
+	} else {
+		if (((n_tokens != 4) && (n_tokens != 5)) ||
+		    ((n_tokens == 5) && (strcmp(tokens[4], "const")))) {
+			status = -EINVAL;
+			goto error;
+		}
+	}
+
+	if (!strcmp(tokens[n_tokens - 1], "const"))
+		s->params.default_action_is_const = 1;
+
+	return 0;
+
+error:
+	if (err_line)
+		*err_line = n_lines;
+
+	if (err_msg)
+		switch (status) {
+		case -ENOMEM:
+			*err_msg = "Memory allocation failed.";
+			break;
+
+		default:
+			if (duplicate)
+				*err_msg = "Duplicate default_action statement.";
+
+			*err_msg = "Invalid default_action statement.";
+		}
+
+	return status;
+}
+
+static int
 table_statement_parse(struct table_spec *s,
 		      uint32_t *block_mask,
 		      char **tokens,
@@ -887,40 +984,13 @@ table_block_parse(struct table_spec *s,
 						     err_line,
 						     err_msg);
 
-	if (!strcmp(tokens[0], "default_action")) {
-		if (((n_tokens != 4) && (n_tokens != 5)) ||
-		    strcmp(tokens[2], "args") ||
-		    strcmp(tokens[3], "none") ||
-		    ((n_tokens == 5) && strcmp(tokens[4], "const"))) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Invalid default_action statement.";
-			return -EINVAL;
-		}
-
-		if (s->params.default_action_name) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Duplicate default_action stmt.";
-			return -EINVAL;
-		}
-
-		s->params.default_action_name = strdup(tokens[1]);
-		if (!s->params.default_action_name) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Memory allocation failed.";
-			return -ENOMEM;
-		}
-
-		if (n_tokens == 5)
-			s->params.default_action_is_const = 1;
-
-		return 0;
-	}
+	if (!strcmp(tokens[0], "default_action"))
+		return table_default_action_statement_parse(s,
+							    tokens,
+							    n_tokens,
+							    n_lines,
+							    err_line,
+							    err_msg);
 
 	if (!strcmp(tokens[0], "instanceof")) {
 		if (n_tokens != 2) {
@@ -1315,7 +1385,7 @@ selector_block_parse(struct selector_spec *s,
 /*
  * learner.
  *
- * learner {
+ * learner LEARNER_NAME {
  *	key {
  *		MATCH_FIELD_NAME
  *		...
@@ -1324,22 +1394,26 @@ selector_block_parse(struct selector_spec *s,
  *		ACTION_NAME [ @tableonly | @defaultonly]
  *		...
  *	}
- *	default_action ACTION_NAME args none | ARGS_BYTE_ARRAY [ const ]
+ *	default_action ACTION_NAME args none | ARG0_NAME ARG0_VALUE ... [ const ]
  *	size SIZE
- *	timeout TIMEOUT_IN_SECONDS
+ *	timeout {
+ *		TIMEOUT_IN_SECONDS
+ *		...
+ *	}
  * }
  */
 struct learner_spec {
 	char *name;
 	struct rte_swx_pipeline_learner_params params;
 	uint32_t size;
-	uint32_t timeout;
+	uint32_t *timeout;
+	uint32_t n_timeouts;
 };
 
 static void
 learner_spec_free(struct learner_spec *s)
 {
-	uintptr_t default_action_name;
+	uintptr_t default_action_name, default_action_args;
 	uint32_t i;
 
 	if (!s)
@@ -1374,8 +1448,9 @@ learner_spec_free(struct learner_spec *s)
 	free((void *)default_action_name);
 	s->params.default_action_name = NULL;
 
-	free(s->params.default_action_data);
-	s->params.default_action_data = NULL;
+	default_action_args = (uintptr_t)s->params.default_action_args;
+	free((void *)default_action_args);
+	s->params.default_action_args = NULL;
 
 	free(s->params.action_is_for_table_entries);
 	s->params.action_is_for_table_entries = NULL;
@@ -1387,7 +1462,10 @@ learner_spec_free(struct learner_spec *s)
 
 	s->size = 0;
 
-	s->timeout = 0;
+	free(s->timeout);
+	s->timeout = NULL;
+
+	s->n_timeouts = 0;
 }
 
 static int
@@ -1562,6 +1640,183 @@ learner_actions_block_parse(struct learner_spec *s,
 }
 
 static int
+learner_default_action_statement_parse(struct learner_spec *s,
+				       char **tokens,
+				       uint32_t n_tokens,
+				       uint32_t n_lines,
+				       uint32_t *err_line,
+				       const char **err_msg)
+{
+	uint32_t i;
+	int status = 0, duplicate = 0;
+
+	/* Check format. */
+	if ((n_tokens < 4) ||
+	    strcmp(tokens[2], "args")) {
+		status = -EINVAL;
+		goto error;
+	}
+
+	if (s->params.default_action_name) {
+		duplicate = 1;
+		status = -EINVAL;
+		goto error;
+	}
+
+	s->params.default_action_name = strdup(tokens[1]);
+	if (!s->params.default_action_name) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	if (strcmp(tokens[3], "none")) {
+		char buffer[MAX_LINE_LENGTH];
+		uint32_t n_tokens_args = n_tokens - 3;
+
+		if (!strcmp(tokens[n_tokens - 1], "const"))
+			n_tokens_args--;
+
+		if (!n_tokens_args) {
+			status = -EINVAL;
+			goto error;
+		}
+
+		buffer[0] = 0;
+		for (i = 0; i < n_tokens_args; i++) {
+			if (i)
+				strcat(buffer, " ");
+
+			strcat(buffer, tokens[3 + i]);
+		}
+
+		s->params.default_action_args = strdup(buffer);
+		if (!s->params.default_action_args) {
+			status = -ENOMEM;
+			goto error;
+		}
+	} else {
+		if (((n_tokens != 4) && (n_tokens != 5)) ||
+		    ((n_tokens == 5) && (strcmp(tokens[4], "const")))) {
+			status = -EINVAL;
+			goto error;
+		}
+	}
+
+	if (!strcmp(tokens[n_tokens - 1], "const"))
+		s->params.default_action_is_const = 1;
+
+	return 0;
+
+error:
+	if (err_line)
+		*err_line = n_lines;
+
+	if (err_msg)
+		switch (status) {
+		case -ENOMEM:
+			*err_msg = "Memory allocation failed.";
+			break;
+
+		default:
+			if (duplicate)
+				*err_msg = "Duplicate default_action statement.";
+
+			*err_msg = "Invalid default_action statement.";
+		}
+
+	return status;
+}
+
+static int
+learner_timeout_statement_parse(uint32_t *block_mask,
+				char **tokens,
+				uint32_t n_tokens,
+				uint32_t n_lines,
+				uint32_t *err_line,
+				const char **err_msg)
+{
+	/* Check format. */
+	if ((n_tokens != 2) || strcmp(tokens[1], "{")) {
+		if (err_line)
+			*err_line = n_lines;
+		if (err_msg)
+			*err_msg = "Invalid timeout statement.";
+		return -EINVAL;
+	}
+
+	/* block_mask. */
+	*block_mask |= 1 << LEARNER_TIMEOUT_BLOCK;
+
+	return 0;
+}
+
+static int
+learner_timeout_block_parse(struct learner_spec *s,
+			    uint32_t *block_mask,
+			    char **tokens,
+			    uint32_t n_tokens,
+			    uint32_t n_lines,
+			    uint32_t *err_line,
+			    const char **err_msg)
+{
+	uint32_t *new_timeout = NULL;
+	char *str;
+	uint32_t val;
+	int status = 0;
+
+	/* Handle end of block. */
+	if ((n_tokens == 1) && !strcmp(tokens[0], "}")) {
+		*block_mask &= ~(1 << LEARNER_TIMEOUT_BLOCK);
+		return 0;
+	}
+
+	/* Check input arguments. */
+	if (n_tokens != 1) {
+		status = -EINVAL;
+		goto error;
+	}
+
+	str = tokens[0];
+	val = strtoul(str, &str, 0);
+	if (str[0]) {
+		status = -EINVAL;
+		goto error;
+	}
+
+	new_timeout = realloc(s->timeout, (s->n_timeouts + 1) * sizeof(uint32_t));
+	if (!new_timeout) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	s->timeout = new_timeout;
+	s->timeout[s->n_timeouts] = val;
+	s->n_timeouts++;
+
+	return 0;
+
+error:
+	free(new_timeout);
+
+	if (err_line)
+		*err_line = n_lines;
+
+	if (err_msg)
+		switch (status) {
+		case -ENOMEM:
+			*err_msg = "Memory allocation failed.";
+			break;
+
+		default:
+			*err_msg = "Invalid timeout value statement.";
+			break;
+		}
+
+	return status;
+}
+
+
+static int
 learner_statement_parse(struct learner_spec *s,
 		      uint32_t *block_mask,
 		      char **tokens,
@@ -1622,6 +1877,15 @@ learner_block_parse(struct learner_spec *s,
 						   err_line,
 						   err_msg);
 
+	if (*block_mask & (1 << LEARNER_TIMEOUT_BLOCK))
+		return learner_timeout_block_parse(s,
+						   block_mask,
+						   tokens,
+						   n_tokens,
+						   n_lines,
+						   err_line,
+						   err_msg);
+
 	/* Handle end of block. */
 	if ((n_tokens == 1) && !strcmp(tokens[0], "}")) {
 		*block_mask &= ~(1 << LEARNER_BLOCK);
@@ -1644,40 +1908,13 @@ learner_block_parse(struct learner_spec *s,
 						       err_line,
 						       err_msg);
 
-	if (!strcmp(tokens[0], "default_action")) {
-		if (((n_tokens != 4) && (n_tokens != 5)) ||
-		    strcmp(tokens[2], "args") ||
-		    strcmp(tokens[3], "none") ||
-		    ((n_tokens == 5) && strcmp(tokens[4], "const"))) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Invalid default_action statement.";
-			return -EINVAL;
-		}
-
-		if (s->params.default_action_name) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Duplicate default_action stmt.";
-			return -EINVAL;
-		}
-
-		s->params.default_action_name = strdup(tokens[1]);
-		if (!s->params.default_action_name) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Memory allocation failed.";
-			return -ENOMEM;
-		}
-
-		if (n_tokens == 5)
-			s->params.default_action_is_const = 1;
-
-		return 0;
-	}
+	if (!strcmp(tokens[0], "default_action"))
+		return learner_default_action_statement_parse(s,
+							      tokens,
+							      n_tokens,
+							      n_lines,
+							      err_line,
+							      err_msg);
 
 	if (!strcmp(tokens[0], "size")) {
 		char *p = tokens[1];
@@ -1702,28 +1939,13 @@ learner_block_parse(struct learner_spec *s,
 		return 0;
 	}
 
-	if (!strcmp(tokens[0], "timeout")) {
-		char *p = tokens[1];
-
-		if (n_tokens != 2) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Invalid timeout statement.";
-			return -EINVAL;
-		}
-
-		s->timeout = strtoul(p, &p, 0);
-		if (p[0]) {
-			if (err_line)
-				*err_line = n_lines;
-			if (err_msg)
-				*err_msg = "Invalid timeout argument.";
-			return -EINVAL;
-		}
-
-		return 0;
-	}
+	if (!strcmp(tokens[0], "timeout"))
+		return learner_timeout_statement_parse(block_mask,
+						       tokens,
+						       n_tokens,
+						       n_lines,
+						       err_line,
+						       err_msg);
 
 	/* Anything else. */
 	if (err_line)
@@ -2050,7 +2272,7 @@ rte_swx_pipeline_build_from_spec(struct rte_swx_pipeline *p,
 			}
 
 			/* Handle excessively long lines. */
-			if (n_tokens >= MAX_TOKENS) {
+			if (n_tokens >= RTE_DIM(tokens)) {
 				if (err_line)
 					*err_line = n_lines;
 				if (err_msg)
@@ -2234,7 +2456,8 @@ rte_swx_pipeline_build_from_spec(struct rte_swx_pipeline *p,
 				learner_spec.name,
 				&learner_spec.params,
 				learner_spec.size,
-				learner_spec.timeout);
+				learner_spec.timeout,
+				learner_spec.n_timeouts);
 			if (status) {
 				if (err_line)
 					*err_line = n_lines;

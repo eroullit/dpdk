@@ -42,6 +42,7 @@ struct vhost_user_socket {
 	bool linearbuf;
 	bool async_copy;
 	bool net_compliant_ol_flags;
+	bool stats_enabled;
 
 	/*
 	 * The "supported_features" indicates the feature bits the
@@ -227,7 +228,7 @@ vhost_user_add_connection(int fd, struct vhost_user_socket *vsocket)
 	vhost_set_ifname(vid, vsocket->path, size);
 
 	vhost_setup_virtio_net(vid, vsocket->use_builtin_virtio_net,
-		vsocket->net_compliant_ol_flags);
+		vsocket->net_compliant_ol_flags, vsocket->stats_enabled);
 
 	vhost_attach_vdpa_device(vid, vsocket->vdpa_dev);
 
@@ -619,6 +620,50 @@ rte_vhost_driver_get_vdpa_device(const char *path)
 }
 
 int
+rte_vhost_driver_get_vdpa_dev_type(const char *path, uint32_t *type)
+{
+	struct vhost_user_socket *vsocket;
+	struct rte_vdpa_device *vdpa_dev;
+	uint32_t vdpa_type = 0;
+	int ret = 0;
+
+	pthread_mutex_lock(&vhost_user.mutex);
+	vsocket = find_vhost_user_socket(path);
+	if (!vsocket) {
+		VHOST_LOG_CONFIG(ERR,
+				 "(%s) socket file is not registered yet.\n",
+				 path);
+		ret = -1;
+		goto unlock_exit;
+	}
+
+	vdpa_dev = vsocket->vdpa_dev;
+	if (!vdpa_dev) {
+		ret = -1;
+		goto unlock_exit;
+	}
+
+	if (vdpa_dev->ops->get_dev_type) {
+		ret = vdpa_dev->ops->get_dev_type(vdpa_dev, &vdpa_type);
+		if (ret) {
+			VHOST_LOG_CONFIG(ERR,
+					 "(%s) failed to get vdpa dev type for socket file.\n",
+					 path);
+			ret = -1;
+			goto unlock_exit;
+		}
+	} else {
+		vdpa_type = RTE_VHOST_VDPA_DEVICE_TYPE_NET;
+	}
+
+	*type = vdpa_type;
+
+unlock_exit:
+	pthread_mutex_unlock(&vhost_user.mutex);
+	return ret;
+}
+
+int
 rte_vhost_driver_disable_features(const char *path, uint64_t features)
 {
 	struct vhost_user_socket *vsocket;
@@ -863,6 +908,7 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 	vsocket->linearbuf = flags & RTE_VHOST_USER_LINEARBUF_SUPPORT;
 	vsocket->async_copy = flags & RTE_VHOST_USER_ASYNC_COPY;
 	vsocket->net_compliant_ol_flags = flags & RTE_VHOST_USER_NET_COMPLIANT_OL_FLAGS;
+	vsocket->stats_enabled = flags & RTE_VHOST_USER_NET_STATS_ENABLE;
 
 	if (vsocket->async_copy &&
 		(flags & (RTE_VHOST_USER_IOMMU_SUPPORT |

@@ -66,6 +66,9 @@
 #ifdef RTE_EXEC_ENV_WINDOWS
 #include <process.h>
 #endif
+#ifdef RTE_NET_BOND
+#include <rte_eth_bond.h>
+#endif
 
 #include "testpmd.h"
 
@@ -417,6 +420,7 @@ static const char * const eth_event_desc[] = {
 	[RTE_ETH_EVENT_NEW] = "device probed",
 	[RTE_ETH_EVENT_DESTROY] = "device released",
 	[RTE_ETH_EVENT_FLOW_AGED] = "flow aged",
+	[RTE_ETH_EVENT_RX_AVAIL_THRESH] = "RxQ available descriptors threshold reached",
 	[RTE_ETH_EVENT_MAX] = NULL,
 };
 
@@ -598,10 +602,57 @@ eth_dev_configure_mp(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 }
 
 static int
+change_bonding_slave_port_status(portid_t bond_pid, bool is_stop)
+{
+#ifdef RTE_NET_BOND
+
+	portid_t slave_pids[RTE_MAX_ETHPORTS];
+	struct rte_port *port;
+	int num_slaves;
+	portid_t slave_pid;
+	int i;
+
+	num_slaves = rte_eth_bond_slaves_get(bond_pid, slave_pids,
+						RTE_MAX_ETHPORTS);
+	if (num_slaves < 0) {
+		fprintf(stderr, "Failed to get slave list for port = %u\n",
+			bond_pid);
+		return num_slaves;
+	}
+
+	for (i = 0; i < num_slaves; i++) {
+		slave_pid = slave_pids[i];
+		port = &ports[slave_pid];
+		port->port_status =
+			is_stop ? RTE_PORT_STOPPED : RTE_PORT_STARTED;
+	}
+#else
+	RTE_SET_USED(bond_pid);
+	RTE_SET_USED(is_stop);
+#endif
+	return 0;
+}
+
+static int
 eth_dev_start_mp(uint16_t port_id)
 {
-	if (is_proc_primary())
-		return rte_eth_dev_start(port_id);
+	int ret;
+
+	if (is_proc_primary()) {
+		ret = rte_eth_dev_start(port_id);
+		if (ret != 0)
+			return ret;
+
+		struct rte_port *port = &ports[port_id];
+
+		/*
+		 * Starting a bonded port also starts all slaves under the bonded
+		 * device. So if this port is bond device, we need to modify the
+		 * port status of these slaves.
+		 */
+		if (port->bond_flag == 1)
+			return change_bonding_slave_port_status(port_id, false);
+	}
 
 	return 0;
 }
@@ -609,8 +660,23 @@ eth_dev_start_mp(uint16_t port_id)
 static int
 eth_dev_stop_mp(uint16_t port_id)
 {
-	if (is_proc_primary())
-		return rte_eth_dev_stop(port_id);
+	int ret;
+
+	if (is_proc_primary()) {
+		ret = rte_eth_dev_stop(port_id);
+		if (ret != 0)
+			return ret;
+
+		struct rte_port *port = &ports[port_id];
+
+		/*
+		 * Stopping a bonded port also stops all slaves under the bonded
+		 * device. So if this port is bond device, we need to modify the
+		 * port status of these slaves.
+		 */
+		if (port->bond_flag == 1)
+			return change_bonding_slave_port_status(port_id, true);
+	}
 
 	return 0;
 }
@@ -1573,10 +1639,10 @@ init_config_port_offloads(portid_t pid, uint32_t socket_id)
 
 	/* Apply Rx offloads configuration */
 	for (i = 0; i < port->dev_info.max_rx_queues; i++)
-		port->rx_conf[i].offloads = port->dev_conf.rxmode.offloads;
+		port->rxq[i].conf.offloads = port->dev_conf.rxmode.offloads;
 	/* Apply Tx offloads configuration */
 	for (i = 0; i < port->dev_info.max_tx_queues; i++)
-		port->tx_conf[i].offloads = port->dev_conf.txmode.offloads;
+		port->txq[i].conf.offloads = port->dev_conf.txmode.offloads;
 
 	if (eth_link_speed)
 		port->dev_conf.link_speeds = eth_link_speed;
@@ -1762,7 +1828,6 @@ reconfig(portid_t new_port_id, unsigned socket_id)
 	init_config_port_offloads(new_port_id, socket_id);
 	init_port_config();
 }
-
 
 int
 init_fwd_streams(void)
@@ -2168,6 +2233,12 @@ flush_fwd_rx_queues(void)
 		for (rxp = 0; rxp < cur_fwd_config.nb_fwd_ports; rxp++) {
 			for (rxq = 0; rxq < nb_rxq; rxq++) {
 				port_id = fwd_ports_ids[rxp];
+
+				/* Polling stopped queues is prohibited. */
+				if (ports[port_id].rxq[rxq].state ==
+				    RTE_ETH_QUEUE_STATE_STOPPED)
+					continue;
+
 				/**
 				* testpmd can stuck in the below do while loop
 				* if rte_eth_rx_burst() always returns nonzero
@@ -2213,7 +2284,8 @@ run_pkt_fwd_on_lcore(struct fwd_lcore *fc, packet_fwd_t pkt_fwd)
 	nb_fs = fc->stream_nb;
 	do {
 		for (sm_id = 0; sm_id < nb_fs; sm_id++)
-			(*pkt_fwd)(fsm[sm_id]);
+			if (!fsm[sm_id]->disabled)
+				(*pkt_fwd)(fsm[sm_id]);
 #ifdef RTE_LIB_BITRATESTATS
 		if (bitrate_enabled != 0 &&
 				bitrate_lcore_id == rte_lcore_id()) {
@@ -2295,6 +2367,7 @@ start_packet_forwarding(int with_tx_first)
 {
 	port_fwd_begin_t port_fwd_begin;
 	port_fwd_end_t  port_fwd_end;
+	stream_init_t stream_init = cur_fwd_eng->stream_init;
 	unsigned int i;
 
 	if (strcmp(cur_fwd_eng->fwd_mode_name, "rxonly") == 0 && !nb_rxq)
@@ -2324,6 +2397,10 @@ start_packet_forwarding(int with_tx_first)
 	pkt_fwd_config_display(&cur_fwd_config);
 	if (!pkt_fwd_shared_rxq_check())
 		return;
+
+	if (stream_init != NULL)
+		for (i = 0; i < cur_fwd_config.nb_fwd_streams; i++)
+			stream_init(fwd_streams[i]);
 
 	port_fwd_begin = cur_fwd_config.fwd_eng->port_fwd_begin;
 	if (port_fwd_begin != NULL) {
@@ -2586,7 +2663,7 @@ rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		ret = rte_eth_rx_queue_setup(port_id, rx_queue_id,
 					     nb_rx_desc, socket_id,
 					     rx_conf, mp);
-		return ret;
+		goto exit;
 	}
 	for (i = 0; i < rx_pkt_nb_segs; i++) {
 		struct rte_eth_rxseg_split *rx_seg = &rx_useg[i].split;
@@ -2595,7 +2672,7 @@ rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		 * Use last valid pool for the segments with number
 		 * exceeding the pool index.
 		 */
-		mp_n = (i > mbuf_data_size_n) ? mbuf_data_size_n - 1 : i;
+		mp_n = (i >= mbuf_data_size_n) ? mbuf_data_size_n - 1 : i;
 		mpx = mbuf_pool_find(socket_id, mp_n);
 		/* Handle zero as mbuf data buffer size. */
 		rx_seg->length = rx_pkt_seg_lengths[i] ?
@@ -2611,6 +2688,10 @@ rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 				    socket_id, rx_conf, NULL);
 	rx_conf->rx_seg = NULL;
 	rx_conf->rx_nseg = 0;
+exit:
+	ports[port_id].rxq[rx_queue_id].state = rx_conf->rx_deferred_start ?
+						RTE_ETH_QUEUE_STATE_STOPPED :
+						RTE_ETH_QUEUE_STATE_STARTED;
 	return ret;
 }
 
@@ -2813,7 +2894,7 @@ start_port(portid_t pid)
 				for (k = 0;
 				     k < port->dev_info.max_rx_queues;
 				     k++)
-					port->rx_conf[k].offloads |=
+					port->rxq[k].conf.offloads |=
 						dev_conf.rxmode.offloads;
 			}
 			/* Apply Tx offloads configuration */
@@ -2824,7 +2905,7 @@ start_port(portid_t pid)
 				for (k = 0;
 				     k < port->dev_info.max_tx_queues;
 				     k++)
-					port->tx_conf[k].offloads |=
+					port->txq[k].conf.offloads |=
 						dev_conf.txmode.offloads;
 			}
 		}
@@ -2832,20 +2913,28 @@ start_port(portid_t pid)
 			port->need_reconfig_queues = 0;
 			/* setup tx queues */
 			for (qi = 0; qi < nb_txq; qi++) {
+				struct rte_eth_txconf *conf =
+							&port->txq[qi].conf;
+
 				if ((numa_support) &&
 					(txring_numa[pi] != NUMA_NO_CONFIG))
 					diag = rte_eth_tx_queue_setup(pi, qi,
 						port->nb_tx_desc[qi],
 						txring_numa[pi],
-						&(port->tx_conf[qi]));
+						&(port->txq[qi].conf));
 				else
 					diag = rte_eth_tx_queue_setup(pi, qi,
 						port->nb_tx_desc[qi],
 						port->socket_id,
-						&(port->tx_conf[qi]));
+						&(port->txq[qi].conf));
 
-				if (diag == 0)
+				if (diag == 0) {
+					port->txq[qi].state =
+						conf->tx_deferred_start ?
+						RTE_ETH_QUEUE_STATE_STOPPED :
+						RTE_ETH_QUEUE_STATE_STARTED;
 					continue;
+				}
 
 				/* Fail to setup tx queue, return */
 				if (port->port_status == RTE_PORT_HANDLING)
@@ -2878,7 +2967,7 @@ start_port(portid_t pid)
 					diag = rx_queue_setup(pi, qi,
 					     port->nb_rx_desc[qi],
 					     rxring_numa[pi],
-					     &(port->rx_conf[qi]),
+					     &(port->rxq[qi].conf),
 					     mp);
 				} else {
 					struct rte_mempool *mp =
@@ -2893,7 +2982,7 @@ start_port(portid_t pid)
 					diag = rx_queue_setup(pi, qi,
 					     port->nb_rx_desc[qi],
 					     port->socket_id,
-					     &(port->rx_conf[qi]),
+					     &(port->rxq[qi].conf),
 					     mp);
 				}
 				if (diag == 0)
@@ -3149,8 +3238,10 @@ close_port(portid_t pid)
 		}
 
 		if (is_proc_primary()) {
+			mcast_addr_pool_destroy(pi);
 			port_flow_flush(pi);
 			port_flex_item_flush(pi);
+			port_action_handle_flush(pi);
 			rte_eth_dev_close(pi);
 		}
 
@@ -3582,6 +3673,21 @@ eth_event_callback(portid_t port_id, enum rte_eth_event_type type, void *param,
 		ports[port_id].port_status = RTE_PORT_CLOSED;
 		printf("Port %u is closed\n", port_id);
 		break;
+	case RTE_ETH_EVENT_RX_AVAIL_THRESH: {
+		uint16_t rxq_id;
+		int ret;
+
+		/* avail_thresh query API rewinds rxq_id, no need to check max RxQ num */
+		for (rxq_id = 0; ; rxq_id++) {
+			ret = rte_eth_rx_avail_thresh_query(port_id, &rxq_id,
+							    NULL);
+			if (ret <= 0)
+				break;
+			printf("Received avail_thresh event, port: %u, rxq_id: %u\n",
+			       port_id, rxq_id);
+		}
+		break;
+	}
 	default:
 		break;
 	}
@@ -3668,59 +3774,59 @@ rxtx_port_config(portid_t pid)
 	struct rte_port *port = &ports[pid];
 
 	for (qid = 0; qid < nb_rxq; qid++) {
-		offloads = port->rx_conf[qid].offloads;
-		port->rx_conf[qid] = port->dev_info.default_rxconf;
+		offloads = port->rxq[qid].conf.offloads;
+		port->rxq[qid].conf = port->dev_info.default_rxconf;
 
 		if (rxq_share > 0 &&
 		    (port->dev_info.dev_capa & RTE_ETH_DEV_CAPA_RXQ_SHARE)) {
 			/* Non-zero share group to enable RxQ share. */
-			port->rx_conf[qid].share_group = pid / rxq_share + 1;
-			port->rx_conf[qid].share_qid = qid; /* Equal mapping. */
+			port->rxq[qid].conf.share_group = pid / rxq_share + 1;
+			port->rxq[qid].conf.share_qid = qid; /* Equal mapping. */
 		}
 
 		if (offloads != 0)
-			port->rx_conf[qid].offloads = offloads;
+			port->rxq[qid].conf.offloads = offloads;
 
 		/* Check if any Rx parameters have been passed */
 		if (rx_pthresh != RTE_PMD_PARAM_UNSET)
-			port->rx_conf[qid].rx_thresh.pthresh = rx_pthresh;
+			port->rxq[qid].conf.rx_thresh.pthresh = rx_pthresh;
 
 		if (rx_hthresh != RTE_PMD_PARAM_UNSET)
-			port->rx_conf[qid].rx_thresh.hthresh = rx_hthresh;
+			port->rxq[qid].conf.rx_thresh.hthresh = rx_hthresh;
 
 		if (rx_wthresh != RTE_PMD_PARAM_UNSET)
-			port->rx_conf[qid].rx_thresh.wthresh = rx_wthresh;
+			port->rxq[qid].conf.rx_thresh.wthresh = rx_wthresh;
 
 		if (rx_free_thresh != RTE_PMD_PARAM_UNSET)
-			port->rx_conf[qid].rx_free_thresh = rx_free_thresh;
+			port->rxq[qid].conf.rx_free_thresh = rx_free_thresh;
 
 		if (rx_drop_en != RTE_PMD_PARAM_UNSET)
-			port->rx_conf[qid].rx_drop_en = rx_drop_en;
+			port->rxq[qid].conf.rx_drop_en = rx_drop_en;
 
 		port->nb_rx_desc[qid] = nb_rxd;
 	}
 
 	for (qid = 0; qid < nb_txq; qid++) {
-		offloads = port->tx_conf[qid].offloads;
-		port->tx_conf[qid] = port->dev_info.default_txconf;
+		offloads = port->txq[qid].conf.offloads;
+		port->txq[qid].conf = port->dev_info.default_txconf;
 		if (offloads != 0)
-			port->tx_conf[qid].offloads = offloads;
+			port->txq[qid].conf.offloads = offloads;
 
 		/* Check if any Tx parameters have been passed */
 		if (tx_pthresh != RTE_PMD_PARAM_UNSET)
-			port->tx_conf[qid].tx_thresh.pthresh = tx_pthresh;
+			port->txq[qid].conf.tx_thresh.pthresh = tx_pthresh;
 
 		if (tx_hthresh != RTE_PMD_PARAM_UNSET)
-			port->tx_conf[qid].tx_thresh.hthresh = tx_hthresh;
+			port->txq[qid].conf.tx_thresh.hthresh = tx_hthresh;
 
 		if (tx_wthresh != RTE_PMD_PARAM_UNSET)
-			port->tx_conf[qid].tx_thresh.wthresh = tx_wthresh;
+			port->txq[qid].conf.tx_thresh.wthresh = tx_wthresh;
 
 		if (tx_rs_thresh != RTE_PMD_PARAM_UNSET)
-			port->tx_conf[qid].tx_rs_thresh = tx_rs_thresh;
+			port->txq[qid].conf.tx_rs_thresh = tx_rs_thresh;
 
 		if (tx_free_thresh != RTE_PMD_PARAM_UNSET)
-			port->tx_conf[qid].tx_free_thresh = tx_free_thresh;
+			port->txq[qid].conf.tx_free_thresh = tx_free_thresh;
 
 		port->nb_tx_desc[qid] = nb_txd;
 	}
@@ -3801,7 +3907,7 @@ init_port_config(void)
 				for (i = 0;
 				     i < port->dev_info.nb_rx_queues;
 				     i++)
-					port->rx_conf[i].offloads &=
+					port->rxq[i].conf.offloads &=
 						~RTE_ETH_RX_OFFLOAD_RSS_HASH;
 			}
 		}
@@ -3975,7 +4081,7 @@ init_port_dcb_config(portid_t pid,
 	if (port_conf.rxmode.mq_mode == RTE_ETH_MQ_RX_VMDQ_DCB) {
 		port_conf.rxmode.offloads &= ~RTE_ETH_RX_OFFLOAD_RSS_HASH;
 		for (i = 0; i < nb_rxq; i++)
-			rte_port->rx_conf[i].offloads &=
+			rte_port->rxq[i].conf.offloads &=
 				~RTE_ETH_RX_OFFLOAD_RSS_HASH;
 	}
 
@@ -4275,6 +4381,10 @@ main(int argc, char** argv)
 	}
 #endif
 #ifdef RTE_LIB_CMDLINE
+	if (init_cmdline() != 0)
+		rte_exit(EXIT_FAILURE,
+			"Could not initialise cmdline context.\n");
+
 	if (strlen(cmdline_filename) != 0)
 		cmdline_read_from_file(cmdline_filename);
 

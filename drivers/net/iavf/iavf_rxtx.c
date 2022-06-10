@@ -362,12 +362,24 @@ release_txq_mbufs(struct iavf_tx_queue *txq)
 	}
 }
 
-static const struct iavf_rxq_ops def_rxq_ops = {
-	.release_mbufs = release_rxq_mbufs,
+static const
+struct iavf_rxq_ops iavf_rxq_release_mbufs_ops[] = {
+	[IAVF_REL_MBUFS_DEFAULT].release_mbufs = release_rxq_mbufs,
+#ifdef RTE_ARCH_X86
+	[IAVF_REL_MBUFS_SSE_VEC].release_mbufs = iavf_rx_queue_release_mbufs_sse,
+#endif
 };
 
-static const struct iavf_txq_ops def_txq_ops = {
-	.release_mbufs = release_txq_mbufs,
+static const
+struct iavf_txq_ops iavf_txq_release_mbufs_ops[] = {
+	[IAVF_REL_MBUFS_DEFAULT].release_mbufs = release_txq_mbufs,
+#ifdef RTE_ARCH_X86
+	[IAVF_REL_MBUFS_SSE_VEC].release_mbufs = iavf_tx_queue_release_mbufs_sse,
+#ifdef CC_AVX512_SUPPORT
+	[IAVF_REL_MBUFS_AVX512_VEC].release_mbufs = iavf_tx_queue_release_mbufs_avx512,
+#endif
+#endif
+
 };
 
 static inline void
@@ -558,6 +570,9 @@ iavf_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 
 	PMD_INIT_FUNC_TRACE();
 
+	if (ad->closed)
+		return -EIO;
+
 	offloads = rx_conf->offloads | dev->data->dev_conf.rxmode.offloads;
 
 	if (nb_desc % IAVF_ALIGN_RING_DESC != 0 ||
@@ -678,7 +693,7 @@ iavf_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	rxq->q_set = true;
 	dev->data->rx_queues[queue_idx] = rxq;
 	rxq->qrx_tail = hw->hw_addr + IAVF_QRX_TAIL1(rxq->queue_id);
-	rxq->ops = &def_rxq_ops;
+	rxq->rel_mbufs_type = IAVF_REL_MBUFS_DEFAULT;
 
 	if (check_rx_bulk_allow(rxq) == true) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
@@ -718,6 +733,9 @@ iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	uint64_t offloads;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (adapter->closed)
+		return -EIO;
 
 	offloads = tx_conf->offloads | dev->data->dev_conf.txmode.offloads;
 
@@ -815,7 +833,7 @@ iavf_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->q_set = true;
 	dev->data->tx_queues[queue_idx] = txq;
 	txq->qtx_tail = hw->hw_addr + IAVF_QTX_TAIL1(queue_idx);
-	txq->ops = &def_txq_ops;
+	txq->rel_mbufs_type = IAVF_REL_MBUFS_DEFAULT;
 
 	if (check_tx_vec_allow(txq) == false) {
 		struct iavf_adapter *ad =
@@ -886,6 +904,15 @@ iavf_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 			RTE_ETH_QUEUE_STATE_STARTED;
 	}
 
+	if (dev->data->dev_conf.rxmode.offloads &
+	    RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
+		if (iavf_get_phc_time(rxq)) {
+			PMD_DRV_LOG(ERR, "get physical time failed");
+			return err;
+		}
+		rxq->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
+	}
+
 	return err;
 }
 
@@ -947,7 +974,7 @@ iavf_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	}
 
 	rxq = dev->data->rx_queues[rx_queue_id];
-	rxq->ops->release_mbufs(rxq);
+	iavf_rxq_release_mbufs_ops[rxq->rel_mbufs_type].release_mbufs(rxq);
 	reset_rx_queue(rxq);
 	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 
@@ -975,7 +1002,7 @@ iavf_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	}
 
 	txq = dev->data->tx_queues[tx_queue_id];
-	txq->ops->release_mbufs(txq);
+	iavf_txq_release_mbufs_ops[txq->rel_mbufs_type].release_mbufs(txq);
 	reset_tx_queue(txq);
 	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 
@@ -990,7 +1017,7 @@ iavf_dev_rx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 	if (!q)
 		return;
 
-	q->ops->release_mbufs(q);
+	iavf_rxq_release_mbufs_ops[q->rel_mbufs_type].release_mbufs(q);
 	rte_free(q->sw_ring);
 	rte_memzone_free(q->mz);
 	rte_free(q);
@@ -1004,7 +1031,7 @@ iavf_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 	if (!q)
 		return;
 
-	q->ops->release_mbufs(q);
+	iavf_txq_release_mbufs_ops[q->rel_mbufs_type].release_mbufs(q);
 	rte_free(q->sw_ring);
 	rte_memzone_free(q->mz);
 	rte_free(q);
@@ -1038,7 +1065,7 @@ iavf_stop_queues(struct rte_eth_dev *dev)
 		txq = dev->data->tx_queues[i];
 		if (!txq)
 			continue;
-		txq->ops->release_mbufs(txq);
+		iavf_txq_release_mbufs_ops[txq->rel_mbufs_type].release_mbufs(txq);
 		reset_tx_queue(txq);
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 	}
@@ -1046,7 +1073,7 @@ iavf_stop_queues(struct rte_eth_dev *dev)
 		rxq = dev->data->rx_queues[i];
 		if (!rxq)
 			continue;
-		rxq->ops->release_mbufs(rxq);
+		iavf_rxq_release_mbufs_ops[rxq->rel_mbufs_type].release_mbufs(rxq);
 		reset_rx_queue(rxq);
 		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 	}
@@ -1422,6 +1449,7 @@ iavf_recv_pkts_flex_rxd(void *rx_queue,
 	uint64_t dma_addr;
 	uint64_t pkt_flags;
 	const uint32_t *ptype_tbl;
+	uint64_t ts_ns;
 
 	nb_rx = 0;
 	nb_hold = 0;
@@ -1430,15 +1458,13 @@ iavf_recv_pkts_flex_rxd(void *rx_queue,
 	rx_ring = rxq->rx_ring;
 	ptype_tbl = rxq->vsi->adapter->ptype_tbl;
 
-	struct iavf_adapter *ad = rxq->vsi->adapter;
-	uint64_t ts_ns;
-
 	if (rxq->offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
 		uint64_t sw_cur_time = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
-		if (sw_cur_time - ad->hw_time_update > 4) {
-			if (iavf_get_phc_time(ad))
+
+		if (sw_cur_time - rxq->hw_time_update > 4) {
+			if (iavf_get_phc_time(rxq))
 				PMD_DRV_LOG(ERR, "get physical time failed");
-			ad->hw_time_update = sw_cur_time;
+			rxq->hw_time_update = sw_cur_time;
 		}
 	}
 
@@ -1505,11 +1531,11 @@ iavf_recv_pkts_flex_rxd(void *rx_queue,
 		pkt_flags = iavf_flex_rxd_error_to_pkt_flags(rx_stat_err0);
 
 		if (iavf_timestamp_dynflag > 0) {
-			ts_ns = iavf_tstamp_convert_32b_64b(ad->phc_time,
+			ts_ns = iavf_tstamp_convert_32b_64b(rxq->phc_time,
 				rte_le_to_cpu_32(rxd.wb.flex_ts.ts_high));
 
-			ad->phc_time = ts_ns;
-			ad->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
+			rxq->phc_time = ts_ns;
+			rxq->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
 
 			*RTE_MBUF_DYNFIELD(rxm,
 				iavf_timestamp_dynfield_offset,
@@ -1545,7 +1571,6 @@ iavf_recv_scattered_pkts_flex_rxd(void *rx_queue, struct rte_mbuf **rx_pkts,
 	uint16_t rx_stat_err0;
 	uint64_t dma_addr;
 	uint64_t pkt_flags;
-	struct iavf_adapter *ad = rxq->vsi->adapter;
 	uint64_t ts_ns;
 
 	volatile union iavf_rx_desc *rx_ring = rxq->rx_ring;
@@ -1554,10 +1579,11 @@ iavf_recv_scattered_pkts_flex_rxd(void *rx_queue, struct rte_mbuf **rx_pkts,
 
 	if (rxq->offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
 		uint64_t sw_cur_time = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
-		if (sw_cur_time - ad->hw_time_update > 4) {
-			if (iavf_get_phc_time(ad))
+
+		if (sw_cur_time - rxq->hw_time_update > 4) {
+			if (iavf_get_phc_time(rxq))
 				PMD_DRV_LOG(ERR, "get physical time failed");
-			ad->hw_time_update = sw_cur_time;
+			rxq->hw_time_update = sw_cur_time;
 		}
 	}
 
@@ -1674,11 +1700,11 @@ iavf_recv_scattered_pkts_flex_rxd(void *rx_queue, struct rte_mbuf **rx_pkts,
 		pkt_flags = iavf_flex_rxd_error_to_pkt_flags(rx_stat_err0);
 
 		if (iavf_timestamp_dynflag > 0) {
-			ts_ns = iavf_tstamp_convert_32b_64b(ad->phc_time,
+			ts_ns = iavf_tstamp_convert_32b_64b(rxq->phc_time,
 				rte_le_to_cpu_32(rxd.wb.flex_ts.ts_high));
 
-			ad->phc_time = ts_ns;
-			ad->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
+			rxq->phc_time = ts_ns;
+			rxq->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
 
 			*RTE_MBUF_DYNFIELD(first_seg,
 				iavf_timestamp_dynfield_offset,
@@ -1881,7 +1907,6 @@ iavf_rx_scan_hw_ring_flex_rxd(struct iavf_rx_queue *rxq,
 	int32_t nb_staged = 0;
 	uint64_t pkt_flags;
 	const uint32_t *ptype_tbl = rxq->vsi->adapter->ptype_tbl;
-	struct iavf_adapter *ad = rxq->vsi->adapter;
 	uint64_t ts_ns;
 
 	rxdp = (volatile union iavf_rx_flex_desc *)&rxq->rx_ring[rxq->rx_tail];
@@ -1895,10 +1920,11 @@ iavf_rx_scan_hw_ring_flex_rxd(struct iavf_rx_queue *rxq,
 
 	if (rxq->offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
 		uint64_t sw_cur_time = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
-		if (sw_cur_time - ad->hw_time_update > 4) {
-			if (iavf_get_phc_time(ad))
+
+		if (sw_cur_time - rxq->hw_time_update > 4) {
+			if (iavf_get_phc_time(rxq))
 				PMD_DRV_LOG(ERR, "get physical time failed");
-			ad->hw_time_update = sw_cur_time;
+			rxq->hw_time_update = sw_cur_time;
 		}
 	}
 
@@ -1959,11 +1985,12 @@ iavf_rx_scan_hw_ring_flex_rxd(struct iavf_rx_queue *rxq,
 			pkt_flags = iavf_flex_rxd_error_to_pkt_flags(stat_err0);
 
 			if (iavf_timestamp_dynflag > 0) {
-				ts_ns = iavf_tstamp_convert_32b_64b(ad->phc_time,
+				ts_ns = iavf_tstamp_convert_32b_64b(rxq->phc_time,
 					rte_le_to_cpu_32(rxdp[j].wb.flex_ts.ts_high));
 
-				ad->phc_time = ts_ns;
-				ad->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
+				rxq->phc_time = ts_ns;
+				rxq->hw_time_update = rte_get_timer_cycles() /
+					(rte_get_timer_hz() / 1000);
 
 				*RTE_MBUF_DYNFIELD(mb,
 					iavf_timestamp_dynfield_offset,
@@ -2633,12 +2660,6 @@ iavf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	desc_idx = txq->tx_tail;
 	txe = &txe_ring[desc_idx];
 
-#ifdef RTE_LIBRTE_IAVF_DEBUG_TX_DESC_RING
-		iavf_dump_tx_entry_ring(txq);
-		iavf_dump_tx_desc_ring(txq);
-#endif
-
-
 	for (idx = 0; idx < nb_pkts; idx++) {
 		volatile struct iavf_tx_desc *ddesc;
 		struct iavf_ipsec_crypto_pkt_metadata *ipsec_md;
@@ -2843,6 +2864,10 @@ iavf_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 	struct iavf_tx_queue *txq = tx_queue;
 	struct rte_eth_dev *dev = &rte_eth_devices[txq->port_id];
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_adapter *adapter = IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+	if (adapter->closed)
+		return 0;
 
 	for (i = 0; i < nb_pkts; i++) {
 		m = tx_pkts[i];
@@ -2899,14 +2924,27 @@ iavf_set_rx_function(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	int i;
+	struct iavf_rx_queue *rxq;
+	bool use_flex = true;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+		if (rxq->rxdid <= IAVF_RXDID_LEGACY_1) {
+			PMD_DRV_LOG(NOTICE, "request RXDID[%d] in Queue[%d] is legacy, "
+				"set rx_pkt_burst as legacy for all queues", rxq->rxdid, i);
+			use_flex = false;
+		} else if (!(vf->supported_rxdid & BIT(rxq->rxdid))) {
+			PMD_DRV_LOG(NOTICE, "request RXDID[%d] in Queue[%d] is not supported, "
+				"set rx_pkt_burst as legacy for all queues", rxq->rxdid, i);
+			use_flex = false;
+		}
+	}
 
 #ifdef RTE_ARCH_X86
-	struct iavf_rx_queue *rxq;
-	int i;
 	int check_ret;
 	bool use_avx2 = false;
 	bool use_avx512 = false;
-	bool use_flex = false;
 
 	check_ret = iavf_rx_vec_dev_check(dev);
 	if (check_ret >= 0 &&
@@ -2922,10 +2960,6 @@ iavf_set_rx_function(struct rte_eth_dev *dev)
 		    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_512)
 			use_avx512 = true;
 #endif
-
-		if (vf->vf_res->vf_cap_flags &
-			VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC)
-			use_flex = true;
 
 		for (i = 0; i < dev->data->nb_rx_queues; i++) {
 			rxq = dev->data->rx_queues[i];
@@ -3030,7 +3064,7 @@ iavf_set_rx_function(struct rte_eth_dev *dev)
 	if (dev->data->scattered_rx) {
 		PMD_DRV_LOG(DEBUG, "Using a Scattered Rx callback (port=%d).",
 			    dev->data->port_id);
-		if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC)
+		if (use_flex)
 			dev->rx_pkt_burst = iavf_recv_scattered_pkts_flex_rxd;
 		else
 			dev->rx_pkt_burst = iavf_recv_scattered_pkts;
@@ -3041,7 +3075,7 @@ iavf_set_rx_function(struct rte_eth_dev *dev)
 	} else {
 		PMD_DRV_LOG(DEBUG, "Using Basic Rx callback (port=%d).",
 			    dev->data->port_id);
-		if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC)
+		if (use_flex)
 			dev->rx_pkt_burst = iavf_recv_pkts_flex_rxd;
 		else
 			dev->rx_pkt_burst = iavf_recv_pkts;

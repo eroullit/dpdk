@@ -16,7 +16,13 @@
 #include <rte_gso.h>
 #endif
 #include <rte_os_shim.h>
+#include <rte_ethdev.h>
+#include <rte_flow.h>
+#include <rte_mbuf_dyn.h>
+
 #include <cmdline.h>
+#include <cmdline_parse.h>
+
 #include <sys/queue.h>
 #ifdef RTE_HAS_JANSSON
 #include <jansson.h>
@@ -71,6 +77,8 @@
 
 #define NUMA_NO_CONFIG 0xFF
 #define UMA_NO_CONFIG  0xFF
+
+#define MIN_TOTAL_NUM_MBUFS 1024
 
 typedef uint8_t  lcoreid_t;
 typedef uint16_t portid_t;
@@ -134,6 +142,7 @@ struct fwd_stream {
 	portid_t   tx_port;   /**< forwarding port of received packets */
 	queueid_t  tx_queue;  /**< TX queue to send forwarded packets */
 	streamid_t peer_addr; /**< index of peer ethernet address of packets */
+	bool       disabled;  /**< the stream is disabled and should not run */
 
 	unsigned int retry_enabled;
 
@@ -238,6 +247,18 @@ struct xstat_display_info {
 	bool	 allocated;
 };
 
+/** RX queue configuration and state. */
+struct port_rxqueue {
+	struct rte_eth_rxconf conf;
+	uint8_t state; /**< RTE_ETH_QUEUE_STATE_* value. */
+};
+
+/** TX queue configuration and state. */
+struct port_txqueue {
+	struct rte_eth_txconf conf;
+	uint8_t state; /**< RTE_ETH_QUEUE_STATE_* value. */
+};
+
 /**
  * The data structure associated with each port.
  */
@@ -260,13 +281,14 @@ struct rte_port {
 	uint8_t                 dcb_flag;   /**< enable dcb */
 	uint16_t                nb_rx_desc[RTE_MAX_QUEUES_PER_PORT+1]; /**< per queue rx desc number */
 	uint16_t                nb_tx_desc[RTE_MAX_QUEUES_PER_PORT+1]; /**< per queue tx desc number */
-	struct rte_eth_rxconf   rx_conf[RTE_MAX_QUEUES_PER_PORT+1]; /**< per queue rx configuration */
-	struct rte_eth_txconf   tx_conf[RTE_MAX_QUEUES_PER_PORT+1]; /**< per queue tx configuration */
+	struct port_rxqueue     rxq[RTE_MAX_QUEUES_PER_PORT+1]; /**< per queue Rx config and state */
+	struct port_txqueue     txq[RTE_MAX_QUEUES_PER_PORT+1]; /**< per queue Tx config and state */
 	struct rte_ether_addr   *mc_addr_pool; /**< pool of multicast addrs */
 	uint32_t                mc_addr_nb; /**< nb. of addr. in mc_addr_pool */
 	queueid_t               queue_nb; /**< nb. of queues for flow rules */
 	uint32_t                queue_sz; /**< size of a queue for flow rules */
-	uint8_t                 slave_flag; /**< bonding slave port */
+	uint8_t                 slave_flag : 1, /**< bonding slave port */
+				bond_flag : 1; /**< port is bond device */
 	struct port_template    *pattern_templ_list; /**< Pattern templates. */
 	struct port_template    *actions_templ_list; /**< Actions templates. */
 	struct port_table       *table_list; /**< Flow tables. */
@@ -323,12 +345,14 @@ struct fwd_lcore {
  */
 typedef int (*port_fwd_begin_t)(portid_t pi);
 typedef void (*port_fwd_end_t)(portid_t pi);
+typedef void (*stream_init_t)(struct fwd_stream *fs);
 typedef void (*packet_fwd_t)(struct fwd_stream *fs);
 
 struct fwd_engine {
 	const char       *fwd_mode_name; /**< Forwarding mode name. */
 	port_fwd_begin_t port_fwd_begin; /**< NULL if nothing special to do. */
 	port_fwd_end_t   port_fwd_end;   /**< NULL if nothing special to do. */
+	stream_init_t    stream_init;    /**< NULL if nothing special to do. */
 	packet_fwd_t     packet_fwd;     /**< Mandatory. */
 };
 
@@ -866,6 +890,7 @@ unsigned int parse_item_list(const char *str, const char *item_name,
 			unsigned int *parsed_items, int check_unique_values);
 void launch_args_parse(int argc, char** argv);
 void cmdline_read_from_file(const char *filename);
+int init_cmdline(void);
 void prompt(void);
 void prompt_exit(void);
 void nic_stats_display(portid_t port_id);
@@ -907,6 +932,7 @@ int port_action_handle_create(portid_t port_id, uint32_t id,
 			      const struct rte_flow_action *action);
 int port_action_handle_destroy(portid_t port_id,
 			       uint32_t n, const uint32_t *action);
+int port_action_handle_flush(portid_t port_id);
 struct rte_flow_action_handle *port_action_handle_get_by_id(portid_t port_id,
 							    uint32_t id);
 int port_action_handle_update(portid_t port_id, uint32_t id,
@@ -965,6 +991,7 @@ int port_flow_create(portid_t port_id,
 int port_action_handle_query(portid_t port_id, uint32_t id);
 void update_age_action_context(const struct rte_flow_action *actions,
 		     struct port_flow *pf);
+int mcast_addr_pool_destroy(portid_t port_id);
 int port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule);
 int port_flow_flush(portid_t port_id);
 int port_flow_dump(portid_t port_id, bool dump_all,
@@ -1079,6 +1106,9 @@ int set_queue_rate_limit(portid_t port_id, uint16_t queue_idx, uint16_t rate);
 int set_vf_rate_limit(portid_t port_id, uint16_t vf, uint16_t rate,
 				uint64_t q_msk);
 
+int set_rxq_avail_thresh(portid_t port_id, uint16_t queue_id,
+			 uint8_t avail_thresh);
+
 void port_rss_hash_conf_show(portid_t port_id, int show_rss_key);
 void port_rss_hash_key_update(portid_t port_id, char rss_type[],
 			      uint8_t *hash_key, uint8_t hash_key_len);
@@ -1168,6 +1198,22 @@ extern int flow_parse(const char *src, void *result, unsigned int size,
 		      struct rte_flow_attr **attr,
 		      struct rte_flow_item **pattern,
 		      struct rte_flow_action **actions);
+
+/* For registering driver specific testpmd commands. */
+struct testpmd_driver_commands {
+	TAILQ_ENTRY(testpmd_driver_commands) next;
+	struct {
+		cmdline_parse_inst_t *ctx;
+		const char *help;
+	} commands[];
+};
+
+void testpmd_add_driver_commands(struct testpmd_driver_commands *c);
+#define TESTPMD_ADD_DRIVER_COMMANDS(c) \
+RTE_INIT(__##c) \
+{ \
+	testpmd_add_driver_commands(&c); \
+}
 
 /*
  * Work-around of a compilation error with ICC on invocations of the

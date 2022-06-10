@@ -159,6 +159,36 @@ rte_swx_pipeline_port_out_config(struct rte_swx_pipeline *p,
 				 uint32_t port_id,
 				 const char *port_type_name,
 				 void *args);
+/*
+ * Packet mirroring
+ */
+
+/** Packet mirroring parameters. */
+struct rte_swx_pipeline_mirroring_params {
+	/** Number of packet mirroring slots. */
+	uint32_t n_slots;
+
+	/** Maximum number of packet mirroring sessions. */
+	uint32_t n_sessions;
+};
+
+/**
+ * Packet mirroring configure
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] params
+ *   Packet mirroring parameters.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -ENOMEM: Not enough memory;
+ *   -EEXIST: Pipeline was already built successfully.
+ */
+__rte_experimental
+int
+rte_swx_pipeline_mirroring_config(struct rte_swx_pipeline *p,
+				  struct rte_swx_pipeline_mirroring_params *params);
 
 /*
  * Extern objects and functions
@@ -271,6 +301,47 @@ rte_swx_pipeline_extern_func_register(struct rte_swx_pipeline *p,
 				      const char *name,
 				      const char *mailbox_struct_type_name,
 				      rte_swx_extern_func_t func);
+/*
+ * Hash function.
+ */
+
+/**
+ * Hash function prototype
+ *
+ * @param[in] key
+ *   Key to hash. Must be non-NULL.
+ * @param[in] length
+ *   Key length in bytes.
+ * @param[in] seed
+ *   Hash seed.
+ * @return
+ *   Hash value.
+ */
+typedef uint32_t
+(*rte_swx_hash_func_t)(const void *key,
+		       uint32_t length,
+		       uint32_t seed);
+
+/**
+ * Pipeline hash function register
+ *
+ * @param[in] p
+ *   Pipeline handle.
+ * @param[in] name
+ *   Hash function name.
+ * @param[in] func
+ *   Hash function.
+ * @return
+ *   0 on success or the following error codes otherwise:
+ *   -EINVAL: Invalid argument;
+ *   -ENOMEM: Not enough space/cannot allocate memory;
+ *   -EEXIST: Hash function with this name already exists.
+ */
+__rte_experimental
+int
+rte_swx_pipeline_hash_func_register(struct rte_swx_pipeline *p,
+				    const char *name,
+				    rte_swx_hash_func_t func);
 
 /*
  * Packet headers and meta-data
@@ -589,11 +660,12 @@ struct rte_swx_pipeline_table_params {
 	 */
 	const char *default_action_name;
 
-	/** Default action data. The size of this array is the action data size
-	 * of the default action. Must be NULL if the default action data size
-	 * is zero.
+	/** Default action arguments. Specified as a string with the format
+	 * "ARG0_NAME ARG0_VALUE ...". The number of arguments in this string
+	 * must match exactly the number of arguments of the default action.
+	 * Must be NULL if the default action does not have any arguments.
 	 */
-	uint8_t *default_action_data;
+	const char *default_action_args;
 
 	/** If non-zero (true), then the default action of the current table
 	 * cannot be changed. If zero (false), then the default action can be
@@ -728,11 +800,12 @@ struct rte_swx_pipeline_learner_params {
 	 */
 	const char *default_action_name;
 
-	/** Default action data. The size of this array is the action data size
-	 * of the default action. Must be NULL if the default action data size
-	 * is zero.
+	/** Default action arguments. Specified as a string with the format
+	 * "ARG0_NAME ARG0_VALUE ...". The number of arguments in this string
+	 * must match exactly the number of arguments of the default action.
+	 * Must be NULL if the default action does not have any arguments.
 	 */
-	uint8_t *default_action_data;
+	const char *default_action_args;
 
 	/** If non-zero (true), then the default action of the current table
 	 * cannot be changed. If zero (false), then the default action can be
@@ -754,7 +827,9 @@ struct rte_swx_pipeline_learner_params {
  * @param[in] size
  *   The maximum number of table entries. Must be non-zero.
  * @param[in] timeout
- *   Table entry timeout in seconds. Must be non-zero.
+ *   Array of possible table entry timeouts in seconds. Must be non-NULL.
+ * @param[in] n_timeouts
+ *   Number of elements in the *timeout* array.
  * @return
  *   0 on success or the following error codes otherwise:
  *   -EINVAL: Invalid argument;
@@ -768,7 +843,8 @@ rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
 				const char *name,
 				struct rte_swx_pipeline_learner_params *params,
 				uint32_t size,
-				uint32_t timeout);
+				uint32_t *timeout,
+				uint32_t n_timeouts);
 
 /**
  * Pipeline register array configure

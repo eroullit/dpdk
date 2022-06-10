@@ -2,6 +2,8 @@
  * Copyright(c) 2016-2017 Intel Corporation
  */
 
+#define OPENSSL_API_COMPAT 0x10100000L
+
 #include <string.h>
 
 #include <rte_common.h>
@@ -533,10 +535,10 @@ static const struct rte_cryptodev_capabilities openssl_pmd_capabilities[] = {
 			.xform_capa = {
 				.xform_type = RTE_CRYPTO_ASYM_XFORM_DH,
 				.op_types =
-				((1<<RTE_CRYPTO_ASYM_OP_PRIVATE_KEY_GENERATE) |
-				(1 << RTE_CRYPTO_ASYM_OP_PUBLIC_KEY_GENERATE |
+				((1<<RTE_CRYPTO_ASYM_KE_PRIV_KEY_GENERATE) |
+				(1 << RTE_CRYPTO_ASYM_KE_PUB_KEY_GENERATE |
 				(1 <<
-				RTE_CRYPTO_ASYM_OP_SHARED_SECRET_COMPUTE))),
+				RTE_CRYPTO_ASYM_KE_SHARED_SECRET_COMPUTE))),
 				{
 				.modlen = {
 				/* value 0 symbolizes no limit on min length */
@@ -998,33 +1000,6 @@ err_rsa:
 		if (ret) {
 			DH_free(dh);
 			goto err_dh;
-		}
-
-		/*
-		 * setup xfrom for
-		 * public key generate, or
-		 * DH Priv key generate, or both
-		 * public and private key generate
-		 */
-		asym_session->u.dh.key_op = (1 << xform->dh.type);
-
-		if (xform->dh.type ==
-			RTE_CRYPTO_ASYM_OP_PRIVATE_KEY_GENERATE) {
-			/* check if next is pubkey */
-			if ((xform->next != NULL) &&
-				(xform->next->xform_type ==
-				RTE_CRYPTO_ASYM_XFORM_DH) &&
-				(xform->next->dh.type ==
-				RTE_CRYPTO_ASYM_OP_PUBLIC_KEY_GENERATE)
-				) {
-				/*
-				 * setup op as pub/priv key
-				 * pair generationi
-				 */
-				asym_session->u.dh.key_op |=
-				(1 <<
-				RTE_CRYPTO_ASYM_OP_PUBLIC_KEY_GENERATE);
-			}
 		}
 		asym_session->u.dh.dh_key = dh;
 		asym_session->xfrm_type = RTE_CRYPTO_ASYM_XFORM_DH;

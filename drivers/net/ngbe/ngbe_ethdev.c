@@ -356,6 +356,7 @@ eth_ngbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
 	/* Vendor and Device ID need to be set before init of shared code */
+	hw->back = pci_dev;
 	hw->device_id = pci_dev->id.device_id;
 	hw->vendor_id = pci_dev->id.vendor_id;
 	hw->sub_system_id = pci_dev->id.subsystem_device_id;
@@ -1048,7 +1049,7 @@ ngbe_dev_start(struct rte_eth_dev *dev)
 	if (hw->mac.default_speeds & NGBE_LINK_SPEED_10M_FULL)
 		allowed_speeds |= RTE_ETH_LINK_SPEED_10M;
 
-	if (*link_speeds & ~allowed_speeds) {
+	if (((*link_speeds) >> 1) & ~(allowed_speeds >> 1)) {
 		PMD_INIT_LOG(ERR, "Invalid link setting");
 		goto error;
 	}
@@ -1164,6 +1165,8 @@ ngbe_dev_stop(struct rte_eth_dev *dev)
 
 	for (vf = 0; vfinfo != NULL && vf < pci_dev->max_vfs; vf++)
 		vfinfo[vf].clear_to_send = false;
+
+	hw->phy.set_phy_power(hw, false);
 
 	ngbe_dev_clear_queues(dev);
 
@@ -1874,16 +1877,8 @@ ngbe_dev_link_update_share(struct rte_eth_dev *dev,
 		return rte_eth_linkstatus_set(dev, &link);
 	}
 
-	if (!link_up) {
-		if (hw->phy.media_type == ngbe_media_type_fiber &&
-			hw->phy.type != ngbe_phy_mvl_sfi) {
-			intr->flags |= NGBE_FLAG_NEED_LINK_CONFIG;
-			rte_eal_alarm_set(10,
-				ngbe_dev_setup_link_alarm_handler, dev);
-		}
-
+	if (!link_up)
 		return rte_eth_linkstatus_set(dev, &link);
-	}
 
 	intr->flags &= ~NGBE_FLAG_NEED_LINK_CONFIG;
 	link.link_status = RTE_ETH_LINK_UP;

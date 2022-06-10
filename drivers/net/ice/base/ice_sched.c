@@ -3614,6 +3614,92 @@ ice_cfg_vsi_q_priority(struct ice_port_info *pi, u16 num_qs, u32 *q_ids,
 }
 
 /**
+ * ice_sched_cfg_sibl_node_prio_lock - config priority of node
+ * @pi: port information structure
+ * @node: sched node to configure
+ * @priority: sibling priority
+ *
+ * This function configures node element's sibling priority only.
+ */
+enum ice_status
+ice_sched_cfg_sibl_node_prio_lock(struct ice_port_info *pi,
+				  struct ice_sched_node *node,
+				  u8 priority)
+{
+	enum ice_status status;
+
+	ice_acquire_lock(&pi->sched_lock);
+	status = ice_sched_cfg_sibl_node_prio(pi, node, priority);
+	ice_release_lock(&pi->sched_lock);
+
+	return status;
+}
+
+/**
+ * ice_sched_save_q_bw_alloc - save queue node's BW allocation information
+ * @q_ctx: queue context structure
+ * @rl_type: rate limit type min, max, or shared
+ * @bw_alloc: BW weight/allocation
+ *
+ * Save BW information of queue type node for post replay use.
+ */
+static enum ice_status
+ice_sched_save_q_bw_alloc(struct ice_q_ctx *q_ctx, enum ice_rl_type rl_type,
+			  u32 bw_alloc)
+{
+	switch (rl_type) {
+	case ICE_MIN_BW:
+		ice_set_clear_cir_bw_alloc(&q_ctx->bw_t_info, bw_alloc);
+		break;
+	case ICE_MAX_BW:
+		ice_set_clear_eir_bw_alloc(&q_ctx->bw_t_info, bw_alloc);
+		break;
+	default:
+		return ICE_ERR_PARAM;
+	}
+	return ICE_SUCCESS;
+}
+
+/**
+ * ice_cfg_q_bw_alloc - configure queue BW weight/alloc params
+ * @pi: port information structure
+ * @vsi_handle: sw VSI handle
+ * @tc: traffic class
+ * @q_handle: software queue handle
+ * @rl_type: min, max, or shared
+ * @bw_alloc: BW weight/allocation
+ *
+ * This function configures BW allocation of queue scheduling node.
+ */
+enum ice_status
+ice_cfg_q_bw_alloc(struct ice_port_info *pi, u16 vsi_handle, u8 tc,
+		   u16 q_handle, enum ice_rl_type rl_type, u32 bw_alloc)
+{
+	enum ice_status status = ICE_ERR_PARAM;
+	struct ice_sched_node *node;
+	struct ice_q_ctx *q_ctx;
+
+	ice_acquire_lock(&pi->sched_lock);
+	q_ctx = ice_get_lan_q_ctx(pi->hw, vsi_handle, tc, q_handle);
+	if (!q_ctx)
+		goto exit_q_bw_alloc;
+
+	node = ice_sched_find_node_by_teid(pi->root, q_ctx->q_teid);
+	if (!node) {
+		ice_debug(pi->hw, ICE_DBG_SCHED, "Wrong q_teid\n");
+		goto exit_q_bw_alloc;
+	}
+
+	status = ice_sched_cfg_node_bw_alloc(pi->hw, node, rl_type, bw_alloc);
+	if (!status)
+		status = ice_sched_save_q_bw_alloc(q_ctx, rl_type, bw_alloc);
+
+exit_q_bw_alloc:
+	ice_release_lock(&pi->sched_lock);
+	return status;
+}
+
+/**
  * ice_cfg_agg_vsi_priority_per_tc - config aggregator's VSI priority per TC
  * @pi: port information structure
  * @agg_id: Aggregator ID
@@ -4774,12 +4860,12 @@ ice_sched_get_node_by_id_type(struct ice_port_info *pi, u32 id,
 
 	case ICE_AGG_TYPE_Q:
 		/* The current implementation allows single queue to modify */
-		node = ice_sched_get_node(pi, id);
+		node = ice_sched_find_node_by_teid(pi->root, id);
 		break;
 
 	case ICE_AGG_TYPE_QG:
 		/* The current implementation allows single qg to modify */
-		child_node = ice_sched_get_node(pi, id);
+		child_node = ice_sched_find_node_by_teid(pi->root, id);
 		if (!child_node)
 			break;
 		node = child_node->parent;

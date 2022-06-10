@@ -234,9 +234,15 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 };
 
 static int
-iavf_tm_ops_get(struct rte_eth_dev *dev __rte_unused,
+iavf_tm_ops_get(struct rte_eth_dev *dev,
 			void *arg)
 {
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+	if (adapter->closed)
+		return -EIO;
+
 	if (!arg)
 		return -EINVAL;
 
@@ -346,6 +352,9 @@ iavf_set_mc_addr_list(struct rte_eth_dev *dev,
 			    (uint32_t)IAVF_NUM_MACADDR_MAX);
 		return -EINVAL;
 	}
+
+	if (adapter->closed)
+		return -EIO;
 
 	/* flush previous addresses */
 	err = iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
@@ -617,6 +626,9 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 	uint16_t num_queue_pairs = RTE_MAX(dev->data->nb_rx_queues,
 		dev->data->nb_tx_queues);
 	int ret;
+
+	if (ad->closed)
+		return -EIO;
 
 	ad->rx_bulk_alloc_allowed = true;
 	/* Initialize to TRUE. If any of Rx queues doesn't meet the
@@ -914,28 +926,38 @@ iavf_start_queues(struct rte_eth_dev *dev)
 	struct iavf_rx_queue *rxq;
 	struct iavf_tx_queue *txq;
 	int i;
+	uint16_t nb_txq, nb_rxq;
 
-	for (i = 0; i < dev->data->nb_tx_queues; i++) {
-		txq = dev->data->tx_queues[i];
+	for (nb_txq = 0; nb_txq < dev->data->nb_tx_queues; nb_txq++) {
+		txq = dev->data->tx_queues[nb_txq];
 		if (txq->tx_deferred_start)
 			continue;
-		if (iavf_dev_tx_queue_start(dev, i) != 0) {
-			PMD_DRV_LOG(ERR, "Fail to start queue %u", i);
-			return -1;
+		if (iavf_dev_tx_queue_start(dev, nb_txq) != 0) {
+			PMD_DRV_LOG(ERR, "Fail to start tx queue %u", nb_txq);
+			goto tx_err;
 		}
 	}
 
-	for (i = 0; i < dev->data->nb_rx_queues; i++) {
-		rxq = dev->data->rx_queues[i];
+	for (nb_rxq = 0; nb_rxq < dev->data->nb_rx_queues; nb_rxq++) {
+		rxq = dev->data->rx_queues[nb_rxq];
 		if (rxq->rx_deferred_start)
 			continue;
-		if (iavf_dev_rx_queue_start(dev, i) != 0) {
-			PMD_DRV_LOG(ERR, "Fail to start queue %u", i);
-			return -1;
+		if (iavf_dev_rx_queue_start(dev, nb_rxq) != 0) {
+			PMD_DRV_LOG(ERR, "Fail to start rx queue %u", nb_rxq);
+			goto rx_err;
 		}
 	}
 
 	return 0;
+
+rx_err:
+	for (i = 0; i < nb_rxq; i++)
+		iavf_dev_rx_queue_stop(dev, i);
+tx_err:
+	for (i = 0; i < nb_txq; i++)
+		iavf_dev_tx_queue_stop(dev, i);
+
+	return -1;
 }
 
 static int
@@ -949,6 +971,9 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	uint16_t index = 0;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (adapter->closed)
+		return -1;
 
 	adapter->stopped = 0;
 
@@ -1014,18 +1039,11 @@ iavf_dev_start(struct rte_eth_dev *dev)
 	iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
 				  true);
 
+	rte_spinlock_init(&vf->phc_time_aq_lock);
+
 	if (iavf_start_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "enable queues failed");
 		goto err_mac;
-	}
-
-	if (dev->data->dev_conf.rxmode.offloads &
-	    RTE_ETH_RX_OFFLOAD_TIMESTAMP) {
-		if (iavf_get_phc_time(adapter)) {
-			PMD_DRV_LOG(ERR, "get physical time failed");
-			goto err_mac;
-		}
-		adapter->hw_time_update = rte_get_timer_cycles() / (rte_get_timer_hz() / 1000);
 	}
 
 	return 0;
@@ -1045,6 +1063,9 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (adapter->closed)
+		return -1;
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) &&
 	    dev->data->dev_conf.intr_conf.rxq != 0)
@@ -1067,9 +1088,6 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
 				  false);
 
-	/* free iAVF security device context all related resources */
-	iavf_security_ctx_destroy(adapter);
-
 	adapter->stopped = 1;
 	dev->data->dev_started = 0;
 
@@ -1082,6 +1100,9 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = &adapter->vf;
+
+	if (adapter->closed)
+		return -EIO;
 
 	dev_info->max_rx_queues = IAVF_MAX_NUM_QUEUES_LV;
 	dev_info->max_tx_queues = IAVF_MAX_NUM_QUEUES_LV;
@@ -1326,6 +1347,9 @@ iavf_dev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	int err;
 
+	if (adapter->closed)
+		return -EIO;
+
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2) {
 		err = iavf_add_del_vlan_v2(adapter, vlan_id, on);
 		if (err)
@@ -1402,6 +1426,9 @@ iavf_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
 	int err;
 
+	if (adapter->closed)
+		return -EIO;
+
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2)
 		return iavf_dev_vlan_offload_set_v2(dev, mask);
 
@@ -1433,6 +1460,9 @@ iavf_dev_rss_reta_update(struct rte_eth_dev *dev,
 	uint8_t *lut;
 	uint16_t i, idx, shift;
 	int ret;
+
+	if (adapter->closed)
+		return -EIO;
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF))
 		return -ENOTSUP;
@@ -1478,6 +1508,9 @@ iavf_dev_rss_reta_query(struct rte_eth_dev *dev,
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	uint16_t i, idx, shift;
+
+	if (adapter->closed)
+		return -EIO;
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF))
 		return -ENOTSUP;
@@ -1532,6 +1565,9 @@ iavf_dev_rss_hash_update(struct rte_eth_dev *dev,
 
 	adapter->dev_data->dev_conf.rx_adv_conf.rss_conf = *rss_conf;
 
+	if (adapter->closed)
+		return -EIO;
+
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF))
 		return -ENOTSUP;
 
@@ -1584,6 +1620,9 @@ iavf_dev_rss_hash_conf_get(struct rte_eth_dev *dev,
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+
+	if (adapter->closed)
+		return -EIO;
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF))
 		return -ENOTSUP;
@@ -1832,6 +1871,9 @@ iavf_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	uint16_t msix_intr;
 
+	if (adapter->closed)
+		return -EIO;
+
 	msix_intr = rte_intr_vec_list_index_get(pci_dev->intr_handle,
 						       queue_id);
 	if (msix_intr == IAVF_MISC_VEC_ID) {
@@ -1873,7 +1915,7 @@ iavf_dev_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id)
 
 	IAVF_WRITE_REG(hw,
 		      IAVF_VFINT_DYN_CTLN1(msix_intr - IAVF_RX_VEC_START),
-		      0);
+		      IAVF_VFINT_DYN_CTLN1_WB_ON_ITR_MASK);
 
 	IAVF_WRITE_FLUSH(hw);
 	return 0;
@@ -2182,13 +2224,12 @@ static int iavf_parse_devargs(struct rte_eth_dev *dev)
 	if (ret)
 		goto bail;
 
-	if (ad->devargs.quanta_size == 0)
-		ad->devargs.quanta_size = 1024;
-
-	if (ad->devargs.quanta_size < 256 || ad->devargs.quanta_size > 4096 ||
-	    ad->devargs.quanta_size & 0x40) {
+	if (ad->devargs.quanta_size != 0 &&
+	    (ad->devargs.quanta_size < 256 || ad->devargs.quanta_size > 4096 ||
+	     ad->devargs.quanta_size & 0x40)) {
 		PMD_INIT_LOG(ERR, "invalid quanta size\n");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto bail;
 	}
 
 bail:
@@ -2488,8 +2529,11 @@ static int
 iavf_dev_flow_ops_get(struct rte_eth_dev *dev,
 		      const struct rte_flow_ops **ops)
 {
-	if (!dev)
-		return -EINVAL;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+
+	if (adapter->closed)
+		return -EIO;
 
 	*ops = &iavf_flow_ops;
 	return 0;
@@ -2630,7 +2674,7 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* Start device watchdog */
 	iavf_dev_watchdog_enable(adapter);
-
+	adapter->closed = false;
 
 	return 0;
 
@@ -2658,7 +2702,14 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
 		return 0;
 
+	if (adapter->closed)
+		return 0;
+
 	ret = iavf_dev_stop(dev);
+	adapter->closed = true;
+
+	/* free iAVF security device context all related resources */
+	iavf_security_ctx_destroy(adapter);
 
 	iavf_flow_flush(dev, NULL);
 	iavf_flow_uninit(adapter);

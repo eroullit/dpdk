@@ -6,6 +6,9 @@
 #include <errno.h>
 #include <dlfcn.h>
 
+#include <rte_jhash.h>
+#include <rte_hash_crc.h>
+
 #include <rte_swx_port_ethdev.h>
 #include <rte_swx_port_fd.h>
 #include <rte_swx_port_ring.h>
@@ -423,6 +426,8 @@ rte_swx_pipeline_port_out_type_register(struct rte_swx_pipeline *p,
 	CHECK(ops->create, EINVAL);
 	CHECK(ops->free, EINVAL);
 	CHECK(ops->pkt_tx, EINVAL);
+	CHECK(ops->pkt_fast_clone_tx, EINVAL);
+	CHECK(ops->pkt_clone_tx, EINVAL);
 	CHECK(ops->stats_read, EINVAL);
 
 	CHECK(!port_out_type_find(p, name), EEXIST);
@@ -509,6 +514,8 @@ port_out_build(struct rte_swx_pipeline *p)
 		struct port_out_runtime *out = &p->out[port->id];
 
 		out->pkt_tx = port->type->ops.pkt_tx;
+		out->pkt_fast_clone_tx = port->type->ops.pkt_fast_clone_tx;
+		out->pkt_clone_tx = port->type->ops.pkt_clone_tx;
 		out->flush = port->type->ops.flush;
 		out->obj = port->obj;
 	}
@@ -552,6 +559,81 @@ port_out_free(struct rte_swx_pipeline *p)
 		TAILQ_REMOVE(&p->port_out_types, elem, node);
 		free(elem);
 	}
+}
+
+/*
+ * Packet mirroring.
+ */
+int
+rte_swx_pipeline_mirroring_config(struct rte_swx_pipeline *p,
+				  struct rte_swx_pipeline_mirroring_params *params)
+{
+	CHECK(p, EINVAL);
+	CHECK(params, EINVAL);
+	CHECK(params->n_slots, EINVAL);
+	CHECK(params->n_sessions, EINVAL);
+	CHECK(!p->build_done, EEXIST);
+
+	p->n_mirroring_slots = rte_align32pow2(params->n_slots);
+	if (p->n_mirroring_slots > 64)
+		p->n_mirroring_slots = 64;
+
+	p->n_mirroring_sessions = rte_align32pow2(params->n_sessions);
+
+	return 0;
+}
+
+static void
+mirroring_build_free(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+
+	for (i = 0; i < RTE_SWX_PIPELINE_THREADS_MAX; i++) {
+		struct thread *t = &p->threads[i];
+
+		/* mirroring_slots. */
+		free(t->mirroring_slots);
+		t->mirroring_slots = NULL;
+	}
+
+	/* mirroring_sessions. */
+	free(p->mirroring_sessions);
+	p->mirroring_sessions = NULL;
+}
+
+static void
+mirroring_free(struct rte_swx_pipeline *p)
+{
+	mirroring_build_free(p);
+}
+
+static int
+mirroring_build(struct rte_swx_pipeline *p)
+{
+	uint32_t i;
+
+	if (!p->n_mirroring_slots || !p->n_mirroring_sessions)
+		return 0;
+
+	for (i = 0; i < RTE_SWX_PIPELINE_THREADS_MAX; i++) {
+		struct thread *t = &p->threads[i];
+
+		/* mirroring_slots. */
+		t->mirroring_slots = calloc(p->n_mirroring_slots, sizeof(uint32_t));
+		if (!t->mirroring_slots)
+			goto error;
+	}
+
+	/* mirroring_sessions. */
+	p->mirroring_sessions = calloc(p->n_mirroring_sessions, sizeof(struct mirroring_session));
+	if (!p->mirroring_sessions)
+		goto error;
+
+	return 0;
+
+error:
+	mirroring_build_free(p);
+	return -ENOMEM;
 }
 
 /*
@@ -1083,6 +1165,94 @@ extern_func_free(struct rte_swx_pipeline *p)
 			break;
 
 		TAILQ_REMOVE(&p->extern_funcs, elem, node);
+		free(elem);
+	}
+}
+
+/*
+ * Hash function.
+ */
+static struct hash_func *
+hash_func_find(struct rte_swx_pipeline *p, const char *name)
+{
+	struct hash_func *elem;
+
+	TAILQ_FOREACH(elem, &p->hash_funcs, node)
+		if (strcmp(elem->name, name) == 0)
+			return elem;
+
+	return NULL;
+}
+
+int
+rte_swx_pipeline_hash_func_register(struct rte_swx_pipeline *p,
+				    const char *name,
+				    rte_swx_hash_func_t func)
+{
+	struct hash_func *f;
+
+	CHECK(p, EINVAL);
+
+	CHECK_NAME(name, EINVAL);
+	CHECK(!hash_func_find(p, name), EEXIST);
+
+	CHECK(func, EINVAL);
+
+	/* Node allocation. */
+	f = calloc(1, sizeof(struct hash_func));
+	CHECK(func, ENOMEM);
+
+	/* Node initialization. */
+	strcpy(f->name, name);
+	f->func = func;
+	f->id = p->n_hash_funcs;
+
+	/* Node add to tailq. */
+	TAILQ_INSERT_TAIL(&p->hash_funcs, f, node);
+	p->n_hash_funcs++;
+
+	return 0;
+}
+
+static int
+hash_func_build(struct rte_swx_pipeline *p)
+{
+	struct hash_func *func;
+
+	/* Memory allocation. */
+	p->hash_func_runtime = calloc(p->n_hash_funcs, sizeof(struct hash_func_runtime));
+	CHECK(p->hash_func_runtime, ENOMEM);
+
+	/* Hash function. */
+	TAILQ_FOREACH(func, &p->hash_funcs, node) {
+		struct hash_func_runtime *r = &p->hash_func_runtime[func->id];
+
+		r->func = func->func;
+	}
+
+	return 0;
+}
+
+static void
+hash_func_build_free(struct rte_swx_pipeline *p)
+{
+	free(p->hash_func_runtime);
+	p->hash_func_runtime = NULL;
+}
+
+static void
+hash_func_free(struct rte_swx_pipeline *p)
+{
+	hash_func_build_free(p);
+
+	for ( ; ; ) {
+		struct hash_func *elem;
+
+		elem = TAILQ_FIRST(&p->hash_funcs);
+		if (!elem)
+			break;
+
+		TAILQ_REMOVE(&p->hash_funcs, elem, node);
 		free(elem);
 	}
 }
@@ -1651,6 +1821,118 @@ instr_drop_exec(struct rte_swx_pipeline *p)
 	/* Thread. */
 	thread_ip_reset(p, t);
 	instr_rx_exec(p);
+}
+
+/*
+ * mirror.
+ */
+static int
+instr_mirror_translate(struct rte_swx_pipeline *p,
+		       struct action *action,
+		       char **tokens,
+		       int n_tokens,
+		       struct instruction *instr,
+		       struct instruction_data *data __rte_unused)
+{
+	char *dst = tokens[1], *src = tokens[2];
+	struct field *fdst, *fsrc;
+	uint32_t dst_struct_id = 0, src_struct_id = 0;
+
+	CHECK(n_tokens == 3, EINVAL);
+
+	fdst = struct_field_parse(p, action, dst, &dst_struct_id);
+	CHECK(fdst, EINVAL);
+	CHECK(dst[0] != 'h', EINVAL);
+	CHECK(!fdst->var_size, EINVAL);
+
+	fsrc = struct_field_parse(p, action, src, &src_struct_id);
+	CHECK(fsrc, EINVAL);
+	CHECK(src[0] != 'h', EINVAL);
+	CHECK(!fsrc->var_size, EINVAL);
+
+	instr->type = INSTR_MIRROR;
+	instr->mirror.dst.struct_id = (uint8_t)dst_struct_id;
+	instr->mirror.dst.n_bits = fdst->n_bits;
+	instr->mirror.dst.offset = fdst->offset / 8;
+	instr->mirror.src.struct_id = (uint8_t)src_struct_id;
+	instr->mirror.src.n_bits = fsrc->n_bits;
+	instr->mirror.src.offset = fsrc->offset / 8;
+
+	return 0;
+}
+
+static inline void
+instr_mirror_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_mirror_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+/*
+ * recirculate.
+ */
+static int
+instr_recirculate_translate(struct rte_swx_pipeline *p __rte_unused,
+			    struct action *action __rte_unused,
+			    char **tokens __rte_unused,
+			    int n_tokens,
+			    struct instruction *instr,
+			    struct instruction_data *data __rte_unused)
+{
+	CHECK(n_tokens == 1, EINVAL);
+
+	instr->type = INSTR_RECIRCULATE;
+	return 0;
+}
+
+static int
+instr_recircid_translate(struct rte_swx_pipeline *p,
+			 struct action *action __rte_unused,
+			 char **tokens,
+			 int n_tokens,
+			 struct instruction *instr,
+			 struct instruction_data *data __rte_unused)
+{
+	struct field *f;
+
+	CHECK(n_tokens == 2, EINVAL);
+
+	f = metadata_field_parse(p, tokens[1]);
+	CHECK(f, EINVAL);
+
+	instr->type = INSTR_RECIRCID;
+	instr->io.io.offset = f->offset / 8;
+	instr->io.io.n_bits = f->n_bits;
+	return 0;
+}
+
+static inline void
+instr_recirculate_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_recirculate_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+static inline void
+instr_recircid_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_recircid_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
 }
 
 /*
@@ -2365,7 +2647,7 @@ instr_learner_af_exec(struct rte_swx_pipeline *p)
 	stats->n_pkts_action[action_id] = n_pkts_action + 1;
 
 	/* Thread. */
-	thread_ip_action_call(p, t, action_id);
+	thread_ip_inc(p);
 
 	/* Action */
 	action_func(p);
@@ -2392,31 +2674,38 @@ instr_learn_translate(struct rte_swx_pipeline *p,
 		      struct instruction_data *data __rte_unused)
 {
 	struct action *a;
-	const char *mf_name;
-	uint32_t mf_offset = 0;
+	struct field *mf_first_arg = NULL, *mf_timeout_id = NULL;
+	const char *mf_first_arg_name, *mf_timeout_id_name;
 
 	CHECK(action, EINVAL);
-	CHECK((n_tokens == 2) || (n_tokens == 3), EINVAL);
+	CHECK((n_tokens == 3) || (n_tokens == 4), EINVAL);
 
+	/* Action. */
 	a = action_find(p, tokens[1]);
 	CHECK(a, EINVAL);
 	CHECK(!action_has_nbo_args(a), EINVAL);
 
-	mf_name = (n_tokens > 2) ? tokens[2] : NULL;
-	CHECK(!learner_action_args_check(p, a, mf_name), EINVAL);
+	/* Action first argument. */
+	mf_first_arg_name = (n_tokens == 4) ? tokens[2] : NULL;
+	CHECK(!learner_action_args_check(p, a, mf_first_arg_name), EINVAL);
 
-	if (mf_name) {
-		struct field *mf;
-
-		mf = metadata_field_parse(p, mf_name);
-		CHECK(mf, EINVAL);
-
-		mf_offset = mf->offset / 8;
+	if (mf_first_arg_name) {
+		mf_first_arg = metadata_field_parse(p, mf_first_arg_name);
+		CHECK(mf_first_arg, EINVAL);
 	}
 
+	/* Timeout ID. */
+	mf_timeout_id_name = (n_tokens == 4) ? tokens[3] : tokens[2];
+	CHECK_NAME(mf_timeout_id_name, EINVAL);
+	mf_timeout_id = metadata_field_parse(p, mf_timeout_id_name);
+	CHECK(mf_timeout_id, EINVAL);
+
+	/* Instruction. */
 	instr->type = INSTR_LEARNER_LEARN;
 	instr->learn.action_id = a->id;
-	instr->learn.mf_offset = mf_offset;
+	instr->learn.mf_first_arg_offset = mf_first_arg ? (mf_first_arg->offset / 8) : 0;
+	instr->learn.mf_timeout_id_offset = mf_timeout_id->offset / 8;
+	instr->learn.mf_timeout_id_n_bits = mf_timeout_id->n_bits;
 
 	return 0;
 }
@@ -2428,6 +2717,66 @@ instr_learn_exec(struct rte_swx_pipeline *p)
 	struct instruction *ip = t->ip;
 
 	__instr_learn_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+/*
+ * rearm.
+ */
+static int
+instr_rearm_translate(struct rte_swx_pipeline *p,
+		      struct action *action,
+		      char **tokens,
+		      int n_tokens,
+		      struct instruction *instr,
+		      struct instruction_data *data __rte_unused)
+{
+	struct field *mf_timeout_id;
+	const char *mf_timeout_id_name;
+
+	CHECK(action, EINVAL);
+	CHECK((n_tokens == 1) || (n_tokens == 2), EINVAL);
+
+	/* INSTR_LEARNER_REARM. */
+	if (n_tokens == 1) {
+		instr->type = INSTR_LEARNER_REARM;
+		return 0;
+	}
+
+	/* INSTR_LEARNER_REARM_NEW. */
+	mf_timeout_id_name = tokens[1];
+	CHECK_NAME(mf_timeout_id_name, EINVAL);
+	mf_timeout_id = metadata_field_parse(p, mf_timeout_id_name);
+	CHECK(mf_timeout_id, EINVAL);
+
+	instr->type = INSTR_LEARNER_REARM_NEW;
+	instr->learn.mf_timeout_id_offset = mf_timeout_id->offset / 8;
+	instr->learn.mf_timeout_id_n_bits = mf_timeout_id->n_bits;
+
+	return 0;
+}
+
+static inline void
+instr_rearm_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_rearm_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
+}
+
+static inline void
+instr_rearm_new_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	__instr_rearm_new_exec(p, t, ip);
 
 	/* Thread. */
 	thread_ip_inc(p);
@@ -2536,6 +2885,61 @@ instr_extern_func_exec(struct rte_swx_pipeline *p)
 	/* Thread. */
 	thread_ip_inc_cond(t, done);
 	thread_yield_cond(p, done ^ 1);
+}
+
+/*
+ * hash.
+ */
+static int
+instr_hash_translate(struct rte_swx_pipeline *p,
+		     struct action *action,
+		     char **tokens,
+		     int n_tokens,
+		     struct instruction *instr,
+		     struct instruction_data *data __rte_unused)
+{
+	struct hash_func *func;
+	struct field *dst, *src_first, *src_last;
+	uint32_t src_struct_id_first = 0, src_struct_id_last = 0;
+
+	CHECK(n_tokens == 5, EINVAL);
+
+	func = hash_func_find(p, tokens[1]);
+	CHECK(func, EINVAL);
+
+	dst = metadata_field_parse(p, tokens[2]);
+	CHECK(dst, EINVAL);
+
+	src_first = struct_field_parse(p, action, tokens[3], &src_struct_id_first);
+	CHECK(src_first, EINVAL);
+
+	src_last = struct_field_parse(p, action, tokens[4], &src_struct_id_last);
+	CHECK(src_last, EINVAL);
+	CHECK(src_struct_id_first == src_struct_id_last, EINVAL);
+
+	instr->type = INSTR_HASH_FUNC;
+	instr->hash_func.hash_func_id = (uint8_t)func->id;
+	instr->hash_func.dst.offset = (uint8_t)dst->offset / 8;
+	instr->hash_func.dst.n_bits = (uint8_t)dst->n_bits;
+	instr->hash_func.src.struct_id = (uint8_t)src_struct_id_first;
+	instr->hash_func.src.offset = (uint16_t)src_first->offset / 8;
+	instr->hash_func.src.n_bytes = (uint16_t)((src_last->offset + src_last->n_bits -
+		src_first->offset) / 8);
+
+	return 0;
+}
+
+static inline void
+instr_hash_func_exec(struct rte_swx_pipeline *p)
+{
+	struct thread *t = &p->threads[p->thread_id];
+	struct instruction *ip = t->ip;
+
+	/* Extern function execute. */
+	__instr_hash_func_exec(p, t, ip);
+
+	/* Thread. */
+	thread_ip_inc(p);
 }
 
 /*
@@ -5653,6 +6057,30 @@ instr_translate(struct rte_swx_pipeline *p,
 					    instr,
 					    data);
 
+	if (!strcmp(tokens[tpos], "mirror"))
+		return instr_mirror_translate(p,
+					      action,
+					      &tokens[tpos],
+					      n_tokens - tpos,
+					      instr,
+					      data);
+
+	if (!strcmp(tokens[tpos], "recirculate"))
+		return instr_recirculate_translate(p,
+					      action,
+					      &tokens[tpos],
+					      n_tokens - tpos,
+					      instr,
+					      data);
+
+	if (!strcmp(tokens[tpos], "recircid"))
+		return instr_recircid_translate(p,
+					      action,
+					      &tokens[tpos],
+					      n_tokens - tpos,
+					      instr,
+					      data);
+
 	if (!strcmp(tokens[tpos], "extract"))
 		return instr_hdr_extract_translate(p,
 						   action,
@@ -5836,6 +6264,13 @@ instr_translate(struct rte_swx_pipeline *p,
 					     n_tokens - tpos,
 					     instr,
 					     data);
+	if (!strcmp(tokens[tpos], "rearm"))
+		return instr_rearm_translate(p,
+					     action,
+					     &tokens[tpos],
+					     n_tokens - tpos,
+					     instr,
+					     data);
 
 	if (!strcmp(tokens[tpos], "forget"))
 		return instr_forget_translate(p,
@@ -5852,6 +6287,14 @@ instr_translate(struct rte_swx_pipeline *p,
 					      n_tokens - tpos,
 					      instr,
 					      data);
+
+	if (!strcmp(tokens[tpos], "hash"))
+		return instr_hash_translate(p,
+					    action,
+					    &tokens[tpos],
+					    n_tokens - tpos,
+					    instr,
+					    data);
 
 	if (!strcmp(tokens[tpos], "jmp"))
 		return instr_jmp_translate(p,
@@ -6677,6 +7120,9 @@ static instr_exec_t instruction_table[] = {
 	[INSTR_TX] = instr_tx_exec,
 	[INSTR_TX_I] = instr_tx_i_exec,
 	[INSTR_DROP] = instr_drop_exec,
+	[INSTR_MIRROR] = instr_mirror_exec,
+	[INSTR_RECIRCULATE] = instr_recirculate_exec,
+	[INSTR_RECIRCID] = instr_recircid_exec,
 
 	[INSTR_HDR_EXTRACT] = instr_hdr_extract_exec,
 	[INSTR_HDR_EXTRACT2] = instr_hdr_extract2_exec,
@@ -6822,9 +7268,12 @@ static instr_exec_t instruction_table[] = {
 	[INSTR_LEARNER] = instr_learner_exec,
 	[INSTR_LEARNER_AF] = instr_learner_af_exec,
 	[INSTR_LEARNER_LEARN] = instr_learn_exec,
+	[INSTR_LEARNER_REARM] = instr_rearm_exec,
+	[INSTR_LEARNER_REARM_NEW] = instr_rearm_new_exec,
 	[INSTR_LEARNER_FORGET] = instr_forget_exec,
 	[INSTR_EXTERN_OBJ] = instr_extern_obj_exec,
 	[INSTR_EXTERN_FUNC] = instr_extern_func_exec,
+	[INSTR_HASH_FUNC] = instr_hash_func_exec,
 
 	[INSTR_JMP] = instr_jmp_exec,
 	[INSTR_JMP_VALID] = instr_jmp_valid_exec,
@@ -6991,8 +7440,8 @@ rte_swx_pipeline_action_config(struct rte_swx_pipeline *p,
 			       uint32_t n_instructions)
 {
 	struct struct_type *args_struct_type = NULL;
-	struct action *a;
-	int err;
+	struct action *a = NULL;
+	int status = 0;
 
 	CHECK(p, EINVAL);
 
@@ -7008,12 +7457,16 @@ rte_swx_pipeline_action_config(struct rte_swx_pipeline *p,
 
 	/* Node allocation. */
 	a = calloc(1, sizeof(struct action));
-	CHECK(a, ENOMEM);
+	if (!a) {
+		status = -ENOMEM;
+		goto error;
+	}
+
 	if (args_struct_type) {
 		a->args_endianness = calloc(args_struct_type->n_fields, sizeof(int));
 		if (!a->args_endianness) {
-			free(a);
-			CHECK(0, ENOMEM);
+			status = -ENOMEM;
+			goto error;
 		}
 	}
 
@@ -7023,18 +7476,26 @@ rte_swx_pipeline_action_config(struct rte_swx_pipeline *p,
 	a->id = p->n_actions;
 
 	/* Instruction translation. */
-	err = instruction_config(p, a, instructions, n_instructions);
-	if (err) {
-		free(a->args_endianness);
-		free(a);
-		return err;
-	}
+	status = instruction_config(p, a, instructions, n_instructions);
+	if (status)
+		goto error;
 
 	/* Node add to tailq. */
 	TAILQ_INSERT_TAIL(&p->actions, a, node);
 	p->n_actions++;
 
 	return 0;
+
+error:
+	if (!a)
+		return status;
+
+	free(a->args_endianness);
+	free(a->instructions);
+	free(a->instruction_data);
+	free(a);
+
+	return status;
 }
 
 static int
@@ -7079,8 +7540,9 @@ action_free(struct rte_swx_pipeline *p)
 			break;
 
 		TAILQ_REMOVE(&p->actions, action, node);
-		free(action->instruction_data);
+		free(action->args_endianness);
 		free(action->instructions);
+		free(action->instruction_data);
 		free(action);
 	}
 }
@@ -7117,6 +7579,91 @@ action_arg_src_mov_count(struct action *a,
 	}
 
 	return n_users;
+}
+
+#if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
+#define field_ntoh(val, n_bits) (ntoh64((val) << (64 - n_bits)))
+#define field_hton(val, n_bits) (hton64((val) << (64 - n_bits)))
+#else
+#define field_ntoh(val, n_bits) (val)
+#define field_hton(val, n_bits) (val)
+#endif
+
+#define ACTION_ARGS_TOKENS_MAX 256
+
+static int
+action_args_parse(struct action *a, const char *args, uint8_t *data)
+{
+	char *tokens[ACTION_ARGS_TOKENS_MAX], *s0 = NULL, *s;
+	uint32_t n_tokens = 0, offset = 0, i;
+	int status = 0;
+
+	/* Checks. */
+	if (!a->st || !args || !args[0]) {
+		status = -EINVAL;
+		goto error;
+	}
+
+	/* Memory allocation. */
+	s0 = strdup(args);
+	if (!s0) {
+		status = -ENOMEM;
+		goto error;
+	}
+
+	/* Parse the string into tokens. */
+	for (s = s0; ; ) {
+		char *token;
+
+		token = strtok_r(s, " \f\n\r\t\v", &s);
+		if (!token)
+			break;
+
+		if (n_tokens >= RTE_DIM(tokens)) {
+			status = -EINVAL;
+			goto error;
+		}
+
+		tokens[n_tokens] = token;
+		n_tokens++;
+	}
+
+	/* More checks. */
+	if (n_tokens != a->st->n_fields * 2) {
+		status = -EINVAL;
+		goto error;
+	}
+
+	/* Process the action arguments. */
+	for (i = 0; i < a->st->n_fields; i++) {
+		struct field *f = &a->st->fields[i];
+		char *arg_name = tokens[i * 2];
+		char *arg_val = tokens[i * 2 + 1];
+		uint64_t val;
+
+		if (strcmp(arg_name, f->name)) {
+			status = -EINVAL;
+			goto error;
+		}
+
+		val = strtoull(arg_val, &arg_val, 0);
+		if (arg_val[0]) {
+			status = -EINVAL;
+			goto error;
+		}
+
+		/* Endianness conversion. */
+		if (a->args_endianness[i])
+			val = field_hton(val, f->n_bits);
+
+		/* Copy to entry. */
+		memcpy(&data[offset], (uint8_t *)&val, f->n_bits / 8);
+		offset += f->n_bits / 8;
+	}
+
+error:
+	free(s0);
+	return status;
 }
 
 /*
@@ -7391,8 +7938,8 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 	      EINVAL);
 
 	default_action = action_find(p, params->default_action_name);
-	CHECK((default_action->st && params->default_action_data) ||
-	      !params->default_action_data, EINVAL);
+	CHECK((default_action->st && params->default_action_args) || !params->default_action_args,
+	      EINVAL);
 
 	/* Table type checks. */
 	if (recommended_table_type_name)
@@ -7413,30 +7960,42 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 
 	/* Memory allocation. */
 	t = calloc(1, sizeof(struct table));
-	if (!t)
-		goto nomem;
+	if (!t) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	t->fields = calloc(params->n_fields, sizeof(struct match_field));
-	if (!t->fields)
-		goto nomem;
+	if (!t->fields) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	t->actions = calloc(params->n_actions, sizeof(struct action *));
-	if (!t->actions)
-		goto nomem;
+	if (!t->actions) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	if (action_data_size_max) {
 		t->default_action_data = calloc(1, action_data_size_max);
-		if (!t->default_action_data)
-			goto nomem;
+		if (!t->default_action_data) {
+			status = -ENOMEM;
+			goto error;
+		}
 	}
 
 	t->action_is_for_table_entries = calloc(params->n_actions, sizeof(int));
-	if (!t->action_is_for_table_entries)
-		goto nomem;
+	if (!t->action_is_for_table_entries) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	t->action_is_for_default_entry = calloc(params->n_actions, sizeof(int));
-	if (!t->action_is_for_default_entry)
-		goto nomem;
+	if (!t->action_is_for_default_entry) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	/* Node initialization. */
 	strcpy(t->name, name);
@@ -7469,10 +8028,14 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 		t->action_is_for_default_entry[i] = action_is_for_default_entry;
 	}
 	t->default_action = default_action;
-	if (default_action->st)
-		memcpy(t->default_action_data,
-		       params->default_action_data,
-		       default_action->st->n_bits / 8);
+	if (default_action->st) {
+		status = action_args_parse(default_action,
+					   params->default_action_args,
+					   t->default_action_data);
+		if (status)
+			goto error;
+	}
+
 	t->n_actions = params->n_actions;
 	t->default_action_is_const = params->default_action_is_const;
 	t->action_data_size_max = action_data_size_max;
@@ -7486,9 +8049,9 @@ rte_swx_pipeline_table_config(struct rte_swx_pipeline *p,
 
 	return 0;
 
-nomem:
+error:
 	if (!t)
-		return -ENOMEM;
+		return status;
 
 	free(t->action_is_for_default_entry);
 	free(t->action_is_for_table_entries);
@@ -7497,7 +8060,7 @@ nomem:
 	free(t->fields);
 	free(t);
 
-	return -ENOMEM;
+	return status;
 }
 
 static struct rte_swx_table_params *
@@ -8214,7 +8777,8 @@ rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
 			      const char *name,
 			      struct rte_swx_pipeline_learner_params *params,
 			      uint32_t size,
-			      uint32_t timeout)
+			      uint32_t *timeout,
+			      uint32_t n_timeouts)
 {
 	struct learner *l = NULL;
 	struct action *default_action;
@@ -8278,39 +8842,52 @@ rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
 	      EINVAL);
 
 	default_action = action_find(p, params->default_action_name);
-	CHECK((default_action->st && params->default_action_data) ||
-	      !params->default_action_data, EINVAL);
+	CHECK((default_action->st && params->default_action_args) || !params->default_action_args,
+	      EINVAL);
 
 	/* Any other checks. */
 	CHECK(size, EINVAL);
 	CHECK(timeout, EINVAL);
+	CHECK(n_timeouts && (n_timeouts < RTE_SWX_TABLE_LEARNER_N_KEY_TIMEOUTS_MAX), EINVAL);
 
 	/* Memory allocation. */
 	l = calloc(1, sizeof(struct learner));
-	if (!l)
-		goto nomem;
+	if (!l) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	l->fields = calloc(params->n_fields, sizeof(struct field *));
-	if (!l->fields)
-		goto nomem;
+	if (!l->fields) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	l->actions = calloc(params->n_actions, sizeof(struct action *));
-	if (!l->actions)
-		goto nomem;
+	if (!l->actions) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	if (action_data_size_max) {
 		l->default_action_data = calloc(1, action_data_size_max);
-		if (!l->default_action_data)
-			goto nomem;
+		if (!l->default_action_data) {
+			status = -ENOMEM;
+			goto error;
+		}
 	}
 
 	l->action_is_for_table_entries = calloc(params->n_actions, sizeof(int));
-	if (!l->action_is_for_table_entries)
-		goto nomem;
+	if (!l->action_is_for_table_entries) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	l->action_is_for_default_entry = calloc(params->n_actions, sizeof(int));
-	if (!l->action_is_for_default_entry)
-		goto nomem;
+	if (!l->action_is_for_default_entry) {
+		status = -ENOMEM;
+		goto error;
+	}
 
 	/* Node initialization. */
 	strcpy(l->name, name);
@@ -8342,10 +8919,13 @@ rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
 
 	l->default_action = default_action;
 
-	if (default_action->st)
-		memcpy(l->default_action_data,
-		       params->default_action_data,
-		       default_action->st->n_bits / 8);
+	if (default_action->st) {
+		status = action_args_parse(default_action,
+					   params->default_action_args,
+					   l->default_action_data);
+		if (status)
+			goto error;
+	}
 
 	l->n_actions = params->n_actions;
 
@@ -8355,7 +8935,10 @@ rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
 
 	l->size = size;
 
-	l->timeout = timeout;
+	for (i = 0; i < n_timeouts; i++)
+		l->timeout[i] = timeout[i];
+
+	l->n_timeouts = n_timeouts;
 
 	l->id = p->n_learners;
 
@@ -8365,9 +8948,9 @@ rte_swx_pipeline_learner_config(struct rte_swx_pipeline *p,
 
 	return 0;
 
-nomem:
+error:
 	if (!l)
-		return -ENOMEM;
+		return status;
 
 	free(l->action_is_for_default_entry);
 	free(l->action_is_for_table_entries);
@@ -8376,7 +8959,7 @@ nomem:
 	free(l->fields);
 	free(l);
 
-	return -ENOMEM;
+	return status;
 }
 
 static void
@@ -8386,6 +8969,8 @@ learner_params_free(struct rte_swx_table_learner_params *params)
 		return;
 
 	free(params->key_mask0);
+
+	free(params->key_timeout);
 
 	free(params);
 }
@@ -8440,8 +9025,16 @@ learner_params_get(struct learner *l)
 	/* Maximum number of keys. */
 	params->n_keys_max = l->size;
 
+	/* Memory allocation. */
+	params->key_timeout = calloc(l->n_timeouts, sizeof(uint32_t));
+	if (!params->key_timeout)
+		goto error;
+
 	/* Timeout. */
-	params->key_timeout = l->timeout;
+	for (i = 0; i < l->n_timeouts; i++)
+		params->key_timeout[i] = l->timeout[i];
+
+	params->n_key_timeouts = l->n_timeouts;
 
 	return params;
 
@@ -9024,8 +9617,10 @@ rte_swx_pipeline_free(struct rte_swx_pipeline *p)
 	instruction_table_free(p);
 	metadata_free(p);
 	header_free(p);
+	hash_func_free(p);
 	extern_func_free(p);
 	extern_obj_free(p);
+	mirroring_free(p);
 	port_out_free(p);
 	port_in_free(p);
 	struct_free(p);
@@ -9124,6 +9719,22 @@ table_types_register(struct rte_swx_pipeline *p)
 	return 0;
 }
 
+static int
+hash_funcs_register(struct rte_swx_pipeline *p)
+{
+	int status;
+
+	status = rte_swx_pipeline_hash_func_register(p, "jhash", rte_jhash);
+	if (status)
+		return status;
+
+	status = rte_swx_pipeline_hash_func_register(p, "crc32", rte_hash_crc);
+	if (status)
+		return status;
+
+	return 0;
+}
+
 int
 rte_swx_pipeline_config(struct rte_swx_pipeline **p, int numa_node)
 {
@@ -9149,6 +9760,7 @@ rte_swx_pipeline_config(struct rte_swx_pipeline **p, int numa_node)
 	TAILQ_INIT(&pipeline->extern_types);
 	TAILQ_INIT(&pipeline->extern_objs);
 	TAILQ_INIT(&pipeline->extern_funcs);
+	TAILQ_INIT(&pipeline->hash_funcs);
 	TAILQ_INIT(&pipeline->headers);
 	TAILQ_INIT(&pipeline->actions);
 	TAILQ_INIT(&pipeline->table_types);
@@ -9171,6 +9783,10 @@ rte_swx_pipeline_config(struct rte_swx_pipeline **p, int numa_node)
 		goto error;
 
 	status = table_types_register(pipeline);
+	if (status)
+		goto error;
+
+	status = hash_funcs_register(pipeline);
 	if (status)
 		goto error;
 
@@ -9234,6 +9850,10 @@ rte_swx_pipeline_build(struct rte_swx_pipeline *p)
 	if (status)
 		goto error;
 
+	status = mirroring_build(p);
+	if (status)
+		goto error;
+
 	status = struct_build(p);
 	if (status)
 		goto error;
@@ -9243,6 +9863,10 @@ rte_swx_pipeline_build(struct rte_swx_pipeline *p)
 		goto error;
 
 	status = extern_func_build(p);
+	if (status)
+		goto error;
+
+	status = hash_func_build(p);
 	if (status)
 		goto error;
 
@@ -9303,8 +9927,10 @@ error:
 	instruction_table_build_free(p);
 	metadata_build_free(p);
 	header_build_free(p);
+	hash_func_build_free(p);
 	extern_func_build_free(p);
 	extern_obj_build_free(p);
+	mirroring_build_free(p);
 	port_out_build_free(p);
 	port_in_build_free(p);
 	struct_build_free(p);
@@ -9356,6 +9982,8 @@ rte_swx_ctl_pipeline_info_get(struct rte_swx_pipeline *p,
 
 	pipeline->n_ports_in = p->n_ports_in;
 	pipeline->n_ports_out = p->n_ports_out;
+	pipeline->n_mirroring_slots = p->n_mirroring_slots;
+	pipeline->n_mirroring_sessions = p->n_mirroring_sessions;
 	pipeline->n_actions = n_actions;
 	pipeline->n_tables = n_tables;
 	pipeline->n_selectors = p->n_selectors;
@@ -9628,6 +10256,7 @@ rte_swx_ctl_learner_info_get(struct rte_swx_pipeline *p,
 	learner->n_actions = l->n_actions;
 	learner->default_action_is_const = l->default_action_is_const;
 	learner->size = l->size;
+	learner->n_key_timeouts = l->n_timeouts;
 
 	return 0;
 }
@@ -9679,6 +10308,56 @@ rte_swx_ctl_learner_action_info_get(struct rte_swx_pipeline *p,
 
 	learner_action->action_is_for_default_entry =
 		l->action_is_for_default_entry[learner_action_id];
+
+	return 0;
+}
+
+int
+rte_swx_ctl_pipeline_learner_timeout_get(struct rte_swx_pipeline *p,
+					 uint32_t learner_id,
+					 uint32_t timeout_id,
+					 uint32_t *timeout)
+{
+	struct learner *l;
+
+	if (!p || (learner_id >= p->n_learners) || !timeout)
+		return -EINVAL;
+
+	l = learner_find_by_id(p, learner_id);
+	if (!l || (timeout_id >= l->n_timeouts))
+		return -EINVAL;
+
+	*timeout = l->timeout[timeout_id];
+	return 0;
+}
+
+int
+rte_swx_ctl_pipeline_learner_timeout_set(struct rte_swx_pipeline *p,
+					 uint32_t learner_id,
+					 uint32_t timeout_id,
+					 uint32_t timeout)
+{
+	struct learner *l;
+	struct rte_swx_table_state *ts;
+	int status;
+
+	if (!p || (learner_id >= p->n_learners) || !timeout)
+		return -EINVAL;
+
+	l = learner_find_by_id(p, learner_id);
+	if (!l || (timeout_id >= l->n_timeouts))
+		return -EINVAL;
+
+	if (!p->build_done)
+		return -EINVAL;
+
+	ts = &p->table_state[p->n_tables + p->n_selectors + l->id];
+
+	status = rte_swx_table_learner_timeout_update(ts->obj, timeout_id, timeout);
+	if (status)
+		return -EINVAL;
+
+	l->timeout[timeout_id] = timeout;
 
 	return 0;
 }
@@ -9814,6 +10493,7 @@ rte_swx_ctl_pipeline_learner_stats_read(struct rte_swx_pipeline *p,
 	stats->n_pkts_learn_ok = learner_stats->n_pkts_learn[0];
 	stats->n_pkts_learn_err = learner_stats->n_pkts_learn[1];
 
+	stats->n_pkts_rearm = learner_stats->n_pkts_rearm;
 	stats->n_pkts_forget = learner_stats->n_pkts_forget;
 
 	return 0;
@@ -10043,6 +10723,27 @@ rte_swx_ctl_meter_stats_read(struct rte_swx_pipeline *p,
 	return 0;
 }
 
+int
+rte_swx_ctl_pipeline_mirroring_session_set(struct rte_swx_pipeline *p,
+					   uint32_t session_id,
+					   struct rte_swx_pipeline_mirroring_session_params *params)
+{
+	struct mirroring_session *s;
+
+	CHECK(p, EINVAL);
+	CHECK(p->build_done, EEXIST);
+	CHECK(session_id < p->n_mirroring_sessions, EINVAL);
+	CHECK(params, EINVAL);
+	CHECK(params->port_id < p->n_ports_out, EINVAL);
+
+	s = &p->mirroring_sessions[session_id];
+	s->port_id = params->port_id;
+	s->fast_clone = params->fast_clone;
+	s->truncation_length = params->truncation_length ? params->truncation_length : UINT32_MAX;
+
+	return 0;
+}
+
 /*
  * Pipeline compilation.
  */
@@ -10055,6 +10756,9 @@ instr_type_to_name(struct instruction *instr)
 	case INSTR_TX: return "INSTR_TX";
 	case INSTR_TX_I: return "INSTR_TX_I";
 	case INSTR_DROP: return "INSTR_DROP";
+	case INSTR_MIRROR: return "INSTR_MIRROR";
+	case INSTR_RECIRCULATE: return "INSTR_RECIRCULATE";
+	case INSTR_RECIRCID: return "INSTR_RECIRCID";
 
 	case INSTR_HDR_EXTRACT: return "INSTR_HDR_EXTRACT";
 	case INSTR_HDR_EXTRACT2: return "INSTR_HDR_EXTRACT2";
@@ -10203,10 +10907,13 @@ instr_type_to_name(struct instruction *instr)
 	case INSTR_LEARNER_AF: return "INSTR_LEARNER_AF";
 
 	case INSTR_LEARNER_LEARN: return "INSTR_LEARNER_LEARN";
+	case INSTR_LEARNER_REARM: return "INSTR_LEARNER_REARM";
+	case INSTR_LEARNER_REARM_NEW: return "INSTR_LEARNER_REARM_NEW";
 	case INSTR_LEARNER_FORGET: return "INSTR_LEARNER_FORGET";
 
 	case INSTR_EXTERN_OBJ: return "INSTR_EXTERN_OBJ";
 	case INSTR_EXTERN_FUNC: return "INSTR_EXTERN_FUNC";
+	case INSTR_HASH_FUNC: return "INSTR_HASH_FUNC";
 
 	case INSTR_JMP: return "INSTR_JMP";
 	case INSTR_JMP_VALID: return "INSTR_JMP_VALID";
@@ -10355,6 +11062,60 @@ instr_io_export(struct instruction *instr, FILE *f)
 	/* instr - closing curly brace. */
 	fprintf(f,
 		"\t},\n");
+}
+
+static void
+instr_mirror_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.mirror = {\n"
+		"\t\t\t.dst = {\n"
+		"\t\t\t\t.struct_id = %u,\n"
+		"\t\t\t\t.n_bits = %u,\n"
+		"\t\t\t\t.offset = %u,\n"
+		"\t\t\t}\n,"
+		"\t\t\t.src = {\n"
+		"\t\t\t\t.struct_id = %u,\n"
+		"\t\t\t\t.n_bits = %u,\n"
+		"\t\t\t\t.offset = %u,\n"
+		"\t\t\t}\n,"
+		"\t\t},\n"
+		"\t},\n",
+		instr_type_to_name(instr),
+		instr->mirror.dst.struct_id,
+		instr->mirror.dst.n_bits,
+		instr->mirror.dst.offset,
+		instr->mirror.src.struct_id,
+		instr->mirror.src.n_bits,
+		instr->mirror.src.offset);
+}
+
+static void
+instr_recirculate_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t},\n",
+		instr_type_to_name(instr));
+}
+
+static void
+instr_recircid_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.io = {\n"
+		"\t\t\t.offset = %u,\n"
+		"\t\t\t.n_bits = %u,\n"
+		"\t\t},\n"
+		"\t},\n",
+		instr_type_to_name(instr),
+		instr->io.io.offset,
+		instr->io.io.n_bits);
 }
 
 static void
@@ -10572,6 +11333,34 @@ instr_alu_export(struct instruction *instr, FILE *f)
 }
 
 static void
+instr_hash_export(struct instruction *instr, FILE *f)
+{
+	fprintf(f,
+		"\t{\n"
+		"\t\t.type = %s,\n"
+		"\t\t.hash_func = {\n"
+		"\t\t\t.hash_func_id = %u,\n"
+		"\t\t\t.dst = {\n"
+		"\t\t\t\t.offset = %u,\n"
+		"\t\t\t\t.n_bits = %u,\n"
+		"\t\t\t},\n"
+		"\t\t\t.src = {\n"
+		"\t\t\t\t.struct_id = %u,\n"
+		"\t\t\t\t.offset = %u,\n"
+		"\t\t\t\t.n_bytes = %u,\n"
+		"\t\t\t},\n"
+		"\t\t},\n"
+		"\t},\n",
+		instr_type_to_name(instr),
+		instr->hash_func.hash_func_id,
+		instr->hash_func.dst.offset,
+		instr->hash_func.dst.n_bits,
+		instr->hash_func.src.struct_id,
+		instr->hash_func.src.offset,
+		instr->hash_func.src.n_bytes);
+}
+
+static void
 instr_reg_export(struct instruction *instr __rte_unused, FILE *f __rte_unused)
 {
 	int prefetch  = 0, idx_imm = 0, src_imm = 0;
@@ -10773,11 +11562,40 @@ instr_learn_export(struct instruction *instr, FILE *f)
 		"\t{\n"
 		"\t\t.type = %s,\n"
 		"\t\t.learn = {\n"
-		"\t\t\t\t.action_id = %u,\n"
+		"\t\t\t.action_id = %u,\n"
+		"\t\t\t.mf_first_arg_offset = %u,\n"
+		"\t\t\t.mf_timeout_id_offset = %u,\n"
+		"\t\t\t.mf_timeout_id_n_bits = %u,\n"
 		"\t\t},\n"
 		"\t},\n",
 		instr_type_to_name(instr),
-		instr->learn.action_id);
+		instr->learn.action_id,
+		instr->learn.mf_first_arg_offset,
+		instr->learn.mf_timeout_id_offset,
+		instr->learn.mf_timeout_id_n_bits);
+}
+
+static void
+instr_rearm_export(struct instruction *instr, FILE *f)
+{
+	if (instr->type == INSTR_LEARNER_REARM)
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t},\n",
+			instr_type_to_name(instr));
+	else
+		fprintf(f,
+			"\t{\n"
+			"\t\t.type = %s,\n"
+			"\t\t.learn = {\n"
+			"\t\t\t.mf_timeout_id_offset = %u,\n"
+			"\t\t\t.mf_timeout_id_n_bits = %u,\n"
+			"\t\t},\n"
+			"\t},\n",
+			instr_type_to_name(instr),
+			instr->learn.mf_timeout_id_offset,
+			instr->learn.mf_timeout_id_n_bits);
 }
 
 static void
@@ -10924,6 +11742,9 @@ static instruction_export_t export_table[] = {
 	[INSTR_TX] = instr_io_export,
 	[INSTR_TX_I] = instr_io_export,
 	[INSTR_DROP] = instr_io_export,
+	[INSTR_MIRROR] = instr_mirror_export,
+	[INSTR_RECIRCULATE] = instr_recirculate_export,
+	[INSTR_RECIRCID] = instr_recircid_export,
 
 	[INSTR_HDR_EXTRACT] = instr_io_export,
 	[INSTR_HDR_EXTRACT2] = instr_io_export,
@@ -11072,10 +11893,13 @@ static instruction_export_t export_table[] = {
 	[INSTR_LEARNER_AF] = instr_table_export,
 
 	[INSTR_LEARNER_LEARN] = instr_learn_export,
+	[INSTR_LEARNER_REARM] = instr_rearm_export,
+	[INSTR_LEARNER_REARM_NEW] = instr_rearm_export,
 	[INSTR_LEARNER_FORGET] = instr_forget_export,
 
 	[INSTR_EXTERN_OBJ] = instr_extern_export,
 	[INSTR_EXTERN_FUNC] = instr_extern_export,
+	[INSTR_HASH_FUNC] = instr_hash_export,
 
 	[INSTR_JMP] = instr_jmp_export,
 	[INSTR_JMP_VALID] = instr_jmp_export,
@@ -11142,6 +11966,9 @@ instr_type_to_func(struct instruction *instr)
 	case INSTR_TX: return "__instr_tx_exec";
 	case INSTR_TX_I: return "__instr_tx_i_exec";
 	case INSTR_DROP: return "__instr_drop_exec";
+	case INSTR_MIRROR: return "__instr_mirror_exec";
+	case INSTR_RECIRCULATE: return "__instr_recirculate_exec";
+	case INSTR_RECIRCID: return "__instr_recircid_exec";
 
 	case INSTR_HDR_EXTRACT: return "__instr_hdr_extract_exec";
 	case INSTR_HDR_EXTRACT2: return "__instr_hdr_extract2_exec";
@@ -11290,10 +12117,13 @@ instr_type_to_func(struct instruction *instr)
 	case INSTR_LEARNER_AF: return NULL;
 
 	case INSTR_LEARNER_LEARN: return "__instr_learn_exec";
+	case INSTR_LEARNER_REARM: return "__instr_rearm_exec";
+	case INSTR_LEARNER_REARM_NEW: return "__instr_rearm_new_exec";
 	case INSTR_LEARNER_FORGET: return "__instr_forget_exec";
 
 	case INSTR_EXTERN_OBJ: return NULL;
 	case INSTR_EXTERN_FUNC: return NULL;
+	case INSTR_HASH_FUNC: return "__instr_hash_func_exec";
 
 	case INSTR_JMP: return NULL;
 	case INSTR_JMP_VALID: return NULL;

@@ -795,7 +795,8 @@ static const char *const modify_field_ids[] = {
 	"tcp_seq_num", "tcp_ack_num", "tcp_flags",
 	"udp_port_src", "udp_port_dst",
 	"vxlan_vni", "geneve_vni", "gtp_teid",
-	"tag", "mark", "meta", "pointer", "value", NULL
+	"tag", "mark", "meta", "pointer", "value",
+	"ipv4_ecn", "ipv6_ecn", NULL
 };
 
 /** Maximum number of subsequent tokens and arguments on the stack. */
@@ -9338,11 +9339,7 @@ parse_hex_string(const char *src, uint8_t *dst, uint32_t *size)
 	const uint8_t *head = dst;
 	uint32_t left;
 
-	/* Check input parameters */
-	if ((src == NULL) ||
-		(dst == NULL) ||
-		(size == NULL) ||
-		(*size == 0))
+	if (*size == 0)
 		return -1;
 
 	left = *size;
@@ -11232,16 +11229,16 @@ cmd_show_set_raw_parsed(void *parsed_result, struct cmdline *cl, void *data)
 	} while (all && ++index < RAW_ENCAP_CONFS_MAX_NUM);
 }
 
-cmdline_parse_token_string_t cmd_show_set_raw_cmd_show =
+static cmdline_parse_token_string_t cmd_show_set_raw_cmd_show =
 	TOKEN_STRING_INITIALIZER(struct cmd_show_set_raw_result,
 			cmd_show, "show");
-cmdline_parse_token_string_t cmd_show_set_raw_cmd_what =
+static cmdline_parse_token_string_t cmd_show_set_raw_cmd_what =
 	TOKEN_STRING_INITIALIZER(struct cmd_show_set_raw_result,
 			cmd_what, "raw_encap#raw_decap");
-cmdline_parse_token_num_t cmd_show_set_raw_cmd_index =
+static cmdline_parse_token_num_t cmd_show_set_raw_cmd_index =
 	TOKEN_NUM_INITIALIZER(struct cmd_show_set_raw_result,
 			cmd_index, RTE_UINT16);
-cmdline_parse_token_string_t cmd_show_set_raw_cmd_all =
+static cmdline_parse_token_string_t cmd_show_set_raw_cmd_all =
 	TOKEN_STRING_INITIALIZER(struct cmd_show_set_raw_result,
 			cmd_all, "all");
 cmdline_parse_inst_t cmd_show_set_raw = {

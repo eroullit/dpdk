@@ -963,11 +963,6 @@ cn10k_sso_init(struct rte_eventdev *event_dev)
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
 	int rc;
 
-	if (RTE_CACHE_LINE_SIZE != 64) {
-		plt_err("Driver not compiled for CN10K");
-		return -EFAULT;
-	}
-
 	rc = roc_plt_init();
 	if (rc < 0) {
 		plt_err("Failed to initialize platform model");
@@ -1012,9 +1007,11 @@ static const struct rte_pci_id cn10k_pci_sso_map[] = {
 	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KA, PCI_DEVID_CNXK_RVU_SSO_TIM_PF),
 	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KAS, PCI_DEVID_CNXK_RVU_SSO_TIM_PF),
 	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CNF10KA, PCI_DEVID_CNXK_RVU_SSO_TIM_PF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KB, PCI_DEVID_CNXK_RVU_SSO_TIM_PF),
 	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KA, PCI_DEVID_CNXK_RVU_SSO_TIM_VF),
 	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KAS, PCI_DEVID_CNXK_RVU_SSO_TIM_VF),
 	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CNF10KA, PCI_DEVID_CNXK_RVU_SSO_TIM_VF),
+	CNXK_PCI_ID(PCI_SUBSYSTEM_DEVID_CN10KB, PCI_DEVID_CNXK_RVU_SSO_TIM_VF),
 	{
 		.vendor_id = 0,
 	},

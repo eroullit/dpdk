@@ -34,10 +34,16 @@ enum {
 	OPT_CRYPTODEV_BK_ID_NUM,
 #define OPT_CRYPTODEV_BK_DIR_KEY    "broken-test-dir"
 	OPT_CRYPTODEV_BK_DIR_KEY_NUM,
+#define OPT_USE_JSON                "use-json"
+	OPT_USE_JSON_NUM,
 };
 
 struct fips_test_vector vec;
 struct fips_test_interim_info info;
+
+#ifdef RTE_HAS_JANSSON
+struct fips_test_json_info json_info;
+#endif /* RTE_HAS_JANSSON */
 
 struct cryptodev_fips_validate_env {
 	const char *req_path;
@@ -165,6 +171,11 @@ cryptodev_fips_validate_app_uninit(void)
 
 static int
 fips_test_one_file(void);
+
+#ifdef RTE_HAS_JANSSON
+static int
+fips_test_one_json_file(void);
+#endif /* RTE_HAS_JANSSON */
 
 static int
 parse_cryptodev_arg(char *arg)
@@ -425,8 +436,17 @@ main(int argc, char *argv[])
 			goto exit;
 		}
 
-
+#ifdef RTE_HAS_JANSSON
+		if (info.file_type == FIPS_TYPE_JSON) {
+			ret = fips_test_one_json_file();
+			json_decref(json_info.json_root);
+		}  else {
+			ret = fips_test_one_file();
+		}
+#else /* RTE_HAS_JANSSON */
 		ret = fips_test_one_file();
+#endif /* RTE_HAS_JANSSON */
+
 		if (ret < 0) {
 			RTE_LOG(ERR, USER1, "Error %i: Failed test %s\n",
 					ret, env.req_path);
@@ -481,7 +501,17 @@ main(int argc, char *argv[])
 				break;
 			}
 
+#ifdef RTE_HAS_JANSSON
+			if (info.file_type == FIPS_TYPE_JSON) {
+				ret = fips_test_one_json_file();
+				json_decref(json_info.json_root);
+			} else {
+				ret = fips_test_one_file();
+			}
+#else /* RTE_HAS_JANSSON */
 			ret = fips_test_one_file();
+#endif /* RTE_HAS_JANSSON */
+
 			if (ret < 0) {
 				RTE_LOG(ERR, USER1, "Error %i: Failed test %s\n",
 						ret, req_path);
@@ -1219,11 +1249,15 @@ fips_generic_test(void)
 	struct fips_val val = {NULL, 0};
 	int ret;
 
-	fips_test_write_one_case();
+	if (info.file_type != FIPS_TYPE_JSON)
+		fips_test_write_one_case();
 
 	ret = fips_run_test();
 	if (ret < 0) {
 		if (ret == -EPERM || ret == -ENOTSUP) {
+			if (info.file_type == FIPS_TYPE_JSON)
+				return ret;
+
 			fprintf(info.fp_wr, "Bypass\n\n");
 			return 0;
 		}
@@ -1238,6 +1272,7 @@ fips_generic_test(void)
 	switch (info.file_type) {
 	case FIPS_TYPE_REQ:
 	case FIPS_TYPE_RSP:
+	case FIPS_TYPE_JSON:
 		if (info.parse_writeback == NULL)
 			return -EPERM;
 		ret = info.parse_writeback(&val);
@@ -1251,9 +1286,12 @@ fips_generic_test(void)
 		if (ret < 0)
 			return ret;
 		break;
+	default:
+		break;
 	}
 
-	fprintf(info.fp_wr, "\n");
+	if (info.file_type != FIPS_TYPE_JSON)
+		fprintf(info.fp_wr, "\n");
 	free(val.val);
 
 	return 0;
@@ -1288,6 +1326,9 @@ fips_mct_tdes_test(void)
 			ret = fips_run_test();
 			if (ret < 0) {
 				if (ret == -EPERM) {
+					if (info.file_type == FIPS_TYPE_JSON)
+						return ret;
+
 					fprintf(info.fp_wr, "Bypass\n");
 					return 0;
 				}
@@ -1449,6 +1490,9 @@ fips_mct_aes_ecb_test(void)
 			ret = fips_run_test();
 			if (ret < 0) {
 				if (ret == -EPERM) {
+					if (info.file_type == FIPS_TYPE_JSON)
+						return ret;
+
 					fprintf(info.fp_wr, "Bypass\n");
 					return 0;
 				}
@@ -1512,7 +1556,7 @@ fips_mct_aes_test(void)
 #define AES_BLOCK_SIZE	16
 #define AES_EXTERN_ITER	100
 #define AES_INTERN_ITER	1000
-	struct fips_val val = {NULL, 0}, val_key;
+	struct fips_val val[3] = {{NULL, 0},}, val_key,  pt, ct, iv;
 	uint8_t prev_out[AES_BLOCK_SIZE] = {0};
 	uint8_t prev_in[AES_BLOCK_SIZE] = {0};
 	uint32_t i, j, k;
@@ -1521,16 +1565,24 @@ fips_mct_aes_test(void)
 	if (info.interim_info.aes_data.cipher_algo == RTE_CRYPTO_CIPHER_AES_ECB)
 		return fips_mct_aes_ecb_test();
 
+	memset(&pt, 0, sizeof(struct fips_val));
+	memset(&ct, 0, sizeof(struct fips_val));
+	memset(&iv, 0, sizeof(struct fips_val));
 	for (i = 0; i < AES_EXTERN_ITER; i++) {
-		if (i != 0)
-			update_info_vec(i);
+		if (info.file_type != FIPS_TYPE_JSON) {
+			if (i != 0)
+				update_info_vec(i);
 
-		fips_test_write_one_case();
+			fips_test_write_one_case();
+		}
 
 		for (j = 0; j < AES_INTERN_ITER; j++) {
 			ret = fips_run_test();
 			if (ret < 0) {
 				if (ret == -EPERM) {
+					if (info.file_type == FIPS_TYPE_JSON)
+						return ret;
+
 					fprintf(info.fp_wr, "Bypass\n");
 					return 0;
 				}
@@ -1538,7 +1590,7 @@ fips_mct_aes_test(void)
 				return ret;
 			}
 
-			ret = get_writeback_data(&val);
+			ret = get_writeback_data(&val[0]);
 			if (ret < 0)
 				return ret;
 
@@ -1546,24 +1598,39 @@ fips_mct_aes_test(void)
 				memcpy(prev_in, vec.ct.val, AES_BLOCK_SIZE);
 
 			if (j == 0) {
-				memcpy(prev_out, val.val, AES_BLOCK_SIZE);
+				memcpy(prev_out, val[0].val, AES_BLOCK_SIZE);
+				pt.len = vec.pt.len;
+				pt.val = calloc(1, pt.len);
+				memcpy(pt.val, vec.pt.val, pt.len);
+
+				ct.len = vec.ct.len;
+				ct.val = calloc(1, ct.len);
+				memcpy(ct.val, vec.ct.val, ct.len);
+
+				iv.len = vec.iv.len;
+				iv.val = calloc(1, iv.len);
+				memcpy(iv.val, vec.iv.val, iv.len);
 
 				if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
-					memcpy(vec.pt.val, vec.iv.val,
-							AES_BLOCK_SIZE);
-					memcpy(vec.iv.val, val.val,
-							AES_BLOCK_SIZE);
+					memcpy(vec.pt.val, vec.iv.val, AES_BLOCK_SIZE);
+					memcpy(vec.iv.val, val[0].val, AES_BLOCK_SIZE);
+					val[1].val = pt.val;
+					val[1].len = pt.len;
+					val[2].val = iv.val;
+					val[2].len = iv.len;
 				} else {
-					memcpy(vec.ct.val, vec.iv.val,
-							AES_BLOCK_SIZE);
-					memcpy(vec.iv.val, prev_in,
-							AES_BLOCK_SIZE);
+					memcpy(vec.ct.val, vec.iv.val, AES_BLOCK_SIZE);
+					memcpy(vec.iv.val, prev_in, AES_BLOCK_SIZE);
+					val[1].val = ct.val;
+					val[1].len = ct.len;
+					val[2].val = iv.val;
+					val[2].len = iv.len;
 				}
 				continue;
 			}
 
 			if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
-				memcpy(vec.iv.val, val.val, AES_BLOCK_SIZE);
+				memcpy(vec.iv.val, val[0].val, AES_BLOCK_SIZE);
 				memcpy(vec.pt.val, prev_out, AES_BLOCK_SIZE);
 			} else {
 				memcpy(vec.iv.val, prev_in, AES_BLOCK_SIZE);
@@ -1573,33 +1640,38 @@ fips_mct_aes_test(void)
 			if (j == AES_INTERN_ITER - 1)
 				continue;
 
-			memcpy(prev_out, val.val, AES_BLOCK_SIZE);
+			memcpy(prev_out, val[0].val, AES_BLOCK_SIZE);
 		}
 
-		info.parse_writeback(&val);
-		fprintf(info.fp_wr, "\n");
+		info.parse_writeback(val);
+		if (info.file_type != FIPS_TYPE_JSON)
+			fprintf(info.fp_wr, "\n");
 
-		if (i == AES_EXTERN_ITER - 1)
+		if (i == AES_EXTERN_ITER - 1) {
+			free(pt.val);
+			free(ct.val);
+			free(iv.val);
 			continue;
+		}
 
 		/** update key */
 		memcpy(&val_key, &vec.cipher_auth.key, sizeof(val_key));
 		for (k = 0; k < vec.cipher_auth.key.len; k++) {
 			switch (vec.cipher_auth.key.len) {
 			case 16:
-				val_key.val[k] ^= val.val[k];
+				val_key.val[k] ^= val[0].val[k];
 				break;
 			case 24:
 				if (k < 8)
 					val_key.val[k] ^= prev_out[k + 8];
 				else
-					val_key.val[k] ^= val.val[k - 8];
+					val_key.val[k] ^= val[0].val[k - 8];
 				break;
 			case 32:
 				if (k < 16)
 					val_key.val[k] ^= prev_out[k];
 				else
-					val_key.val[k] ^= val.val[k - 16];
+					val_key.val[k] ^= val[0].val[k - 16];
 				break;
 			default:
 				return -1;
@@ -1607,10 +1679,10 @@ fips_mct_aes_test(void)
 		}
 
 		if (info.op == FIPS_TEST_DEC_AUTH_VERIF)
-			memcpy(vec.iv.val, val.val, AES_BLOCK_SIZE);
+			memcpy(vec.iv.val, val[0].val, AES_BLOCK_SIZE);
 	}
 
-	free(val.val);
+	free(val[0].val);
 
 	return 0;
 }
@@ -1661,6 +1733,9 @@ fips_mct_sha_test(void)
 			ret = fips_run_test();
 			if (ret < 0) {
 				if (ret == -EPERM || ret == -ENOTSUP) {
+					if (info.file_type == FIPS_TYPE_JSON)
+						return ret;
+
 					fprintf(info.fp_wr, "Bypass\n\n");
 					return 0;
 				}
@@ -1844,3 +1919,169 @@ error_one_case:
 
 	return ret;
 }
+
+#ifdef RTE_HAS_JANSSON
+static int
+fips_test_json_init_writeback(void)
+{
+	json_t *session_info, *session_write;
+	session_info = json_array_get(json_info.json_root, 0);
+	session_write = json_object();
+	json_info.json_write_root = json_array();
+
+	json_object_set(session_write, "jwt",
+		json_object_get(session_info, "jwt"));
+	json_object_set(session_write, "url",
+		json_object_get(session_info, "url"));
+	json_object_set(session_write, "isSample",
+		json_object_get(session_info, "isSample"));
+
+	json_info.is_sample = json_boolean_value(
+		json_object_get(session_info, "isSample"));
+
+	json_array_append_new(json_info.json_write_root, session_write);
+	return 0;
+}
+
+static int
+fips_test_one_test_case(void)
+{
+	int ret;
+
+	ret = fips_test_parse_one_json_case();
+
+	switch (ret) {
+	case 0:
+		ret = test_ops.test();
+		if ((ret == 0) || (ret == -EPERM || ret == -ENOTSUP))
+			break;
+		RTE_LOG(ERR, USER1, "Error %i: test block\n",
+				ret);
+		break;
+	default:
+		RTE_LOG(ERR, USER1, "Error %i: Parse block\n",
+				ret);
+	}
+	return ret;
+}
+
+static int
+fips_test_one_test_group(void)
+{
+	int ret;
+	json_t *tests, *write_tests;
+	size_t test_idx, tests_size;
+
+	write_tests = json_array();
+	json_info.json_write_group = json_object();
+	json_object_set(json_info.json_write_group, "tgId",
+		json_object_get(json_info.json_test_group, "tgId"));
+	json_object_set_new(json_info.json_write_group, "tests", write_tests);
+
+	switch (info.algo) {
+	case FIPS_TEST_ALGO_AES_GCM:
+		ret = parse_test_gcm_json_init();
+		break;
+	case FIPS_TEST_ALGO_HMAC:
+		ret = parse_test_hmac_json_init();
+		break;
+	case FIPS_TEST_ALGO_AES_CMAC:
+		ret = parse_test_cmac_json_init();
+		break;
+	case FIPS_TEST_ALGO_AES:
+		ret = parse_test_aes_json_init();
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (ret < 0)
+		return ret;
+
+	ret = fips_test_parse_one_json_group();
+	if (ret < 0)
+		return ret;
+
+	ret = init_test_ops();
+	if (ret < 0)
+		return ret;
+
+	tests = json_object_get(json_info.json_test_group, "tests");
+	tests_size = json_array_size(tests);
+	for (test_idx = 0; test_idx < tests_size; test_idx++) {
+		json_info.json_test_case = json_array_get(tests, test_idx);
+		if (fips_test_one_test_case() == 0)
+			json_array_append_new(write_tests, json_info.json_write_case);
+	}
+
+	return 0;
+}
+
+static int
+fips_test_one_vector_set(void)
+{
+	int ret;
+	json_t *test_groups, *write_groups, *write_version, *write_set;
+	size_t group_idx, num_groups;
+
+	test_groups = json_object_get(json_info.json_vector_set, "testGroups");
+	num_groups = json_array_size(test_groups);
+
+	json_info.json_write_set = json_array();
+	write_version = json_object();
+	json_object_set_new(write_version, "acvVersion", json_string(ACVVERSION));
+	json_array_append_new(json_info.json_write_set, write_version);
+
+	write_set = json_object();
+	json_array_append(json_info.json_write_set, write_set);
+	write_groups = json_array();
+
+	json_object_set(write_set, "vsId",
+		json_object_get(json_info.json_vector_set, "vsId"));
+	json_object_set(write_set, "algorithm",
+		json_object_get(json_info.json_vector_set, "algorithm"));
+	json_object_set(write_set, "revision",
+		json_object_get(json_info.json_vector_set, "revision"));
+	json_object_set_new(write_set, "isSample",
+		json_boolean(json_info.is_sample));
+	json_object_set_new(write_set, "testGroups", write_groups);
+
+	ret = fips_test_parse_one_json_vector_set();
+	if (ret < 0) {
+		RTE_LOG(ERR, USER1, "Error: Unsupported or invalid vector set algorithm: %s\n",
+			json_string_value(json_object_get(json_info.json_vector_set, "algorithm")));
+		return ret;
+	}
+
+	for (group_idx = 0; group_idx < num_groups; group_idx++) {
+		json_info.json_test_group = json_array_get(test_groups, group_idx);
+		ret = fips_test_one_test_group();
+		json_array_append_new(write_groups, json_info.json_write_group);
+	}
+
+	return 0;
+}
+
+static int
+fips_test_one_json_file(void)
+{
+	size_t vector_set_idx, root_size;
+
+	root_size = json_array_size(json_info.json_root);
+	fips_test_json_init_writeback();
+
+	for (vector_set_idx = 1; vector_set_idx < root_size; vector_set_idx++) {
+		/* Vector set index starts at 1, the 0th index contains test session
+		 * information.
+		 */
+		json_info.json_vector_set = json_array_get(json_info.json_root, vector_set_idx);
+		fips_test_one_vector_set();
+		json_array_append_new(json_info.json_write_root, json_info.json_write_set);
+	}
+
+	json_dumpf(json_info.json_write_root, info.fp_wr, JSON_INDENT(4));
+	json_decref(json_info.json_write_root);
+
+	return 0;
+}
+#endif /* RTE_HAS_JANSSON */

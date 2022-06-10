@@ -265,6 +265,11 @@ iavf_handle_pf_event_msg(struct rte_eth_dev *dev, uint8_t *msg,
 	struct virtchnl_pf_event *pf_msg =
 			(struct virtchnl_pf_event *)msg;
 
+	if (adapter->closed) {
+		PMD_DRV_LOG(DEBUG, "Port closed");
+		return;
+	}
+
 	if (msglen < sizeof(struct virtchnl_pf_event)) {
 		PMD_DRV_LOG(DEBUG, "Error event");
 		return;
@@ -778,6 +783,9 @@ iavf_switch_queue(struct iavf_adapter *adapter, uint16_t qid,
 	struct iavf_cmd_info args;
 	int err;
 
+	if (adapter->closed)
+		return -EIO;
+
 	memset(&queue_select, 0, sizeof(queue_select));
 	queue_select.vsi_id = vf->vsi_res->vsi_id;
 	if (rx)
@@ -1247,6 +1255,9 @@ iavf_query_stats(struct iavf_adapter *adapter,
 	struct iavf_cmd_info args;
 	int err;
 
+	if (adapter->closed)
+		return -EIO;
+
 	memset(&q_stats, 0, sizeof(q_stats));
 	q_stats.vsi_id = vf->vsi_res->vsi_id;
 	args.ops = VIRTCHNL_OP_GET_STATS;
@@ -1274,6 +1285,9 @@ iavf_config_promisc(struct iavf_adapter *adapter,
 	struct virtchnl_promisc_info promisc;
 	struct iavf_cmd_info args;
 	int err;
+
+	if (adapter->closed)
+		return -EIO;
 
 	promisc.flags = 0;
 	promisc.vsi_id = vf->vsi_res->vsi_id;
@@ -1317,6 +1331,9 @@ iavf_add_del_eth_addr(struct iavf_adapter *adapter, struct rte_ether_addr *addr,
 			   sizeof(struct virtchnl_ether_addr)];
 	struct iavf_cmd_info args;
 	int err;
+
+	if (adapter->closed)
+		return -EIO;
 
 	list = (struct virtchnl_ether_addr_list *)cmd_buffer;
 	list->vsi_id = vf->vsi_res->vsi_id;
@@ -1896,12 +1913,13 @@ iavf_get_ptp_cap(struct iavf_adapter *adapter)
 }
 
 int
-iavf_get_phc_time(struct iavf_adapter *adapter)
+iavf_get_phc_time(struct iavf_rx_queue *rxq)
 {
+	struct iavf_adapter *adapter = rxq->vsi->adapter;
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
 	struct virtchnl_phc_time phc_time;
 	struct iavf_cmd_info args;
-	int err;
+	int err = 0;
 
 	args.ops = VIRTCHNL_OP_1588_PTP_GET_TIME;
 	args.in_args = (uint8_t *)&phc_time;
@@ -1909,14 +1927,16 @@ iavf_get_phc_time(struct iavf_adapter *adapter)
 	args.out_buffer = vf->aq_resp;
 	args.out_size = IAVF_AQ_BUF_SZ;
 
+	rte_spinlock_lock(&vf->phc_time_aq_lock);
 	err = iavf_execute_vf_cmd(adapter, &args, 0);
 	if (err) {
 		PMD_DRV_LOG(ERR,
 			    "Failed to execute command of VIRTCHNL_OP_1588_PTP_GET_TIME");
-		return err;
+		goto out;
 	}
+	rxq->phc_time = ((struct virtchnl_phc_time *)args.out_buffer)->time;
 
-	adapter->phc_time = ((struct virtchnl_phc_time *)args.out_buffer)->time;
-
-	return 0;
+out:
+	rte_spinlock_unlock(&vf->phc_time_aq_lock);
+	return err;
 }

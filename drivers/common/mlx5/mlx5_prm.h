@@ -560,7 +560,7 @@ struct mlx5_umr_wqe {
 struct mlx5_rdma_write_wqe {
 	struct mlx5_wqe_cseg ctr;
 	struct mlx5_wqe_rseg rseg;
-	struct mlx5_wqe_dseg dseg[0];
+	struct mlx5_wqe_dseg dseg[];
 } __rte_packed;
 
 #ifdef PEDANTIC
@@ -1296,6 +1296,7 @@ enum {
 	MLX5_GET_HCA_CAP_OP_MOD_NIC_FLOW_TABLE = 0x7 << 1,
 	MLX5_SET_HCA_CAP_OP_MOD_ESW = 0x9 << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_VDPA_EMULATION = 0x13 << 1,
+	MLX5_GET_HCA_CAP_OP_MOD_CRYPTO = 0x1A << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_PARSE_GRAPH_NODE_CAP = 0x1C << 1,
 	MLX5_GET_HCA_CAP_OP_MOD_GENERAL_DEVICE_2 = 0x20 << 1,
 };
@@ -3478,7 +3479,7 @@ struct mlx5_ifc_qpc_pas_list_bits {
 #endif
 struct mlx5_ifc_qpc_extension_and_pas_list_bits {
 	struct mlx5_ifc_qpc_extension_bits qpc_data_extension;
-	u8 pas[0][0x40];
+	u8 pas[][0x40];
 };
 
 
@@ -3702,7 +3703,7 @@ struct mlx5_ifc_query_qp_out_bits {
 	u8 reserved_at_a0[0x20];
 	struct mlx5_ifc_qpc_bits qpc;
 	u8 reserved_at_800[0x80];
-	u8 pas[0][0x40];
+	u8 pas[][0x40];
 };
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-Wpedantic"
@@ -3742,7 +3743,7 @@ struct mlx5_ifc_access_register_out_bits {
 	u8 reserved_at_8[0x18];
 	u8 syndrome[0x20];
 	u8 reserved_at_40[0x40];
-	u8 register_data[0][0x20];
+	u8 register_data[][0x20];
 };
 
 struct mlx5_ifc_access_register_in_bits {
@@ -3753,7 +3754,7 @@ struct mlx5_ifc_access_register_in_bits {
 	u8 reserved_at_40[0x10];
 	u8 register_id[0x10];
 	u8 argument[0x20];
-	u8 register_data[0][0x20];
+	u8 register_data[][0x20];
 };
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-Wpedantic"
@@ -3795,6 +3796,34 @@ struct mlx5_ifc_crypto_operational_register_bits {
 	u8 credential[0x140];
 	u8 kek[0x100];
 	u8 reserved_at_280[0x180];
+};
+
+struct mlx5_ifc_crypto_caps_bits {
+	u8 wrapped_crypto_operational[0x1];
+	u8 wrapped_crypto_going_to_commissioning[0x1];
+	u8 sw_wrapped_dek[0x1];
+	u8 synchronize_dek[0x1];
+	u8 int_kek_manual[0x1];
+	u8 int_kek_auto[0x1];
+	u8 reserved_at_6[0x12];
+	u8 wrapped_import_method[0x8];
+	u8 reserved_at_20[0x3];
+	u8 log_dek_max_alloc[0x5];
+	u8 reserved_at_28[0x3];
+	u8 log_max_num_deks[0x5];
+	u8 reserved_at_30[0x3];
+	u8 log_max_num_import_keks[0x5];
+	u8 reserved_at_38[0x3];
+	u8 log_max_num_creds[0x5];
+	u8 failed_selftests[0x10];
+	u8 num_nv_import_keks[0x8];
+	u8 num_nv_credentials[0x8];
+	u8 reserved_at_60[0x3];
+	u8 log_dek_granularity[0x5];
+	u8 reserved_at_68[0x3];
+	u8 log_max_num_int_kek[0x5];
+	u8 reserved_at_70[0x10];
+	u8 reserved_at_80[0x780];
 };
 
 struct mlx5_ifc_crypto_commissioning_register_bits {

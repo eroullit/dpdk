@@ -7,6 +7,7 @@ USE_MDFILE_AS_MAINPAGE  = @TOPDIR@/doc/api/doxy-api-index.md
 INPUT                   = @TOPDIR@/doc/api/doxy-api-index.md \
                           @TOPDIR@/drivers/bus/vdev \
                           @TOPDIR@/drivers/crypto/scheduler \
+                          @TOPDIR@/drivers/dma/dpaa2 \
                           @TOPDIR@/drivers/event/dlb2 \
                           @TOPDIR@/drivers/mempool/dpaa2 \
                           @TOPDIR@/drivers/net/ark \
@@ -22,7 +23,6 @@ INPUT                   = @TOPDIR@/doc/api/doxy-api-index.md \
                           @TOPDIR@/drivers/net/mlx5 \
                           @TOPDIR@/drivers/net/softnic \
                           @TOPDIR@/drivers/raw/dpaa2_cmdif \
-                          @TOPDIR@/drivers/raw/dpaa2_qdma \
                           @TOPDIR@/drivers/raw/ifpga \
                           @TOPDIR@/drivers/raw/ioat \
                           @TOPDIR@/lib/eal/include \
@@ -103,6 +103,7 @@ ALPHABETICAL_INDEX      = NO
 
 HTML_TIMESTAMP          = NO
 HTML_DYNAMIC_SECTIONS   = YES
+HTML_EXTRA_STYLESHEET   = @TOPDIR@/doc/api/custom.css
 SEARCHENGINE            = YES
 SORT_MEMBER_DOCS        = NO
 SOURCE_BROWSER          = YES

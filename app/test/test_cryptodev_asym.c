@@ -94,7 +94,7 @@ queue_ops_rsa_sign_verify(void *sess)
 	asym_op->rsa.message.length = rsaplaintext.len;
 	asym_op->rsa.sign.length = 0;
 	asym_op->rsa.sign.data = output_buf;
-	asym_op->rsa.pad = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
+	asym_op->rsa.padding.type = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
 
 	debug_hexdump(stdout, "message", asym_op->rsa.message.data,
 		      asym_op->rsa.message.length);
@@ -126,7 +126,7 @@ queue_ops_rsa_sign_verify(void *sess)
 
 	/* Verify sign */
 	asym_op->rsa.op_type = RTE_CRYPTO_ASYM_OP_VERIFY;
-	asym_op->rsa.pad = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
+	asym_op->rsa.padding.type = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
 
 	/* Process crypto operation */
 	if (rte_cryptodev_enqueue_burst(dev_id, 0, &op, 1) != 1) {
@@ -185,7 +185,7 @@ queue_ops_rsa_enc_dec(void *sess)
 	asym_op->rsa.cipher.data = cipher_buf;
 	asym_op->rsa.cipher.length = 0;
 	asym_op->rsa.message.length = rsaplaintext.len;
-	asym_op->rsa.pad = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
+	asym_op->rsa.padding.type = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
 
 	debug_hexdump(stdout, "message", asym_op->rsa.message.data,
 		      asym_op->rsa.message.length);
@@ -217,7 +217,7 @@ queue_ops_rsa_enc_dec(void *sess)
 	asym_op = result_op->asym;
 	asym_op->rsa.message.length = 0;
 	asym_op->rsa.op_type = RTE_CRYPTO_ASYM_OP_DECRYPT;
-	asym_op->rsa.pad = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
+	asym_op->rsa.padding.type = RTE_CRYPTO_RSA_PADDING_PKCS1_5;
 
 	/* Process crypto operation */
 	if (rte_cryptodev_enqueue_burst(dev_id, 0, &op, 1) != 1) {
@@ -414,7 +414,7 @@ test_cryptodev_asym_op(struct crypto_testsuite_params_asym *ts_params,
 		}
 
 		xform_tc.rsa.key_type = key_type;
-		op->asym->rsa.pad = data_tc->rsa_data.padding;
+		op->asym->rsa.padding.type = data_tc->rsa_data.padding;
 
 		if (op->asym->rsa.op_type == RTE_CRYPTO_ASYM_OP_ENCRYPT) {
 			asym_op->rsa.message.data = data_tc->rsa_data.pt.data;
@@ -976,27 +976,30 @@ static inline void print_asym_capa(
 
 	for (i = 0; i < RTE_CRYPTO_ASYM_OP_LIST_END; i++) {
 		/* check supported operations */
-		if (rte_cryptodev_asym_xform_capability_check_optype(capa, i))
-			printf(" %s",
-					rte_crypto_asym_op_strings[i]);
+		if (rte_cryptodev_asym_xform_capability_check_optype(capa, i)) {
+			if (capa->xform_type == RTE_CRYPTO_ASYM_XFORM_DH)
+				printf(" %s", rte_crypto_asym_ke_strings[i]);
+			else
+				printf(" %s", rte_crypto_asym_op_strings[i]);
 		}
-		switch (capa->xform_type) {
-		case RTE_CRYPTO_ASYM_XFORM_RSA:
-		case RTE_CRYPTO_ASYM_XFORM_MODINV:
-		case RTE_CRYPTO_ASYM_XFORM_MODEX:
-		case RTE_CRYPTO_ASYM_XFORM_DH:
-		case RTE_CRYPTO_ASYM_XFORM_DSA:
-			printf(" modlen: min %d max %d increment %d",
-					capa->modlen.min,
-					capa->modlen.max,
-					capa->modlen.increment);
+	}
+	switch (capa->xform_type) {
+	case RTE_CRYPTO_ASYM_XFORM_RSA:
+	case RTE_CRYPTO_ASYM_XFORM_MODINV:
+	case RTE_CRYPTO_ASYM_XFORM_MODEX:
+	case RTE_CRYPTO_ASYM_XFORM_DH:
+	case RTE_CRYPTO_ASYM_XFORM_DSA:
+		printf(" modlen: min %d max %d increment %d",
+				capa->modlen.min,
+				capa->modlen.max,
+				capa->modlen.increment);
+	break;
+	case RTE_CRYPTO_ASYM_XFORM_ECDSA:
+	case RTE_CRYPTO_ASYM_XFORM_ECPM:
+	default:
 		break;
-		case RTE_CRYPTO_ASYM_XFORM_ECDSA:
-		case RTE_CRYPTO_ASYM_XFORM_ECPM:
-		default:
-			break;
-		}
-		printf("\n");
+	}
+	printf("\n");
 }
 
 static int
@@ -1064,8 +1067,8 @@ test_dh_gen_shared_sec(struct rte_crypto_asym_xform *xfrm)
 	asym_op = op->asym;
 
 	/* Setup a xform and op to generate private key only */
-	xform.dh.type = RTE_CRYPTO_ASYM_OP_SHARED_SECRET_COMPUTE;
 	xform.next = NULL;
+	asym_op->dh.ke_type = RTE_CRYPTO_ASYM_KE_SHARED_SECRET_COMPUTE;
 	asym_op->dh.priv_key.data = dh_test_params.priv_key.data;
 	asym_op->dh.priv_key.length = dh_test_params.priv_key.length;
 	asym_op->dh.pub_key.data = (uint8_t *)peer;
@@ -1146,8 +1149,8 @@ test_dh_gen_priv_key(struct rte_crypto_asym_xform *xfrm)
 	asym_op = op->asym;
 
 	/* Setup a xform and op to generate private key only */
-	xform.dh.type = RTE_CRYPTO_ASYM_OP_PRIVATE_KEY_GENERATE;
 	xform.next = NULL;
+	asym_op->dh.ke_type = RTE_CRYPTO_ASYM_KE_PRIV_KEY_GENERATE;
 	asym_op->dh.priv_key.data = output;
 	asym_op->dh.priv_key.length = sizeof(output);
 
@@ -1229,9 +1232,9 @@ test_dh_gen_pub_key(struct rte_crypto_asym_xform *xfrm)
 	 * using test private key
 	 *
 	 */
-	xform.dh.type = RTE_CRYPTO_ASYM_OP_PUBLIC_KEY_GENERATE;
 	xform.next = NULL;
 
+	asym_op->dh.ke_type = RTE_CRYPTO_ASYM_KE_PUB_KEY_GENERATE;
 	asym_op->dh.pub_key.data = output;
 	asym_op->dh.pub_key.length = sizeof(output);
 	/* load pre-defined private key */
@@ -1319,15 +1322,15 @@ test_dh_gen_kp(struct rte_crypto_asym_xform *xfrm)
 	/* Setup a xform chain to generate
 	 * private key first followed by
 	 * public key
-	 */xform.dh.type = RTE_CRYPTO_ASYM_OP_PRIVATE_KEY_GENERATE;
+	 */
 	pub_key_xform.xform_type = RTE_CRYPTO_ASYM_XFORM_DH;
-	pub_key_xform.dh.type = RTE_CRYPTO_ASYM_OP_PUBLIC_KEY_GENERATE;
 	xform.next = &pub_key_xform;
 
+	asym_op->dh.ke_type = RTE_CRYPTO_ASYM_KE_PUB_KEY_GENERATE;
 	asym_op->dh.pub_key.data = out_pub_key;
 	asym_op->dh.pub_key.length = sizeof(out_pub_key);
 	asym_op->dh.priv_key.data = out_prv_key;
-	asym_op->dh.priv_key.length = sizeof(out_prv_key);
+	asym_op->dh.priv_key.length = 0;
 
 	ret = rte_cryptodev_asym_session_create(dev_id, &xform, sess_mpool, &sess);
 	if (ret < 0) {

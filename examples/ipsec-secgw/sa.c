@@ -119,6 +119,13 @@ const struct supported_cipher_algo cipher_algos[] = {
 		.iv_len = 8,
 		.block_size = 8,
 		.key_len = 24
+	},
+	{
+		.keyword = "des-cbc",
+		.algo = RTE_CRYPTO_CIPHER_DES_CBC,
+		.iv_len = 8,
+		.block_size = 8,
+		.key_len = 8
 	}
 };
 
@@ -936,6 +943,15 @@ parse_sa_tokens(char **tokens, uint32_t n_tokens,
 		ips->type = RTE_SECURITY_ACTION_TYPE_NONE;
 	}
 
+	if (ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO)
+		wrkr_flags |= INL_CR_F;
+	else if (ips->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
+		wrkr_flags |= INL_PR_F;
+	else if (ips->type == RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL)
+		wrkr_flags |= LA_PR_F;
+	else
+		wrkr_flags |= LA_ANY_F;
+
 	nb_crypto_sessions++;
 	*ri = *ri + 1;
 }
@@ -1218,7 +1234,8 @@ sa_add_address_inline_crypto(struct ipsec_sa *sa)
 static int
 sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		uint32_t nb_entries, uint32_t inbound,
-		struct socket_ctx *skt_ctx)
+		struct socket_ctx *skt_ctx,
+		struct ipsec_ctx *ips_ctx[])
 {
 	struct ipsec_sa *sa;
 	uint32_t i, idx;
@@ -1301,6 +1318,7 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 		} else {
 			switch (sa->cipher_algo) {
 			case RTE_CRYPTO_CIPHER_NULL:
+			case RTE_CRYPTO_CIPHER_DES_CBC:
 			case RTE_CRYPTO_CIPHER_3DES_CBC:
 			case RTE_CRYPTO_CIPHER_AES_CBC:
 			case RTE_CRYPTO_CIPHER_AES_CTR:
@@ -1389,6 +1407,13 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 					"create_inline_session() failed\n");
 				return -EINVAL;
 			}
+		} else {
+			rc = create_lookaside_session(ips_ctx, skt_ctx, sa, ips);
+			if (rc != 0) {
+				RTE_LOG(ERR, IPSEC_ESP,
+					"create_lookaside_session() failed\n");
+				return -EINVAL;
+			}
 		}
 
 		if (sa->fdir_flag && inbound) {
@@ -1405,16 +1430,18 @@ sa_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
 
 static inline int
 sa_out_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
-		uint32_t nb_entries, struct socket_ctx *skt_ctx)
+		uint32_t nb_entries, struct socket_ctx *skt_ctx,
+		struct ipsec_ctx *ips_ctx[])
 {
-	return sa_add_rules(sa_ctx, entries, nb_entries, 0, skt_ctx);
+	return sa_add_rules(sa_ctx, entries, nb_entries, 0, skt_ctx, ips_ctx);
 }
 
 static inline int
 sa_in_add_rules(struct sa_ctx *sa_ctx, const struct ipsec_sa entries[],
-		uint32_t nb_entries, struct socket_ctx *skt_ctx)
+		uint32_t nb_entries, struct socket_ctx *skt_ctx,
+		struct ipsec_ctx *ips_ctx[])
 {
-	return sa_add_rules(sa_ctx, entries, nb_entries, 1, skt_ctx);
+	return sa_add_rules(sa_ctx, entries, nb_entries, 1, skt_ctx, ips_ctx);
 }
 
 /*
@@ -1488,14 +1515,9 @@ fill_ipsec_session(struct rte_ipsec_session *ss, struct rte_ipsec_sa *sa)
 
 	ss->sa = sa;
 
-	if (ss->type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
-		ss->type == RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL) {
-		if (ss->security.ses != NULL) {
-			rc = rte_ipsec_session_prepare(ss);
-			if (rc != 0)
-				memset(ss, 0, sizeof(*ss));
-		}
-	}
+	rc = rte_ipsec_session_prepare(ss);
+	if (rc != 0)
+		memset(ss, 0, sizeof(*ss));
 
 	return rc;
 }
@@ -1634,10 +1656,13 @@ sa_spi_present(struct sa_ctx *sa_ctx, uint32_t spi, int inbound)
 }
 
 void
-sa_init(struct socket_ctx *ctx, int32_t socket_id)
+sa_init(struct socket_ctx *ctx, int32_t socket_id,
+		struct lcore_conf *lcore_conf)
 {
 	int32_t rc;
 	const char *name;
+	uint32_t lcore_id;
+	struct ipsec_ctx *ipsec_ctx[RTE_MAX_LCORE];
 
 	if (ctx == NULL)
 		rte_exit(EXIT_FAILURE, "NULL context.\n");
@@ -1662,8 +1687,9 @@ sa_init(struct socket_ctx *ctx, int32_t socket_id)
 				&sa_in_cnt);
 		if (rc != 0)
 			rte_exit(EXIT_FAILURE, "failed to init SAD\n");
-
-		sa_in_add_rules(ctx->sa_in, sa_in, nb_sa_in, ctx);
+		RTE_LCORE_FOREACH(lcore_id)
+			ipsec_ctx[lcore_id] = &lcore_conf[lcore_id].inbound;
+		sa_in_add_rules(ctx->sa_in, sa_in, nb_sa_in, ctx, ipsec_ctx);
 
 		if (app_sa_prm.enable != 0) {
 			rc = ipsec_satbl_init(ctx->sa_in, nb_sa_in,
@@ -1683,7 +1709,9 @@ sa_init(struct socket_ctx *ctx, int32_t socket_id)
 				"context %s in socket %d\n", rte_errno,
 				name, socket_id);
 
-		sa_out_add_rules(ctx->sa_out, sa_out, nb_sa_out, ctx);
+		RTE_LCORE_FOREACH(lcore_id)
+			ipsec_ctx[lcore_id] = &lcore_conf[lcore_id].outbound;
+		sa_out_add_rules(ctx->sa_out, sa_out, nb_sa_out, ctx, ipsec_ctx);
 
 		if (app_sa_prm.enable != 0) {
 			rc = ipsec_satbl_init(ctx->sa_out, nb_sa_out,
@@ -1766,9 +1794,17 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 	struct ipsec_sa *rule;
 	uint32_t idx_sa;
 	enum rte_security_session_action_type rule_type;
+	struct rte_eth_dev_info dev_info;
+	int ret;
 
 	*rx_offloads = 0;
 	*tx_offloads = 0;
+
+	ret = rte_eth_dev_info_get(port_id, &dev_info);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port_id, strerror(-ret));
 
 	/* Check for inbound rules that use offloads and use this port */
 	for (idx_sa = 0; idx_sa < nb_sa_in; idx_sa++) {
@@ -1785,13 +1821,37 @@ sa_check_offloads(uint16_t port_id, uint64_t *rx_offloads,
 	for (idx_sa = 0; idx_sa < nb_sa_out; idx_sa++) {
 		rule = &sa_out[idx_sa];
 		rule_type = ipsec_get_action_type(rule);
-		if ((rule_type == RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO ||
-				rule_type ==
-				RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL)
-				&& rule->portid == port_id) {
-			*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
-			if (rule->mss)
-				*tx_offloads |= RTE_ETH_TX_OFFLOAD_TCP_TSO;
+		switch (rule_type) {
+		case RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL:
+			/* Checksum offload is not needed for inline protocol as
+			 * all processing for Outbound IPSec packets will be
+			 * implicitly taken care and for non-IPSec packets,
+			 * there is no need of IPv4 Checksum offload.
+			 */
+			if (rule->portid == port_id) {
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
+				if (rule->mss)
+					*tx_offloads |= (RTE_ETH_TX_OFFLOAD_TCP_TSO |
+							 RTE_ETH_TX_OFFLOAD_IPV4_CKSUM);
+			}
+			break;
+		case RTE_SECURITY_ACTION_TYPE_INLINE_CRYPTO:
+			if (rule->portid == port_id) {
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_SECURITY;
+				if (rule->mss)
+					*tx_offloads |=
+						RTE_ETH_TX_OFFLOAD_TCP_TSO;
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
+			}
+			break;
+		default:
+			/* Enable IPv4 checksum offload even if one of lookaside
+			 * SA's are present.
+			 */
+			if (dev_info.tx_offload_capa &
+			    RTE_ETH_TX_OFFLOAD_IPV4_CKSUM)
+				*tx_offloads |= RTE_ETH_TX_OFFLOAD_IPV4_CKSUM;
+			break;
 		}
 	}
 	return 0;
