@@ -723,7 +723,7 @@ static int bnxt_alloc_prev_ring_stats(struct bnxt *bp)
 					     sizeof(struct bnxt_ring_stats) *
 					     bp->tx_cp_nr_rings,
 					     0);
-	if (bp->prev_tx_ring_stats == NULL)
+	if (bp->tx_cp_nr_rings > 0 && bp->prev_tx_ring_stats == NULL)
 		goto error;
 
 	return 0;
@@ -903,6 +903,7 @@ static int bnxt_shutdown_nic(struct bnxt *bp)
 
 uint32_t bnxt_get_speed_capabilities(struct bnxt *bp)
 {
+	uint32_t pam4_link_speed = 0;
 	uint32_t link_speed = 0;
 	uint32_t speed_capa = 0;
 
@@ -912,8 +913,8 @@ uint32_t bnxt_get_speed_capabilities(struct bnxt *bp)
 	link_speed = bp->link_info->support_speeds;
 
 	/* If PAM4 is configured, use PAM4 supported speed */
-	if (link_speed == 0 && bp->link_info->support_pam4_speeds > 0)
-		link_speed = bp->link_info->support_pam4_speeds;
+	if (bp->link_info->support_pam4_speeds > 0)
+		pam4_link_speed = bp->link_info->support_pam4_speeds;
 
 	if (link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_LINK_SPEED_100MB)
 		speed_capa |= RTE_ETH_LINK_SPEED_100M;
@@ -935,11 +936,11 @@ uint32_t bnxt_get_speed_capabilities(struct bnxt *bp)
 		speed_capa |= RTE_ETH_LINK_SPEED_50G;
 	if (link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_SPEEDS_100GB)
 		speed_capa |= RTE_ETH_LINK_SPEED_100G;
-	if (link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_PAM4_SPEEDS_50G)
+	if (pam4_link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_PAM4_SPEEDS_50G)
 		speed_capa |= RTE_ETH_LINK_SPEED_50G;
-	if (link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_PAM4_SPEEDS_100G)
+	if (pam4_link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_PAM4_SPEEDS_100G)
 		speed_capa |= RTE_ETH_LINK_SPEED_100G;
-	if (link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_PAM4_SPEEDS_200G)
+	if (pam4_link_speed & HWRM_PORT_PHY_QCFG_OUTPUT_SUPPORT_PAM4_SPEEDS_200G)
 		speed_capa |= RTE_ETH_LINK_SPEED_200G;
 
 	if (bp->link_info->auto_mode ==
@@ -1566,11 +1567,6 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	uint64_t rx_offloads = eth_dev->data->dev_conf.rxmode.offloads;
 	int vlan_mask = 0;
 	int rc, retry_cnt = BNXT_IF_CHANGE_RETRY_COUNT;
-
-	if (!eth_dev->data->nb_tx_queues || !eth_dev->data->nb_rx_queues) {
-		PMD_DRV_LOG(ERR, "Queues are not configured yet!\n");
-		return -EINVAL;
-	}
 
 	if (bp->rx_cp_nr_rings > RTE_ETHDEV_QUEUE_STAT_CNTRS)
 		PMD_DRV_LOG(ERR,
@@ -3023,9 +3019,7 @@ bnxt_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 
 int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 {
-	uint32_t overhead = BNXT_MAX_PKT_LEN - BNXT_MAX_MTU;
 	struct bnxt *bp = eth_dev->data->dev_private;
-	uint32_t new_pkt_size;
 	uint32_t rc;
 	uint32_t i;
 
@@ -3033,34 +3027,24 @@ int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 	if (rc)
 		return rc;
 
+	/* Return if port is active */
+	if (eth_dev->data->dev_started) {
+		PMD_DRV_LOG(ERR, "Stop port before changing MTU\n");
+		return -EPERM;
+	}
+
 	/* Exit if receive queues are not configured yet */
 	if (!eth_dev->data->nb_rx_queues)
-		return rc;
+		return -ENOTSUP;
 
-	new_pkt_size = new_mtu + overhead;
-
-	/*
-	 * Disallow any MTU change that would require scattered receive support
-	 * if it is not already enabled.
-	 */
-	if (eth_dev->data->dev_started &&
-	    !eth_dev->data->scattered_rx &&
-	    (new_pkt_size >
-	     eth_dev->data->min_rx_buf_size - RTE_PKTMBUF_HEADROOM)) {
-		PMD_DRV_LOG(ERR,
-			    "MTU change would require scattered rx support. ");
-		PMD_DRV_LOG(ERR, "Stop port before changing MTU.\n");
-		return -EINVAL;
-	}
+	/* Is there a change in mtu setting? */
+	if (eth_dev->data->mtu == new_mtu)
+		return 0;
 
 	if (new_mtu > RTE_ETHER_MTU)
 		bp->flags |= BNXT_FLAG_JUMBO;
 	else
 		bp->flags &= ~BNXT_FLAG_JUMBO;
-
-	/* Is there a change in mtu setting? */
-	if (eth_dev->data->mtu == new_mtu)
-		return rc;
 
 	for (i = 0; i < bp->nr_vnics; i++) {
 		struct bnxt_vnic_info *vnic = &bp->vnic_info[i];
@@ -5287,11 +5271,34 @@ bnxt_init_locks(struct bnxt *bp)
 	return err;
 }
 
+/* This should be called after we have queried trusted VF cap */
+static int bnxt_alloc_switch_domain(struct bnxt *bp)
+{
+	int rc = 0;
+
+	if (BNXT_PF(bp) || BNXT_VF_IS_TRUSTED(bp)) {
+		rc = rte_eth_switch_domain_alloc(&bp->switch_domain_id);
+		if (rc)
+			PMD_DRV_LOG(ERR,
+				    "Failed to alloc switch domain: %d\n", rc);
+		else
+			PMD_DRV_LOG(INFO,
+				    "Switch domain allocated %d\n",
+				    bp->switch_domain_id);
+	}
+
+	return rc;
+}
+
 static int bnxt_init_resources(struct bnxt *bp, bool reconfig_dev)
 {
 	int rc = 0;
 
 	rc = bnxt_get_config(bp);
+	if (rc)
+		return rc;
+
+	rc = bnxt_alloc_switch_domain(bp);
 	if (rc)
 		return rc;
 
@@ -5734,24 +5741,6 @@ err:
 	return ret;
 }
 
-static int bnxt_alloc_switch_domain(struct bnxt *bp)
-{
-	int rc = 0;
-
-	if (BNXT_PF(bp) || BNXT_VF_IS_TRUSTED(bp)) {
-		rc = rte_eth_switch_domain_alloc(&bp->switch_domain_id);
-		if (rc)
-			PMD_DRV_LOG(ERR,
-				    "Failed to alloc switch domain: %d\n", rc);
-		else
-			PMD_DRV_LOG(INFO,
-				    "Switch domain allocated %d\n",
-				    bp->switch_domain_id);
-	}
-
-	return rc;
-}
-
 /* Allocate and initialize various fields in bnxt struct that
  * need to be allocated/destroyed only once in the lifetime of the driver
  */
@@ -5825,10 +5814,6 @@ static int bnxt_drv_init(struct rte_eth_dev *eth_dev)
 		return rc;
 
 	rc = bnxt_init_locks(bp);
-	if (rc)
-		return rc;
-
-	rc = bnxt_alloc_switch_domain(bp);
 	if (rc)
 		return rc;
 

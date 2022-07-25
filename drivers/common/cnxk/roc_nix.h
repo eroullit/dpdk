@@ -11,7 +11,8 @@
 #define ROC_NIX_BPF_LEVEL_IDX_INVALID 0xFF
 #define ROC_NIX_BPF_LEVEL_MAX	      3
 #define ROC_NIX_BPF_STATS_MAX	      12
-#define ROC_NIX_MTR_ID_INVALID       UINT32_MAX
+#define ROC_NIX_MTR_ID_INVALID	      UINT32_MAX
+#define ROC_NIX_PFC_CLASS_INVALID     UINT8_MAX
 
 enum roc_nix_rss_reta_sz {
 	ROC_NIX_RSS_RETA_SZ_64 = 64,
@@ -157,6 +158,7 @@ struct roc_nix_fc_cfg {
 #define ROC_NIX_FC_RXCHAN_CFG 0
 #define ROC_NIX_FC_CQ_CFG     1
 #define ROC_NIX_FC_TM_CFG     2
+#define ROC_NIX_FC_RQ_CFG     3
 	uint8_t type;
 	union {
 		struct {
@@ -169,6 +171,14 @@ struct roc_nix_fc_cfg {
 			uint16_t cq_drop;
 			bool enable;
 		} cq_cfg;
+
+		struct {
+			uint32_t rq;
+			uint16_t tc;
+			uint16_t cq_drop;
+			bool enable;
+			uint64_t pool;
+		} rq_cfg;
 
 		struct {
 			uint32_t sq;
@@ -309,7 +319,7 @@ struct roc_nix_rq {
 struct roc_nix_cq {
 	/* Input parameters */
 	uint16_t qid;
-	uint16_t nb_desc;
+	uint32_t nb_desc;
 	/* End of Input parameters */
 	uint16_t drop_thresh;
 	struct roc_nix *roc_nix;
@@ -340,6 +350,7 @@ struct roc_nix_sq {
 	void *lmt_addr;
 	void *sqe_mem;
 	void *fc;
+	uint8_t tc;
 };
 
 struct roc_nix_link_info {
@@ -791,8 +802,8 @@ uint16_t __roc_api roc_nix_chan_count_get(struct roc_nix *roc_nix);
 
 enum roc_nix_fc_mode __roc_api roc_nix_fc_mode_get(struct roc_nix *roc_nix);
 
-void __roc_api rox_nix_fc_npa_bp_cfg(struct roc_nix *roc_nix, uint64_t pool_id,
-				     uint8_t ena, uint8_t force);
+void __roc_api roc_nix_fc_npa_bp_cfg(struct roc_nix *roc_nix, uint64_t pool_id,
+				     uint8_t ena, uint8_t force, uint8_t tc);
 
 /* NPC */
 int __roc_api roc_nix_npc_promisc_ena_dis(struct roc_nix *roc_nix, int enable);
@@ -845,6 +856,7 @@ int __roc_api roc_nix_rq_init(struct roc_nix *roc_nix, struct roc_nix_rq *rq,
 int __roc_api roc_nix_rq_modify(struct roc_nix *roc_nix, struct roc_nix_rq *rq,
 				bool ena);
 int __roc_api roc_nix_rq_ena_dis(struct roc_nix_rq *rq, bool enable);
+int __roc_api roc_nix_rq_is_sso_enable(struct roc_nix *roc_nix, uint32_t qid);
 int __roc_api roc_nix_rq_fini(struct roc_nix_rq *rq);
 int __roc_api roc_nix_cq_init(struct roc_nix *roc_nix, struct roc_nix_cq *cq);
 int __roc_api roc_nix_cq_fini(struct roc_nix_cq *cq);

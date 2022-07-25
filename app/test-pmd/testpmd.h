@@ -38,6 +38,8 @@
 #define RTE_PORT_CLOSED         (uint16_t)2
 #define RTE_PORT_HANDLING       (uint16_t)3
 
+extern uint8_t cl_quit;
+
 /*
  * It is used to allocate the memory for hash key.
  * The hash key size is NIC dependent.
@@ -111,6 +113,8 @@ struct pkt_burst_stats {
 	unsigned int pkt_burst_spread[MAX_PKT_BURST + 1];
 };
 
+
+#define TESTPMD_RSS_TYPES_CHAR_NUM_PER_LINE 64
 /** Information for a given RSS type. */
 struct rss_type_info {
 	const char *str; /**< Type name. */
@@ -1145,8 +1149,6 @@ uint8_t *open_file(const char *file_path, uint32_t *size);
 int save_file(const char *file_path, uint8_t *buf, uint32_t size);
 int close_file(uint8_t *buf);
 
-void port_queue_region_info_display(portid_t port_id, void *buf);
-
 enum print_warning {
 	ENABLED_WARN = 0,
 	DISABLED_WARN
@@ -1198,6 +1200,12 @@ extern int flow_parse(const char *src, void *result, unsigned int size,
 		      struct rte_flow_attr **attr,
 		      struct rte_flow_item **pattern,
 		      struct rte_flow_action **actions);
+
+uint64_t str_to_rsstypes(const char *str);
+const char *rsstypes_to_str(uint64_t rss_type);
+
+uint16_t str_to_flowtype(const char *string);
+const char *flowtype_to_str(uint16_t flow_type);
 
 /* For registering driver specific testpmd commands. */
 struct testpmd_driver_commands {

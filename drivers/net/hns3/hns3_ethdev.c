@@ -317,7 +317,7 @@ hns3_interrupt_handler(void *param)
 		hns3_schedule_reset(hns);
 	} else if (event_cause == HNS3_VECTOR0_EVENT_MBX) {
 		hns3_dev_handle_mbx_msg(hw);
-	} else {
+	} else if (event_cause != HNS3_VECTOR0_EVENT_PTP) {
 		hns3_warn(hw, "received unknown event: vector0_int_stat:0x%x "
 			  "ras_int_stat:0x%x cmdq_int_stat:0x%x",
 			  vector0_int, ras_int, cmdq_int);
@@ -1626,7 +1626,7 @@ hns3_set_default_mac_addr(struct rte_eth_dev *dev,
 	ret = hw->ops.del_uc_mac_addr(hw, oaddr);
 	if (ret) {
 		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-				      oaddr);
+				       oaddr);
 		hns3_warn(hw, "Remove old uc mac address(%s) fail: %d",
 			  mac_str, ret);
 
@@ -1658,7 +1658,7 @@ err_pause_addr_cfg:
 	ret_val = hw->ops.del_uc_mac_addr(hw, mac_addr);
 	if (ret_val) {
 		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-				      mac_addr);
+				       mac_addr);
 		hns3_warn(hw,
 			  "Failed to roll back to del setted mac addr(%s): %d",
 			  mac_str, ret_val);
@@ -1669,7 +1669,7 @@ err_add_uc_addr:
 	if (ret_val) {
 		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE, oaddr);
 		hns3_warn(hw, "Failed to restore old uc mac addr(%s): %d",
-				  mac_str, ret_val);
+			  mac_str, ret_val);
 	}
 	rte_spinlock_unlock(&hw->lock);
 
@@ -1746,7 +1746,7 @@ hns3_add_mc_mac_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 		if (ret == -ENOSPC)
 			hns3_err(hw, "mc mac vlan table is full");
 		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-				      mac_addr);
+				       mac_addr);
 		hns3_err(hw, "failed to add mc mac addr(%s): %d", mac_str, ret);
 	}
 
@@ -2675,9 +2675,8 @@ hns3_check_dev_specifications(struct hns3_hw *hw)
 {
 	if (hw->rss_ind_tbl_size == 0 ||
 	    hw->rss_ind_tbl_size > HNS3_RSS_IND_TBL_SIZE_MAX) {
-		hns3_err(hw, "the size of hash lookup table configured (%u)"
-			      " exceeds the maximum(%u)", hw->rss_ind_tbl_size,
-			      HNS3_RSS_IND_TBL_SIZE_MAX);
+		hns3_err(hw, "the size of hash lookup table configured (%u) exceeds the maximum(%u)",
+			 hw->rss_ind_tbl_size, HNS3_RSS_IND_TBL_SIZE_MAX);
 		return -EINVAL;
 	}
 
@@ -2788,11 +2787,8 @@ hns3_check_media_type(struct hns3_hw *hw, uint8_t media_type)
 		}
 		break;
 	case HNS3_MEDIA_TYPE_FIBER:
-		ret = 0;
-		break;
 	case HNS3_MEDIA_TYPE_BACKPLANE:
-		PMD_INIT_LOG(ERR, "Media type is Backplane, not supported.");
-		ret = -EOPNOTSUPP;
+		ret = 0;
 		break;
 	default:
 		PMD_INIT_LOG(ERR, "Unknown media type = %u!", media_type);
@@ -2928,8 +2924,8 @@ hns3_map_tqps_to_func(struct hns3_hw *hw, uint16_t func_id, uint16_t tqp_pid,
 static int
 hns3_map_tqp(struct hns3_hw *hw)
 {
+	uint16_t i;
 	int ret;
-	int i;
 
 	/*
 	 * In current version, VF is not supported when PF is driven by DPDK
@@ -3915,7 +3911,7 @@ hns3_dev_promiscuous_enable(struct rte_eth_dev *dev)
 		ret = hns3_enable_vlan_filter(hns, false);
 		if (ret) {
 			hns3_err(hw, "failed to enable promiscuous mode due to "
-				     "failure to disable vlan filter, ret = %d",
+				 "failure to disable vlan filter, ret = %d",
 				 ret);
 			err = hns3_set_promisc_mode(hw, false, allmulti);
 			if (err)
@@ -4245,14 +4241,11 @@ hns3_update_link_info(struct rte_eth_dev *eth_dev)
 {
 	struct hns3_adapter *hns = eth_dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
-	int ret = 0;
 
 	if (hw->mac.media_type == HNS3_MEDIA_TYPE_COPPER)
-		ret = hns3_update_copper_link_info(hw);
-	else if (hw->mac.media_type == HNS3_MEDIA_TYPE_FIBER)
-		ret = hns3_update_fiber_link_info(hw);
+		return hns3_update_copper_link_info(hw);
 
-	return ret;
+	return hns3_update_fiber_link_info(hw);
 }
 
 static int
@@ -4545,11 +4538,13 @@ hns3_get_port_supported_speed(struct rte_eth_dev *eth_dev)
 	if (ret)
 		return ret;
 
-	if (mac->media_type == HNS3_MEDIA_TYPE_FIBER) {
+	if (mac->media_type == HNS3_MEDIA_TYPE_FIBER ||
+	    mac->media_type == HNS3_MEDIA_TYPE_BACKPLANE) {
 		/*
 		 * Some firmware does not support the report of supported_speed,
-		 * and only report the effective speed of SFP. In this case, it
-		 * is necessary to use the SFP's speed as the supported_speed.
+		 * and only report the effective speed of SFP/backplane. In this
+		 * case, it is necessary to use the SFP/backplane's speed as the
+		 * supported_speed.
 		 */
 		if (mac->supported_speed == 0)
 			mac->supported_speed =
@@ -4811,7 +4806,7 @@ hns3_check_port_speed(struct hns3_hw *hw, uint32_t link_speeds)
 
 	if (mac->media_type == HNS3_MEDIA_TYPE_COPPER)
 		speed_bit = hns3_convert_link_speeds2bitmap_copper(link_speeds);
-	else if (mac->media_type == HNS3_MEDIA_TYPE_FIBER)
+	else
 		speed_bit = hns3_convert_link_speeds2bitmap_fiber(link_speeds);
 
 	if (!(speed_bit & supported_speed)) {
@@ -4955,32 +4950,35 @@ hns3_set_fiber_port_link_speed(struct hns3_hw *hw,
 	return hns3_cfg_mac_speed_dup(hw, cfg->speed, cfg->duplex);
 }
 
+static const char *
+hns3_get_media_type_name(uint8_t media_type)
+{
+	if (media_type == HNS3_MEDIA_TYPE_FIBER)
+		return "fiber";
+	else if (media_type == HNS3_MEDIA_TYPE_COPPER)
+		return "copper";
+	else if (media_type == HNS3_MEDIA_TYPE_BACKPLANE)
+		return "backplane";
+	else
+		return "unknown";
+}
+
 static int
 hns3_set_port_link_speed(struct hns3_hw *hw,
 			 struct hns3_set_link_speed_cfg *cfg)
 {
 	int ret;
 
-	if (hw->mac.media_type == HNS3_MEDIA_TYPE_COPPER) {
-#if defined(RTE_HNS3_ONLY_1630_FPGA)
-		struct hns3_pf *pf = HNS3_DEV_HW_TO_PF(hw);
-		if (pf->is_tmp_phy)
-			return 0;
-#endif
-
+	if (hw->mac.media_type == HNS3_MEDIA_TYPE_COPPER)
 		ret = hns3_set_copper_port_link_speed(hw, cfg);
-		if (ret) {
-			hns3_err(hw, "failed to set copper port link speed,"
-				 "ret = %d.", ret);
-			return ret;
-		}
-	} else if (hw->mac.media_type == HNS3_MEDIA_TYPE_FIBER) {
+	else
 		ret = hns3_set_fiber_port_link_speed(hw, cfg);
-		if (ret) {
-			hns3_err(hw, "failed to set fiber port link speed,"
-				 "ret = %d.", ret);
-			return ret;
-		}
+
+	if (ret) {
+		hns3_err(hw, "failed to set %s port link speed, ret = %d.",
+			 hns3_get_media_type_name(hw->mac.media_type),
+			 ret);
+		return ret;
 	}
 
 	return 0;
@@ -5992,8 +5990,7 @@ hns3_reset_service(void *param)
 		timersub(&tv, &tv_start, &tv_delta);
 		msec = hns3_clock_calctime_ms(&tv_delta);
 		if (msec > HNS3_RESET_PROCESS_MS)
-			hns3_err(hw, "%d handle long time delta %" PRIu64
-				     " ms time=%ld.%.6ld",
+			hns3_err(hw, "%d handle long time delta %" PRIu64 " ms time=%ld.%.6ld",
 				 hw->reset.level, msec,
 				 tv.tv_sec, tv.tv_usec);
 		if (ret == -EAGAIN)

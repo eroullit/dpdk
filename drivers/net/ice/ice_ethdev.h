@@ -606,9 +606,6 @@ struct ice_adapter {
 	struct rte_timecounter tx_tstamp_tc;
 	bool ptp_ena;
 	uint64_t time_hw;
-	uint32_t hw_time_high; /* high 32 bits of timestamp */
-	uint32_t hw_time_low; /* low 32 bits of timestamp */
-	uint64_t hw_time_update; /* SW time of HW record updating */
 	struct ice_fdir_prof_info fdir_prof_info[ICE_MAX_PTGS];
 	struct ice_rss_prof_info rss_prof_info[ICE_MAX_PTGS];
 	/* True if DCF state of the associated PF is on */
@@ -663,6 +660,7 @@ struct ice_vsi_vlan_pvid_info {
 #define ICE_PF_TO_ETH_DEV(pf) \
 	(((struct ice_pf *)pf)->adapter->eth_dev)
 
+bool is_ice_supported(struct rte_eth_dev *dev);
 int
 ice_load_pkg(struct ice_adapter *adapter, bool use_dsn, uint64_t dsn);
 struct ice_vsi *

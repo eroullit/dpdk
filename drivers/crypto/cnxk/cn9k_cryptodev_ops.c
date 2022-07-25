@@ -45,6 +45,10 @@ cn9k_cpt_sec_inst_fill(struct rte_crypto_op *op,
 	struct rte_crypto_sym_op *sym_op = op->sym;
 	struct cn9k_sec_session *priv;
 	struct cn9k_ipsec_sa *sa;
+	int ret;
+
+	priv = get_sec_session_private_data(op->sym->sec_session);
+	sa = &priv->sa;
 
 	if (unlikely(sym_op->m_dst && sym_op->m_dst != sym_op->m_src)) {
 		plt_dp_err("Out of place is not supported");
@@ -56,15 +60,17 @@ cn9k_cpt_sec_inst_fill(struct rte_crypto_op *op,
 		return -ENOTSUP;
 	}
 
-	priv = get_sec_session_private_data(op->sym->sec_session);
-	sa = &priv->sa;
-
 	if (sa->dir == RTE_SECURITY_IPSEC_SA_DIR_EGRESS)
-		return process_outb_sa(op, sa, inst);
+		ret = process_outb_sa(op, sa, inst);
+	else {
+		infl_req->op_flags |= CPT_OP_FLAGS_IPSEC_DIR_INBOUND;
+		process_inb_sa(op, sa, inst);
+		if (unlikely(sa->replay_win_sz))
+			infl_req->op_flags |= CPT_OP_FLAGS_IPSEC_INB_REPLAY;
+		ret = 0;
+	}
 
-	infl_req->op_flags |= CPT_OP_FLAGS_IPSEC_DIR_INBOUND;
-
-	return process_inb_sa(op, sa, inst);
+	return ret;
 }
 
 static inline struct cnxk_se_sess *
@@ -226,19 +232,29 @@ cn9k_cpt_enqueue_burst(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops)
 	};
 
 	pend_q = &qp->pend_q;
-
-	const uint64_t lmt_base = qp->lf.lmt_base;
-	const uint64_t io_addr = qp->lf.io_addr;
-	const uint64_t pq_mask = pend_q->pq_mask;
+	rte_prefetch2(pend_q);
 
 	/* Clear w0, w2, w3 of both inst */
 
+#if defined(RTE_ARCH_ARM64)
+	uint64x2_t zero = vdupq_n_u64(0);
+
+	vst1q_u64(&inst[0].w0.u64, zero);
+	vst1q_u64(&inst[1].w0.u64, zero);
+	vst1q_u64(&inst[0].w2.u64, zero);
+	vst1q_u64(&inst[1].w2.u64, zero);
+#else
 	inst[0].w0.u64 = 0;
 	inst[0].w2.u64 = 0;
 	inst[0].w3.u64 = 0;
 	inst[1].w0.u64 = 0;
 	inst[1].w2.u64 = 0;
 	inst[1].w3.u64 = 0;
+#endif
+
+	const uint64_t lmt_base = qp->lf.lmt_base;
+	const uint64_t io_addr = qp->lf.io_addr;
+	const uint64_t pq_mask = pend_q->pq_mask;
 
 	head = pend_q->head;
 	nb_allowed = pending_queue_free_cnt(head, pend_q->tail, pq_mask);
@@ -337,9 +353,10 @@ cn9k_cpt_crypto_adapter_ev_mdata_set(struct rte_cryptodev *dev __rte_unused,
 
 	/* Prepare w2 */
 	rsp_info = &ec_mdata->response_info;
-	w2 = CNXK_CPT_INST_W2(
-		(RTE_EVENT_TYPE_CRYPTODEV << 28) | rsp_info->flow_id,
-		rsp_info->sched_type, rsp_info->queue_id, 0);
+	w2 = CNXK_CPT_INST_W2((RTE_EVENT_TYPE_CRYPTODEV << 28) |
+				      (rsp_info->sub_event_type << 20) |
+				      rsp_info->flow_id,
+			      rsp_info->sched_type, rsp_info->queue_id, 0);
 
 	/* Set meta according to session type */
 	if (op_type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) {
@@ -402,10 +419,10 @@ cn9k_ca_meta_info_extract(struct rte_crypto_op *op,
 			uint8_t cdev_id;
 			uint16_t qp_id;
 
+			if (unlikely(op->private_data_offset == 0))
+				return -EINVAL;
 			ec_mdata = (union rte_event_crypto_metadata *)
 				((uint8_t *)op + op->private_data_offset);
-			if (!ec_mdata)
-				return -EINVAL;
 			rsp_info = &ec_mdata->response_info;
 			cdev_id = ec_mdata->request_info.cdev_id;
 			qp_id = ec_mdata->request_info.queue_pair_id;
@@ -435,8 +452,10 @@ uint16_t
 cn9k_cpt_crypto_adapter_enqueue(uintptr_t base, struct rte_crypto_op *op)
 {
 	struct cpt_inflight_req *infl_req;
+	union cpt_fc_write_s fc;
 	struct cnxk_cpt_qp *qp;
 	struct cpt_inst_s inst;
+	uint64_t *fc_addr;
 	int ret;
 
 	ret = cn9k_ca_meta_info_extract(op, &qp, &inst);
@@ -470,7 +489,12 @@ cn9k_cpt_crypto_adapter_enqueue(uintptr_t base, struct rte_crypto_op *op)
 	inst.res_addr = (uint64_t)&infl_req->res;
 	inst.w3.u64 = CNXK_CPT_INST_W3(1, infl_req);
 
-	if (roc_cpt_is_iq_full(&qp->lf)) {
+	fc_addr = qp->lmtline.fc_addr;
+
+	const uint32_t fc_thresh = qp->lmtline.fc_thresh;
+
+	fc.u64[0] = __atomic_load_n(fc_addr, __ATOMIC_RELAXED);
+	if (unlikely(fc.s.qsize > fc_thresh)) {
 		rte_mempool_put(qp->ca.req_mp, infl_req);
 		rte_errno = EAGAIN;
 		return 0;
@@ -484,19 +508,77 @@ cn9k_cpt_crypto_adapter_enqueue(uintptr_t base, struct rte_crypto_op *op)
 	return 1;
 }
 
+static inline int
+ipsec_antireplay_check(struct cn9k_ipsec_sa *sa, uint32_t win_sz,
+		       struct roc_ie_on_inb_hdr *data)
+{
+	struct roc_ie_on_common_sa *common_sa;
+	struct roc_ie_on_inb_sa *in_sa;
+	struct roc_ie_on_sa_ctl *ctl;
+	uint32_t seql, seqh = 0;
+	uint64_t seq;
+	uint8_t esn;
+	int ret;
+
+	in_sa = &sa->in_sa;
+	common_sa = &in_sa->common_sa;
+	ctl = &common_sa->ctl;
+
+	esn = ctl->esn_en;
+	seql = rte_be_to_cpu_32(data->seql);
+
+	if (!esn) {
+		seq = (uint64_t)seql;
+	} else {
+		seqh = rte_be_to_cpu_32(data->seqh);
+		seq = ((uint64_t)seqh << 32) | seql;
+	}
+
+	if (unlikely(seq == 0))
+		return IPSEC_ANTI_REPLAY_FAILED;
+
+	ret = cnxk_on_anti_replay_check(seq, &sa->ar, win_sz);
+	if (esn && !ret) {
+		common_sa = &sa->in_sa.common_sa;
+		if (seq > common_sa->seq_t.u64)
+			common_sa->seq_t.u64 = seq;
+	}
+
+	return ret;
+}
+
 static inline void
 cn9k_cpt_sec_post_process(struct rte_crypto_op *cop,
 			  struct cpt_inflight_req *infl_req)
 {
 	struct rte_crypto_sym_op *sym_op = cop->sym;
 	struct rte_mbuf *m = sym_op->m_src;
+	struct cn9k_sec_session *priv;
+	struct cn9k_ipsec_sa *sa;
 	struct rte_ipv6_hdr *ip6;
 	struct rte_ipv4_hdr *ip;
 	uint16_t m_len = 0;
 	char *data;
 
 	if (infl_req->op_flags & CPT_OP_FLAGS_IPSEC_DIR_INBOUND) {
+
 		data = rte_pktmbuf_mtod(m, char *);
+		if (unlikely(infl_req->op_flags &
+			     CPT_OP_FLAGS_IPSEC_INB_REPLAY)) {
+			int ret;
+
+			priv = get_sec_session_private_data(
+				sym_op->sec_session);
+			sa = &priv->sa;
+
+			ret = ipsec_antireplay_check(
+				sa, sa->replay_win_sz,
+				(struct roc_ie_on_inb_hdr *)data);
+			if (unlikely(ret)) {
+				cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
+				return;
+			}
+		}
 
 		ip = (struct rte_ipv4_hdr *)(data + ROC_IE_ON_INB_RPTR_HDR);
 

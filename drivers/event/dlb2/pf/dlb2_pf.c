@@ -41,6 +41,8 @@
 #include "base/dlb2_resource.h"
 
 static const char *event_dlb2_pf_name = RTE_STR(EVDEV_DLB2_NAME_PMD);
+static unsigned int dlb2_qe_sa_pct = 1;
+static unsigned int dlb2_qid_sa_pct;
 
 static void
 dlb2_pf_low_level_io_init(void)
@@ -80,6 +82,27 @@ dlb2_pf_get_device_version(struct dlb2_hw_dev *handle,
 	return 0;
 }
 
+static void dlb2_pf_calc_arbiter_weights(u8 *weight,
+					 unsigned int pct)
+{
+	int val, i;
+
+	/* Largest possible weight (100% SA case): 32 */
+	val = (DLB2_MAX_WEIGHT + 1) / DLB2_NUM_ARB_WEIGHTS;
+
+	/* Scale val according to the starvation avoidance percentage */
+	val = (val * pct) / 100;
+	if (val == 0 && pct != 0)
+		val = 1;
+
+	/* Prio 7 always has weight 0xff */
+	weight[DLB2_NUM_ARB_WEIGHTS - 1] = DLB2_MAX_WEIGHT;
+
+	for (i = DLB2_NUM_ARB_WEIGHTS - 2; i >= 0; i--)
+		weight[i] = weight[i + 1] - val;
+}
+
+
 static void
 dlb2_pf_hardware_init(struct dlb2_hw_dev *handle)
 {
@@ -87,6 +110,27 @@ dlb2_pf_hardware_init(struct dlb2_hw_dev *handle)
 
 	dlb2_hw_enable_sparse_ldb_cq_mode(&dlb2_dev->hw);
 	dlb2_hw_enable_sparse_dir_cq_mode(&dlb2_dev->hw);
+
+	/* Configure arbitration weights for QE selection */
+	if (dlb2_qe_sa_pct <= 100) {
+		u8 weight[DLB2_NUM_ARB_WEIGHTS];
+
+		dlb2_pf_calc_arbiter_weights(weight,
+					     dlb2_qe_sa_pct);
+
+		dlb2_hw_set_qe_arbiter_weights(&dlb2_dev->hw, weight);
+	}
+
+	/* Configure arbitration weights for QID selection */
+	if (dlb2_qid_sa_pct <= 100) {
+		u8 weight[DLB2_NUM_ARB_WEIGHTS];
+
+		dlb2_pf_calc_arbiter_weights(weight,
+					     dlb2_qid_sa_pct);
+
+		dlb2_hw_set_qid_arbiter_weights(&dlb2_dev->hw, weight);
+	}
+
 }
 
 static int
@@ -578,6 +622,49 @@ dlb2_pf_get_dir_queue_depth(struct dlb2_hw_dev *handle,
 	return ret;
 }
 
+static int
+dlb2_pf_enable_cq_weight(struct dlb2_hw_dev *handle,
+			 struct dlb2_enable_cq_weight_args *args)
+{
+	struct dlb2_dev *dlb2_dev = (struct dlb2_dev *)handle->pf_dev;
+	struct dlb2_cmd_response response = {0};
+	int ret = 0;
+
+	DLB2_INFO(dev->dlb2_device, "Entering %s()\n", __func__);
+
+	ret = dlb2_hw_enable_cq_weight(&dlb2_dev->hw,
+				       handle->domain_id,
+				       args,
+				       &response,
+				       false,
+				       0);
+	args->response = response;
+
+	DLB2_INFO(dev->dlb2_device, "Exiting %s() with ret=%d\n",
+		  __func__, ret);
+
+	return ret;
+}
+
+static int
+dlb2_pf_set_cos_bandwidth(struct dlb2_hw_dev *handle,
+			  struct dlb2_set_cos_bw_args *args)
+{
+	struct dlb2_dev *dlb2_dev = (struct dlb2_dev *)handle->pf_dev;
+	int ret = 0;
+
+	DLB2_INFO(dev->dlb2_device, "Entering %s()\n", __func__);
+
+	ret = dlb2_hw_set_cos_bandwidth(&dlb2_dev->hw,
+					args->cos_id,
+					args->bandwidth);
+
+	DLB2_INFO(dev->dlb2_device, "Exiting %s() with ret=%d\n",
+		  __func__, ret);
+
+	return ret;
+}
+
 static void
 dlb2_pf_iface_fn_ptrs_init(void)
 {
@@ -602,6 +689,8 @@ dlb2_pf_iface_fn_ptrs_init(void)
 	dlb2_iface_get_sn_allocation = dlb2_pf_get_sn_allocation;
 	dlb2_iface_set_sn_allocation = dlb2_pf_set_sn_allocation;
 	dlb2_iface_get_sn_occupancy = dlb2_pf_get_sn_occupancy;
+	dlb2_iface_enable_cq_weight = dlb2_pf_enable_cq_weight;
+	dlb2_iface_set_cos_bw = dlb2_pf_set_cos_bandwidth;
 }
 
 /* PCI DEV HOOKS */
@@ -615,17 +704,21 @@ dlb2_eventdev_pci_init(struct rte_eventdev *eventdev)
 		.max_num_events = DLB2_MAX_NUM_LDB_CREDITS,
 		.num_dir_credits_override = -1,
 		.qid_depth_thresholds = { {0} },
-		.cos_id = DLB2_COS_DEFAULT,
 		.poll_interval = DLB2_POLL_INTERVAL_DEFAULT,
 		.sw_credit_quanta = DLB2_SW_CREDIT_QUANTA_DEFAULT,
 		.hw_credit_quanta = DLB2_SW_CREDIT_BATCH_SZ,
 		.default_depth_thresh = DLB2_DEPTH_THRESH_DEFAULT,
-		.max_cq_depth = DLB2_DEFAULT_CQ_DEPTH
+		.max_cq_depth = DLB2_DEFAULT_CQ_DEPTH,
+		.max_enq_depth = DLB2_MAX_ENQUEUE_DEPTH
 	};
 	struct dlb2_eventdev *dlb2;
+	int q;
 
 	DLB2_LOG_DBG("Enter with dev_id=%d socket_id=%d",
 		     eventdev->data->dev_id, eventdev->data->socket_id);
+
+	for (q = 0; q < DLB2_MAX_NUM_PORTS_ALL; q++)
+		dlb2_args.port_cos.cos_id[q] = DLB2_COS_DEFAULT;
 
 	dlb2_pf_iface_fn_ptrs_init();
 

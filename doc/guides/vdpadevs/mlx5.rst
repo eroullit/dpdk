@@ -7,8 +7,9 @@ MLX5 vDPA Driver
 ================
 
 The mlx5 vDPA (vhost data path acceleration) driver library
-(**librte_vdpa_mlx5**) provides support for **Mellanox ConnectX-6**,
-**Mellanox ConnectX-6 Dx** and **Mellanox BlueField** families of
+(**librte_vdpa_mlx5**) provides support for **NVIDIA ConnectX-6**,
+**NVIDIA ConnectX-6 Dx**, **NVIDIA ConnectX-6 Lx**, **NVIDIA ConnectX7**,
+**NVIDIA BlueField** and **NVIDIA BlueField-2** families of
 10/25/40/50/100/200 Gb/s adapters as well as their virtual functions (VF) in
 SR-IOV context.
 
@@ -23,11 +24,14 @@ and which PMDs can be combined with vDPA PMD.
 Supported NICs
 --------------
 
-* Mellanox\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 25G MCX621102AN-ADAT (2x25G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
-* Mellanox\ |reg| BlueField SmartNIC 25G MBF1M332A-ASCAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 25G MCX621102AN-ADAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Lx EN 25G MCX631102AN-ADAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-7 200G CX713106AE-HEA_QP1_Ax (2x200G)
+* NVIDIA\ |reg| BlueField SmartNIC 25G MBF1M332A-ASCAT (2x25G)
+* NVIDIA\ |reg| BlueField |reg|-2 SmartNIC MT41686 - MBF2H332A-AEEOT_A1 (2x25G)
 
 Prerequisites
 -------------
@@ -78,6 +82,18 @@ for an additional list of options shared with other mlx5 drivers.
   CPU core number to set polling thread affinity to, default to control plane
   cpu.
 
+- ``max_conf_threads`` parameter [int]
+
+  Allow the driver to use internal threads to obtain fast configuration.
+  All the threads will be open on the same core of the event completion queue scheduling thread.
+
+  - 0, default, don't use internal threads for configuration.
+
+  - 1 - 256, number of internal threads in addition to the caller thread (8 is suggested).
+    This value, if not 0, should be the same for all the devices;
+    the first probing will take it with the ``event_core``
+    for all the multi-thread configurations in the driver.
+
 - ``hw_latency_mode`` parameter [int]
 
   The completion queue moderation mode:
@@ -101,6 +117,20 @@ for an additional list of options shared with other mlx5 drivers.
 
   - 0, HW default.
 
+- ``queue_size`` parameter [int]
+
+  - 1 - 1024, Virtio queue depth for pre-creating queue resource to speed up
+    first time queue creation. Set it together with ``queues`` parameter.
+
+  - 0, default value, no pre-create virtq resource.
+
+- ``queues`` parameter [int]
+
+  - 1 - 128, Maximum number of virtio queue pair (including 1 Rx queue and 1 Tx queue)
+    for pre-creating queue resource to speed up first time queue creation.
+    Set it together with ``queue_size`` parameter.
+
+  - 0, default value, no pre-create virtq resource.
 
 Error handling
 ^^^^^^^^^^^^^^

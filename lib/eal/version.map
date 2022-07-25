@@ -1,4 +1,4 @@
-DPDK_22 {
+DPDK_23 {
 	global:
 
 	__rte_panic;
@@ -26,6 +26,7 @@ DPDK_22 {
 	rte_delay_us;
 	rte_delay_us_block;
 	rte_delay_us_callback_register;
+	rte_delay_us_sleep;
 	rte_dev_is_probed;
 	rte_dev_probe;
 	rte_dev_remove;
@@ -109,8 +110,10 @@ DPDK_22 {
 	rte_hexdump;
 	rte_hypervisor_get;
 	rte_hypervisor_get_name; # WINDOWS_NO_EXPORT
+	rte_intr_ack;
 	rte_intr_callback_register;
 	rte_intr_callback_unregister;
+	rte_intr_callback_unregister_pending;
 	rte_intr_disable;
 	rte_intr_enable;
 	rte_keepalive_create; # WINDOWS_NO_EXPORT
@@ -122,13 +125,16 @@ DPDK_22 {
 	rte_lcore_callback_register;
 	rte_lcore_callback_unregister;
 	rte_lcore_count;
+	rte_lcore_cpuset;
 	rte_lcore_dump;
 	rte_lcore_has_role;
 	rte_lcore_index;
 	rte_lcore_is_enabled;
 	rte_lcore_iterate;
+	rte_lcore_to_cpu_id;
 	rte_lcore_to_socket_id;
 	rte_log;
+	rte_log_can_log;
 	rte_log_cur_msg_loglevel;
 	rte_log_cur_msg_logtype;
 	rte_log_dump;
@@ -260,6 +266,7 @@ DPDK_22 {
 	rte_strsplit;
 	rte_sys_gettid;
 	rte_thread_get_affinity;
+	rte_thread_is_intr;
 	rte_thread_register;
 	rte_thread_set_affinity;
 	rte_thread_setname;
@@ -309,7 +316,6 @@ EXPERIMENTAL {
 	rte_dev_iterator_next;
 
 	# added in 18.11
-	rte_delay_us_sleep;
 	rte_dev_event_callback_process;
 	rte_dev_hotplug_handle_disable;
 	rte_dev_hotplug_handle_enable;
@@ -317,15 +323,6 @@ EXPERIMENTAL {
 	# added in 19.05
 	rte_dev_dma_map;
 	rte_dev_dma_unmap;
-	rte_intr_callback_unregister_pending;
-
-	# added in 19.08
-	rte_intr_ack;
-	rte_lcore_cpuset;
-	rte_lcore_to_cpu_id;
-
-	# added in 20.02
-	rte_thread_is_intr;
 
 	# added in 20.05
 	__rte_eal_trace_alarm_cancel;
@@ -364,7 +361,6 @@ EXPERIMENTAL {
 	__rte_trace_point_register;
 	per_lcore_trace_mem;
 	per_lcore_trace_point_sz;
-	rte_log_can_log;
 	rte_thread_getname; # WINDOWS_NO_EXPORT
 	rte_trace_dump; # WINDOWS_NO_EXPORT
 	rte_trace_is_enabled; # WINDOWS_NO_EXPORT
@@ -422,6 +418,7 @@ EXPERIMENTAL {
 	rte_intr_type_set;
 
 	# added in 22.07
+	rte_drand;
 	rte_thread_get_affinity_by_id;
 	rte_thread_get_priority;
 	rte_thread_self;

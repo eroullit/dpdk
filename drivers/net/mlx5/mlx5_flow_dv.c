@@ -93,27 +93,6 @@ static int
 flow_dv_jump_tbl_resource_release(struct rte_eth_dev *dev,
 				  uint32_t rix_jump);
 
-static int16_t
-flow_dv_get_esw_manager_vport_id(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_common_device *cdev = priv->sh->cdev;
-
-	if (cdev->config.hca_attr.esw_mgr_vport_id_valid)
-		return (int16_t)cdev->config.hca_attr.esw_mgr_vport_id;
-
-	if (priv->pci_dev == NULL)
-		return 0;
-	switch (priv->pci_dev->id.device_id) {
-	case PCI_DEVICE_ID_MELLANOX_CONNECTX5BF:
-	case PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF:
-	case PCI_DEVICE_ID_MELLANOX_CONNECTX7BF:
-		return (int16_t)0xfffe;
-	default:
-		return 0;
-	}
-}
-
 /**
  * Initialize flow attributes structure according to flow items' types.
  *
@@ -1450,6 +1429,9 @@ mlx5_flow_item_field_width(struct rte_eth_dev *dev,
 	case RTE_FLOW_FIELD_POINTER:
 	case RTE_FLOW_FIELD_VALUE:
 		return inherit < 0 ? 0 : inherit;
+	case RTE_FLOW_FIELD_IPV4_ECN:
+	case RTE_FLOW_FIELD_IPV6_ECN:
+		return 2;
 	default:
 		MLX5_ASSERT(false);
 	}
@@ -1826,6 +1808,13 @@ mlx5_flow_field_id_to_modify_info
 				mask[idx] = rte_cpu_to_be_32((meta_mask >>
 					(meta_count - width)) & meta_mask);
 		}
+		break;
+	case RTE_FLOW_FIELD_IPV4_ECN:
+	case RTE_FLOW_FIELD_IPV6_ECN:
+		info[idx] = (struct field_modify_info){1, 0,
+					MLX5_MODI_OUT_IP_ECN};
+		if (mask)
+			mask[idx] = 0x3 >> (2 - width);
 		break;
 	case RTE_FLOW_FIELD_POINTER:
 	case RTE_FLOW_FIELD_VALUE:
@@ -2207,6 +2196,80 @@ flow_dv_validate_item_port_id(struct rte_eth_dev *dev,
 					  RTE_FLOW_ERROR_TYPE_ITEM_SPEC, spec,
 					  "cannot match on a port from a"
 					  " different E-Switch");
+	return 0;
+}
+
+/**
+ * Validate represented port item.
+ *
+ * @param[in] dev
+ *   Pointer to the rte_eth_dev structure.
+ * @param[in] item
+ *   Item specification.
+ * @param[in] attr
+ *   Attributes of flow that includes this item.
+ * @param[in] item_flags
+ *   Bit-fields that holds the items detected until now.
+ * @param[out] error
+ *   Pointer to error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+flow_dv_validate_item_represented_port(struct rte_eth_dev *dev,
+				       const struct rte_flow_item *item,
+				       const struct rte_flow_attr *attr,
+				       uint64_t item_flags,
+				       struct rte_flow_error *error)
+{
+	const struct rte_flow_item_ethdev *spec = item->spec;
+	const struct rte_flow_item_ethdev *mask = item->mask;
+	const struct rte_flow_item_ethdev switch_mask = {
+			.port_id = UINT16_MAX,
+	};
+	struct mlx5_priv *esw_priv;
+	struct mlx5_priv *dev_priv;
+	int ret;
+
+	if (!attr->transfer)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, NULL,
+					  "match on port id is valid only when transfer flag is enabled");
+	if (item_flags & MLX5_FLOW_ITEM_REPRESENTED_PORT)
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "multiple source ports are not supported");
+	if (!mask)
+		mask = &switch_mask;
+	if (mask->port_id != UINT16_MAX)
+		return rte_flow_error_set(error, ENOTSUP,
+					   RTE_FLOW_ERROR_TYPE_ITEM_MASK, mask,
+					   "no support for partial mask on \"id\" field");
+	ret = mlx5_flow_item_acceptable
+				(item, (const uint8_t *)mask,
+				 (const uint8_t *)&rte_flow_item_ethdev_mask,
+				 sizeof(struct rte_flow_item_ethdev),
+				 MLX5_ITEM_RANGE_NOT_ACCEPTED, error);
+	if (ret)
+		return ret;
+	if (!spec || spec->port_id == UINT16_MAX)
+		return 0;
+	esw_priv = mlx5_port_to_eswitch_info(spec->port_id, false);
+	if (!esw_priv)
+		return rte_flow_error_set(error, rte_errno,
+					  RTE_FLOW_ERROR_TYPE_ITEM_SPEC, spec,
+					  "failed to obtain E-Switch info for port");
+	dev_priv = mlx5_dev_to_eswitch_info(dev);
+	if (!dev_priv)
+		return rte_flow_error_set(error, rte_errno,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL,
+					  "failed to obtain E-Switch info");
+	if (esw_priv->domain_id != dev_priv->domain_id)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM_SPEC, spec,
+					  "cannot match on a port from a different E-Switch");
 	return 0;
 }
 
@@ -4826,6 +4889,7 @@ flow_dv_validate_action_modify_field(struct rte_eth_dev *dev,
 	int ret = 0;
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_sh_config *config = &priv->sh->config;
+	struct mlx5_hca_attr *hca_attr = &priv->sh->cdev->config.hca_attr;
 	const struct rte_flow_action_modify_field *action_modify_field =
 		action->conf;
 	uint32_t dst_width = mlx5_flow_item_field_width(dev,
@@ -4953,6 +5017,15 @@ flow_dv_validate_action_modify_field(struct rte_eth_dev *dev,
 				RTE_FLOW_ERROR_TYPE_ACTION, action,
 				"add and sub operations"
 				" are not supported");
+	if (action_modify_field->dst.field == RTE_FLOW_FIELD_IPV4_ECN ||
+	    action_modify_field->src.field == RTE_FLOW_FIELD_IPV4_ECN ||
+	    action_modify_field->dst.field == RTE_FLOW_FIELD_IPV6_ECN ||
+	    action_modify_field->src.field == RTE_FLOW_FIELD_IPV6_ECN)
+		if (!hca_attr->modify_outer_ip_ecn &&
+		    !attr->transfer && !attr->group)
+			return rte_flow_error_set(error, ENOTSUP,
+				RTE_FLOW_ERROR_TYPE_ACTION, action,
+				"modifications of the ECN for current firmware is not supported");
 	return (action_modify_field->width / 32) +
 	       !!(action_modify_field->width % 32);
 }
@@ -5234,21 +5307,12 @@ mlx5_flow_validate_action_meter(struct rte_eth_dev *dev,
 			 */
 			struct mlx5_priv *policy_port_priv =
 					mtr_policy->dev->data->dev_private;
-			int32_t flow_src_port = priv->representor_id;
+			uint16_t flow_src_port = priv->representor_id;
 
 			if (port_id_item) {
-				const struct rte_flow_item_port_id *spec =
-							port_id_item->spec;
-				struct mlx5_priv *port_priv =
-					mlx5_port_to_eswitch_info(spec->id,
-								  false);
-				if (!port_priv)
-					return rte_flow_error_set(error,
-						rte_errno,
-						RTE_FLOW_ERROR_TYPE_ITEM_SPEC,
-						spec,
-						"Failed to get port info.");
-				flow_src_port = port_priv->representor_id;
+				if (mlx5_flow_get_item_vport_id(dev, port_id_item,
+								&flow_src_port, error))
+					return -rte_errno;
 			}
 			if (flow_src_port != policy_port_priv->representor_id)
 				return rte_flow_error_set(error,
@@ -6715,6 +6779,12 @@ flow_dv_validate_item_integrity(struct rte_eth_dev *dev,
 					  RTE_FLOW_ERROR_TYPE_ITEM,
 					  integrity_item,
 					  "unsupported integrity filter");
+	if ((mask->l3_ok & !spec->l3_ok) || (mask->l4_ok & !spec->l4_ok) ||
+		(mask->ipv4_csum_ok & !spec->ipv4_csum_ok) ||
+		(mask->l4_csum_ok & !spec->l4_csum_ok))
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM,
+					  NULL, "negative integrity flow is not supported");
 	if (spec->level > 1) {
 		if (pattern_flags & MLX5_FLOW_ITEM_INNER_INTEGRITY)
 			return rte_flow_error_set
@@ -6971,6 +7041,13 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 				return ret;
 			last_item = MLX5_FLOW_ITEM_PORT_ID;
 			port_id_item = items;
+			break;
+		case RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT:
+			ret = flow_dv_validate_item_represented_port
+					(dev, items, attr, item_flags, error);
+			if (ret < 0)
+				return ret;
+			last_item = MLX5_FLOW_ITEM_REPRESENTED_PORT;
 			break;
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			ret = mlx5_flow_validate_item_eth(items, item_flags,
@@ -9940,7 +10017,7 @@ flow_dv_translate_item_port_id(struct rte_eth_dev *dev, void *matcher,
 
 	if (pid_v && pid_v->id == MLX5_PORT_ESW_MGR) {
 		flow_dv_translate_item_source_vport(matcher, key,
-			flow_dv_get_esw_manager_vport_id(dev), 0xffff);
+			mlx5_flow_get_esw_manager_vport_id(dev), 0xffff);
 		return 0;
 	}
 	mask = pid_m ? pid_m->id : 0xffff;
@@ -9960,6 +10037,77 @@ flow_dv_translate_item_port_id(struct rte_eth_dev *dev, void *matcher,
 		 * save the extra vport match.
 		 */
 		if (mask == 0xffff && priv->vport_id == 0xffff &&
+		    priv->pf_bond < 0 && attr->transfer)
+			flow_dv_translate_item_source_vport
+				(matcher, key, priv->vport_id, mask);
+		/*
+		 * We should always set the vport metadata register,
+		 * otherwise the SW steering library can drop
+		 * the rule if wire vport metadata value is not zero,
+		 * it depends on kernel configuration.
+		 */
+		flow_dv_translate_item_meta_vport(matcher, key,
+						  priv->vport_meta_tag,
+						  priv->vport_meta_mask);
+	} else {
+		flow_dv_translate_item_source_vport(matcher, key,
+						    priv->vport_id, mask);
+	}
+	return 0;
+}
+
+/**
+ * Translate represented port item to eswitch match on port id.
+ *
+ * @param[in] dev
+ *   The devich to configure through.
+ * @param[in, out] matcher
+ *   Flow matcher.
+ * @param[in, out] key
+ *   Flow matcher value.
+ * @param[in] item
+ *   Flow pattern to translate.
+ * @param[in]
+ *   Flow attributes.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise.
+ */
+static int
+flow_dv_translate_item_represented_port(struct rte_eth_dev *dev, void *matcher,
+					void *key,
+					const struct rte_flow_item *item,
+					const struct rte_flow_attr *attr)
+{
+	const struct rte_flow_item_ethdev *pid_m = item ? item->mask : NULL;
+	const struct rte_flow_item_ethdev *pid_v = item ? item->spec : NULL;
+	struct mlx5_priv *priv;
+	uint16_t mask, id;
+
+	if (!pid_m && !pid_v)
+		return 0;
+	if (pid_v && pid_v->port_id == UINT16_MAX) {
+		flow_dv_translate_item_source_vport(matcher, key,
+			mlx5_flow_get_esw_manager_vport_id(dev), UINT16_MAX);
+		return 0;
+	}
+	mask = pid_m ? pid_m->port_id : UINT16_MAX;
+	id = pid_v ? pid_v->port_id : dev->data->port_id;
+	priv = mlx5_port_to_eswitch_info(id, item == NULL);
+	if (!priv)
+		return -rte_errno;
+	/*
+	 * Translate to vport field or to metadata, depending on mode.
+	 * Kernel can use either misc.source_port or half of C0 metadata
+	 * register.
+	 */
+	if (priv->vport_meta_mask) {
+		/*
+		 * Provide the hint for SW steering library
+		 * to insert the flow into ingress domain and
+		 * save the extra vport match.
+		 */
+		if (mask == UINT16_MAX && priv->vport_id == UINT16_MAX &&
 		    priv->pf_bond < 0 && attr->transfer)
 			flow_dv_translate_item_source_vport
 				(matcher, key, priv->vport_id, mask);
@@ -13615,6 +13763,11 @@ flow_dv_translate(struct rte_eth_dev *dev,
 				(dev, match_mask, match_value, items, attr);
 			last_item = MLX5_FLOW_ITEM_PORT_ID;
 			break;
+		case RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT:
+			flow_dv_translate_item_represented_port
+				(dev, match_mask, match_value, items, attr);
+			last_item = MLX5_FLOW_ITEM_REPRESENTED_PORT;
+			break;
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			flow_dv_translate_item_eth(match_mask, match_value,
 						   items, tunnel,
@@ -13873,7 +14026,8 @@ flow_dv_translate(struct rte_eth_dev *dev,
 	 * In both cases the source port is set according the current port
 	 * in use.
 	 */
-	if (!(item_flags & MLX5_FLOW_ITEM_PORT_ID) && priv->sh->esw_mode &&
+	if (!(item_flags & MLX5_FLOW_ITEM_PORT_ID) &&
+	    !(item_flags & MLX5_FLOW_ITEM_REPRESENTED_PORT) && priv->sh->esw_mode &&
 	    !(attr->egress && !attr->transfer)) {
 		if (flow_dv_translate_item_port_id(dev, match_mask,
 						   match_value, NULL, attr))
@@ -15693,6 +15847,8 @@ __flow_dv_create_mtr_yellow_action(struct rte_eth_dev *dev,
  *   Meter policy struct.
  * @param[in] action
  *   Action specification used to create meter actions.
+ * @param[in] attr
+ *   Pointer to the flow attributes.
  * @param[out] error
  *   Perform verbose error reporting if not NULL. Initialized in case of
  *   error only.
@@ -15704,6 +15860,7 @@ static int
 __flow_dv_create_domain_policy_acts(struct rte_eth_dev *dev,
 			struct mlx5_flow_meter_policy *mtr_policy,
 			const struct rte_flow_action *actions[RTE_COLORS],
+			struct rte_flow_attr *attr,
 			enum mlx5_meter_domain domain,
 			struct rte_mtr_error *error)
 {
@@ -16000,6 +16157,28 @@ __flow_dv_create_domain_policy_acts(struct rte_eth_dev *dev,
 				action_flags |= MLX5_FLOW_ACTION_JUMP;
 				break;
 			}
+			case RTE_FLOW_ACTION_TYPE_MODIFY_FIELD:
+			{
+				if (i >= MLX5_MTR_RTE_COLORS)
+					return -rte_mtr_error_set(error,
+					  ENOTSUP,
+					  RTE_MTR_ERROR_TYPE_METER_POLICY,
+					  NULL,
+					  "cannot create policy modify field for this color");
+				if (flow_dv_convert_action_modify_field
+					(dev, mhdr_res, act, attr, &flow_err))
+					return -rte_mtr_error_set(error,
+					ENOTSUP,
+					RTE_MTR_ERROR_TYPE_METER_POLICY,
+					NULL, "cannot setup policy modify field action");
+				if (!mhdr_res->actions_num)
+					return -rte_mtr_error_set(error,
+					ENOTSUP,
+					RTE_MTR_ERROR_TYPE_METER_POLICY,
+					NULL, "cannot find policy modify field action");
+				action_flags |= MLX5_FLOW_ACTION_MODIFY_FIELD;
+				break;
+			}
 			/*
 			 * No need to check meter hierarchy for R colors
 			 * here since it is done in the validation stage.
@@ -16072,7 +16251,8 @@ __flow_dv_create_domain_policy_acts(struct rte_eth_dev *dev,
 					  RTE_MTR_ERROR_TYPE_METER_POLICY,
 					  NULL, "action type not supported");
 			}
-			if (action_flags & MLX5_FLOW_ACTION_SET_TAG) {
+			if ((action_flags & MLX5_FLOW_ACTION_SET_TAG) ||
+			    (action_flags & MLX5_FLOW_ACTION_MODIFY_FIELD)) {
 				/* create modify action if needed. */
 				dev_flow.dv.group = 1;
 				if (flow_dv_modify_hdr_resource_register
@@ -16080,8 +16260,7 @@ __flow_dv_create_domain_policy_acts(struct rte_eth_dev *dev,
 					return -rte_mtr_error_set(error,
 						ENOTSUP,
 						RTE_MTR_ERROR_TYPE_METER_POLICY,
-						NULL, "cannot register policy "
-						"set tag action");
+						NULL, "cannot register policy set tag/modify field action");
 				act_cnt->modify_hdr =
 					dev_flow.handle->dvh.modify_hdr;
 			}
@@ -16101,6 +16280,8 @@ __flow_dv_create_domain_policy_acts(struct rte_eth_dev *dev,
  *   Meter policy struct.
  * @param[in] action
  *   Action specification used to create meter actions.
+ * @param[in] attr
+ *   Pointer to the flow attributes.
  * @param[out] error
  *   Perform verbose error reporting if not NULL. Initialized in case of
  *   error only.
@@ -16112,6 +16293,7 @@ static int
 flow_dv_create_mtr_policy_acts(struct rte_eth_dev *dev,
 		      struct mlx5_flow_meter_policy *mtr_policy,
 		      const struct rte_flow_action *actions[RTE_COLORS],
+		      struct rte_flow_attr *attr,
 		      struct rte_mtr_error *error)
 {
 	int ret, i;
@@ -16123,7 +16305,7 @@ flow_dv_create_mtr_policy_acts(struct rte_eth_dev *dev,
 			MLX5_MTR_SUB_POLICY_NUM_MASK;
 		if (sub_policy_num) {
 			ret = __flow_dv_create_domain_policy_acts(dev,
-				mtr_policy, actions,
+				mtr_policy, actions, attr,
 				(enum mlx5_meter_domain)i, error);
 			/* Cleaning resource is done in the caller level. */
 			if (ret)
@@ -18374,6 +18556,19 @@ flow_dv_validate_mtr_policy_acts(struct rte_eth_dev *dev,
 				action_flags[i] |=
 				MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY;
 				next_mtr = mtr;
+				break;
+			case RTE_FLOW_ACTION_TYPE_MODIFY_FIELD:
+				ret = flow_dv_validate_action_modify_field(dev,
+					action_flags[i], act, attr, &flow_err);
+				if (ret < 0)
+					return -rte_mtr_error_set(error,
+					  ENOTSUP,
+					  RTE_MTR_ERROR_TYPE_METER_POLICY,
+					  NULL, flow_err.message ?
+					  flow_err.message :
+					  "Modify field action validate check fail");
+				++actions_n;
+				action_flags[i] |= MLX5_FLOW_ACTION_MODIFY_FIELD;
 				break;
 			default:
 				return -rte_mtr_error_set(error, ENOTSUP,

@@ -125,6 +125,7 @@ cnxk_sso_rxq_enable(struct cnxk_eth_dev *cnxk_eth_dev, uint16_t rq_id,
 {
 	struct roc_nix *nix = &cnxk_eth_dev->nix;
 	struct roc_nix_rq *rq;
+	uint16_t wqe_skip;
 	int rc;
 
 	rq = &cnxk_eth_dev->rqs[rq_id];
@@ -132,7 +133,9 @@ cnxk_sso_rxq_enable(struct cnxk_eth_dev *cnxk_eth_dev, uint16_t rq_id,
 	rq->tt = ev->sched_type;
 	rq->hwgrp = ev->queue_id;
 	rq->flow_tag_width = 20;
-	rq->wqe_skip = 1;
+	wqe_skip = RTE_ALIGN_CEIL(sizeof(struct rte_mbuf), ROC_CACHE_LINE_SZ);
+	wqe_skip = wqe_skip / ROC_CACHE_LINE_SZ;
+	rq->wqe_skip = wqe_skip;
 	rq->tag_mask = (port_id & 0xF) << 20;
 	rq->tag_mask |= (((port_id >> 4) & 0xF) | (RTE_EVENT_TYPE_ETHDEV << 4))
 			<< 24;
@@ -247,9 +250,11 @@ cnxk_sso_rx_adapter_queue_add(
 				rc |= roc_nix_rx_drop_re_set(&cnxk_eth_dev->nix,
 							     false);
 		}
-		rox_nix_fc_npa_bp_cfg(&cnxk_eth_dev->nix,
-				      rxq_sp->qconf.mp->pool_id, true,
-				      dev->force_ena_bp);
+
+		if (rxq_sp->tx_pause)
+			roc_nix_fc_npa_bp_cfg(&cnxk_eth_dev->nix,
+					      rxq_sp->qconf.mp->pool_id, true,
+					      dev->force_ena_bp, rxq_sp->tc);
 		cnxk_eth_dev->nb_rxq_sso++;
 	}
 
@@ -290,9 +295,9 @@ cnxk_sso_rx_adapter_queue_del(const struct rte_eventdev *event_dev,
 		rxq_sp = cnxk_eth_rxq_to_sp(
 			eth_dev->data->rx_queues[rx_queue_id]);
 		rc = cnxk_sso_rxq_disable(cnxk_eth_dev, (uint16_t)rx_queue_id);
-		rox_nix_fc_npa_bp_cfg(&cnxk_eth_dev->nix,
+		roc_nix_fc_npa_bp_cfg(&cnxk_eth_dev->nix,
 				      rxq_sp->qconf.mp->pool_id, false,
-				      dev->force_ena_bp);
+				      dev->force_ena_bp, 0);
 		cnxk_eth_dev->nb_rxq_sso--;
 
 		/* Enable drop_re if it was disabled earlier */
@@ -585,6 +590,40 @@ cnxk_sso_tx_adapter_queue_del(const struct rte_eventdev *event_dev,
 		plt_err("Failed to clear Tx adapter config port=%d, q=%d",
 			eth_dev->data->port_id, tx_queue_id);
 		return ret;
+	}
+
+	return 0;
+}
+
+int
+cnxk_sso_tx_adapter_start(uint8_t id, const struct rte_eventdev *event_dev)
+{
+	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+
+	dev->tx_adptr_active_mask |= (1 << id);
+
+	return 0;
+}
+
+int
+cnxk_sso_tx_adapter_stop(uint8_t id, const struct rte_eventdev *event_dev)
+{
+	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+
+	dev->tx_adptr_active_mask &= ~(1 << id);
+
+	return 0;
+}
+
+int
+cnxk_sso_tx_adapter_free(uint8_t id __rte_unused,
+			 const struct rte_eventdev *event_dev)
+{
+	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
+
+	if (dev->tx_adptr_data_sz && dev->tx_adptr_active_mask == 0) {
+		dev->tx_adptr_data_sz = 0;
+		free(dev->tx_adptr_data);
 	}
 
 	return 0;

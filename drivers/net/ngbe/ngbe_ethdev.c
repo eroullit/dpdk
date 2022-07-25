@@ -164,6 +164,8 @@ static const struct rte_ngbe_xstats_name_off rte_ngbe_stats_strings[] = {
 	HW_XSTAT(rx_management_packets),
 	HW_XSTAT(tx_management_packets),
 	HW_XSTAT(rx_management_dropped),
+	HW_XSTAT(rx_dma_drop),
+	HW_XSTAT(tx_secdrp_packets),
 
 	/* Basic Error */
 	HW_XSTAT(rx_crc_errors),
@@ -178,6 +180,12 @@ static const struct rte_ngbe_xstats_name_off rte_ngbe_stats_strings[] = {
 	HW_XSTAT(rx_l3_l4_xsum_error),
 	HW_XSTAT(mac_local_errors),
 	HW_XSTAT(mac_remote_errors),
+
+	/* PB Stats */
+	HW_XSTAT(rx_up_dropped),
+	HW_XSTAT(rdb_pkt_cnt),
+	HW_XSTAT(rdb_repli_cnt),
+	HW_XSTAT(rdb_drp_cnt),
 
 	/* MACSEC */
 	HW_XSTAT(tx_macsec_pkts_untagged),
@@ -355,13 +363,26 @@ eth_ngbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 	eth_dev->data->dev_flags |= RTE_ETH_DEV_AUTOFILL_QUEUE_XSTATS;
 
+	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
+
 	/* Vendor and Device ID need to be set before init of shared code */
 	hw->back = pci_dev;
 	hw->device_id = pci_dev->id.device_id;
 	hw->vendor_id = pci_dev->id.vendor_id;
-	hw->sub_system_id = pci_dev->id.subsystem_device_id;
+	if (pci_dev->id.subsystem_vendor_id == PCI_VENDOR_ID_WANGXUN) {
+		hw->sub_system_id = pci_dev->id.subsystem_device_id;
+	} else {
+		u32 ssid;
+
+		ssid = ngbe_flash_read_dword(hw, 0xFFFDC);
+		if (ssid == 0x1) {
+			PMD_INIT_LOG(ERR,
+				"Read of internal subsystem device id failed\n");
+			return -ENODEV;
+		}
+		hw->sub_system_id = (u16)ssid >> 8 | (u16)ssid << 8;
+	}
 	ngbe_map_device_id(hw);
-	hw->hw_addr = (void *)pci_dev->mem_resource[0].addr;
 
 	/* Reserve memory for interrupt status block */
 	mz = rte_eth_dma_zone_reserve(eth_dev, "ngbe_driver", -1,

@@ -41,9 +41,9 @@ enum {
 struct fips_test_vector vec;
 struct fips_test_interim_info info;
 
-#ifdef RTE_HAS_JANSSON
+#ifdef USE_JANSSON
 struct fips_test_json_info json_info;
-#endif /* RTE_HAS_JANSSON */
+#endif /* USE_JANSSON */
 
 struct cryptodev_fips_validate_env {
 	const char *req_path;
@@ -172,10 +172,10 @@ cryptodev_fips_validate_app_uninit(void)
 static int
 fips_test_one_file(void);
 
-#ifdef RTE_HAS_JANSSON
+#ifdef USE_JANSSON
 static int
 fips_test_one_json_file(void);
-#endif /* RTE_HAS_JANSSON */
+#endif /* USE_JANSSON */
 
 static int
 parse_cryptodev_arg(char *arg)
@@ -436,16 +436,16 @@ main(int argc, char *argv[])
 			goto exit;
 		}
 
-#ifdef RTE_HAS_JANSSON
+#ifdef USE_JANSSON
 		if (info.file_type == FIPS_TYPE_JSON) {
 			ret = fips_test_one_json_file();
 			json_decref(json_info.json_root);
 		}  else {
 			ret = fips_test_one_file();
 		}
-#else /* RTE_HAS_JANSSON */
+#else /* USE_JANSSON */
 		ret = fips_test_one_file();
-#endif /* RTE_HAS_JANSSON */
+#endif /* USE_JANSSON */
 
 		if (ret < 0) {
 			RTE_LOG(ERR, USER1, "Error %i: Failed test %s\n",
@@ -501,16 +501,16 @@ main(int argc, char *argv[])
 				break;
 			}
 
-#ifdef RTE_HAS_JANSSON
+#ifdef USE_JANSSON
 			if (info.file_type == FIPS_TYPE_JSON) {
 				ret = fips_test_one_json_file();
 				json_decref(json_info.json_root);
 			} else {
 				ret = fips_test_one_file();
 			}
-#else /* RTE_HAS_JANSSON */
+#else /* USE_JANSSON */
 			ret = fips_test_one_file();
-#endif /* RTE_HAS_JANSSON */
+#endif /* USE_JANSSON */
 
 			if (ret < 0) {
 				RTE_LOG(ERR, USER1, "Error %i: Failed test %s\n",
@@ -1693,19 +1693,26 @@ fips_mct_sha_test(void)
 #define SHA_EXTERN_ITER	100
 #define SHA_INTERN_ITER	1000
 #define SHA_MD_BLOCK	3
-	struct fips_val val = {NULL, 0}, md[SHA_MD_BLOCK];
+	/* val[0] is op result and other value is for parse_writeback callback */
+	struct fips_val val[2] = {{NULL, 0},};
+	struct fips_val  md[SHA_MD_BLOCK], msg;
 	char temp[MAX_DIGEST_SIZE*2];
 	int ret;
 	uint32_t i, j;
 
+	msg.len = SHA_MD_BLOCK * vec.cipher_auth.digest.len;
+	msg.val = calloc(1, msg.len);
+	memcpy(vec.cipher_auth.digest.val, vec.pt.val, vec.cipher_auth.digest.len);
 	for (i = 0; i < SHA_MD_BLOCK; i++)
 		md[i].val = rte_malloc(NULL, (MAX_DIGEST_SIZE*2), 0);
 
 	rte_free(vec.pt.val);
 	vec.pt.val = rte_malloc(NULL, (MAX_DIGEST_SIZE*SHA_MD_BLOCK), 0);
 
-	fips_test_write_one_case();
-	fprintf(info.fp_wr, "\n");
+	if (info.file_type != FIPS_TYPE_JSON) {
+		fips_test_write_one_case();
+		fprintf(info.fp_wr, "\n");
+	}
 
 	for (j = 0; j < SHA_EXTERN_ITER; j++) {
 
@@ -1718,6 +1725,9 @@ fips_mct_sha_test(void)
 		memcpy(md[2].val, vec.cipher_auth.digest.val,
 			vec.cipher_auth.digest.len);
 		md[2].len = vec.cipher_auth.digest.len;
+
+		for (i = 0; i < SHA_MD_BLOCK; i++)
+			memcpy(&msg.val[i * md[i].len], md[i].val, md[i].len);
 
 		for (i = 0; i < (SHA_INTERN_ITER); i++) {
 
@@ -1742,7 +1752,7 @@ fips_mct_sha_test(void)
 				return ret;
 			}
 
-			ret = get_writeback_data(&val);
+			ret = get_writeback_data(&val[0]);
 			if (ret < 0)
 				return ret;
 
@@ -1751,7 +1761,7 @@ fips_mct_sha_test(void)
 			memcpy(md[1].val, md[2].val, md[2].len);
 			md[1].len = md[2].len;
 
-			memcpy(md[2].val, (val.val + vec.pt.len),
+			memcpy(md[2].val, (val[0].val + vec.pt.len),
 				vec.cipher_auth.digest.len);
 			md[2].len = vec.cipher_auth.digest.len;
 		}
@@ -1759,11 +1769,14 @@ fips_mct_sha_test(void)
 		memcpy(vec.cipher_auth.digest.val, md[2].val, md[2].len);
 		vec.cipher_auth.digest.len = md[2].len;
 
-		fprintf(info.fp_wr, "COUNT = %u\n", j);
-
-		writeback_hex_str("", temp, &vec.cipher_auth.digest);
-
-		fprintf(info.fp_wr, "MD = %s\n\n", temp);
+		if (info.file_type != FIPS_TYPE_JSON) {
+			fprintf(info.fp_wr, "COUNT = %u\n", j);
+			writeback_hex_str("", temp, &vec.cipher_auth.digest);
+			fprintf(info.fp_wr, "MD = %s\n\n", temp);
+		}
+		val[1].val = msg.val;
+		val[1].len = msg.len;
+		info.parse_writeback(val);
 	}
 
 	for (i = 0; i < (SHA_MD_BLOCK); i++)
@@ -1771,7 +1784,8 @@ fips_mct_sha_test(void)
 
 	rte_free(vec.pt.val);
 
-	free(val.val);
+	free(val[0].val);
+	free(msg.val);
 
 	return 0;
 }
@@ -1781,6 +1795,7 @@ static int
 init_test_ops(void)
 {
 	switch (info.algo) {
+	case FIPS_TEST_ALGO_AES_CBC:
 	case FIPS_TEST_ALGO_AES:
 		test_ops.prepare_op = prepare_cipher_op;
 		test_ops.prepare_xform  = prepare_aes_xform;
@@ -1920,7 +1935,7 @@ error_one_case:
 	return ret;
 }
 
-#ifdef RTE_HAS_JANSSON
+#ifdef USE_JANSSON
 static int
 fips_test_json_init_writeback(void)
 {
@@ -1988,8 +2003,15 @@ fips_test_one_test_group(void)
 	case FIPS_TEST_ALGO_AES_CMAC:
 		ret = parse_test_cmac_json_init();
 		break;
+	case FIPS_TEST_ALGO_AES_XTS:
+		ret = parse_test_xts_json_init();
+		break;
+	case FIPS_TEST_ALGO_AES_CBC:
 	case FIPS_TEST_ALGO_AES:
 		ret = parse_test_aes_json_init();
+		break;
+	case FIPS_TEST_ALGO_SHA:
+		ret = parse_test_sha_json_init();
 		break;
 	default:
 		return -EINVAL;
@@ -2077,6 +2099,7 @@ fips_test_one_json_file(void)
 		json_info.json_vector_set = json_array_get(json_info.json_root, vector_set_idx);
 		fips_test_one_vector_set();
 		json_array_append_new(json_info.json_write_root, json_info.json_write_set);
+		json_incref(json_info.json_write_set);
 	}
 
 	json_dumpf(json_info.json_write_root, info.fp_wr, JSON_INDENT(4));
@@ -2084,4 +2107,4 @@ fips_test_one_json_file(void)
 
 	return 0;
 }
-#endif /* RTE_HAS_JANSSON */
+#endif /* USE_JANSSON */

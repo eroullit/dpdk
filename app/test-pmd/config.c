@@ -66,8 +66,6 @@
 
 #define NS_PER_SEC 1E9
 
-static char *flowtype_to_str(uint16_t flow_type);
-
 static const struct {
 	enum tx_pkt_split split;
 	const char *name;
@@ -87,17 +85,20 @@ static const struct {
 };
 
 const struct rss_type_info rss_type_table[] = {
+	/* Group types */
 	{ "all", RTE_ETH_RSS_ETH | RTE_ETH_RSS_VLAN | RTE_ETH_RSS_IP | RTE_ETH_RSS_TCP |
 		RTE_ETH_RSS_UDP | RTE_ETH_RSS_SCTP | RTE_ETH_RSS_L2_PAYLOAD |
 		RTE_ETH_RSS_L2TPV3 | RTE_ETH_RSS_ESP | RTE_ETH_RSS_AH | RTE_ETH_RSS_PFCP |
 		RTE_ETH_RSS_GTPU | RTE_ETH_RSS_ECPRI | RTE_ETH_RSS_MPLS | RTE_ETH_RSS_L2TPV2},
 	{ "none", 0 },
-	{ "eth", RTE_ETH_RSS_ETH },
-	{ "l2-src-only", RTE_ETH_RSS_L2_SRC_ONLY },
-	{ "l2-dst-only", RTE_ETH_RSS_L2_DST_ONLY },
+	{ "ip", RTE_ETH_RSS_IP },
+	{ "udp", RTE_ETH_RSS_UDP },
+	{ "tcp", RTE_ETH_RSS_TCP },
+	{ "sctp", RTE_ETH_RSS_SCTP },
+	{ "tunnel", RTE_ETH_RSS_TUNNEL },
 	{ "vlan", RTE_ETH_RSS_VLAN },
-	{ "s-vlan", RTE_ETH_RSS_S_VLAN },
-	{ "c-vlan", RTE_ETH_RSS_C_VLAN },
+
+	/* Individual type */
 	{ "ipv4", RTE_ETH_RSS_IPV4 },
 	{ "ipv4-frag", RTE_ETH_RSS_FRAG_IPV4 },
 	{ "ipv4-tcp", RTE_ETH_RSS_NONFRAG_IPV4_TCP },
@@ -118,33 +119,33 @@ const struct rss_type_info rss_type_table[] = {
 	{ "vxlan", RTE_ETH_RSS_VXLAN },
 	{ "geneve", RTE_ETH_RSS_GENEVE },
 	{ "nvgre", RTE_ETH_RSS_NVGRE },
-	{ "ip", RTE_ETH_RSS_IP },
-	{ "udp", RTE_ETH_RSS_UDP },
-	{ "tcp", RTE_ETH_RSS_TCP },
-	{ "sctp", RTE_ETH_RSS_SCTP },
-	{ "tunnel", RTE_ETH_RSS_TUNNEL },
-	{ "l3-pre32", RTE_ETH_RSS_L3_PRE32 },
-	{ "l3-pre40", RTE_ETH_RSS_L3_PRE40 },
-	{ "l3-pre48", RTE_ETH_RSS_L3_PRE48 },
-	{ "l3-pre56", RTE_ETH_RSS_L3_PRE56 },
-	{ "l3-pre64", RTE_ETH_RSS_L3_PRE64 },
-	{ "l3-pre96", RTE_ETH_RSS_L3_PRE96 },
-	{ "l3-src-only", RTE_ETH_RSS_L3_SRC_ONLY },
-	{ "l3-dst-only", RTE_ETH_RSS_L3_DST_ONLY },
-	{ "l4-src-only", RTE_ETH_RSS_L4_SRC_ONLY },
-	{ "l4-dst-only", RTE_ETH_RSS_L4_DST_ONLY },
+	{ "gtpu", RTE_ETH_RSS_GTPU },
+	{ "eth", RTE_ETH_RSS_ETH },
+	{ "s-vlan", RTE_ETH_RSS_S_VLAN },
+	{ "c-vlan", RTE_ETH_RSS_C_VLAN },
 	{ "esp", RTE_ETH_RSS_ESP },
 	{ "ah", RTE_ETH_RSS_AH },
 	{ "l2tpv3", RTE_ETH_RSS_L2TPV3 },
 	{ "pfcp", RTE_ETH_RSS_PFCP },
 	{ "pppoe", RTE_ETH_RSS_PPPOE },
-	{ "gtpu", RTE_ETH_RSS_GTPU },
 	{ "ecpri", RTE_ETH_RSS_ECPRI },
 	{ "mpls", RTE_ETH_RSS_MPLS },
 	{ "ipv4-chksum", RTE_ETH_RSS_IPV4_CHKSUM },
 	{ "l4-chksum", RTE_ETH_RSS_L4_CHKSUM },
 	{ "l2tpv2", RTE_ETH_RSS_L2TPV2 },
-	{ NULL, 0 },
+	{ "l3-pre96", RTE_ETH_RSS_L3_PRE96 },
+	{ "l3-pre64", RTE_ETH_RSS_L3_PRE64 },
+	{ "l3-pre56", RTE_ETH_RSS_L3_PRE56 },
+	{ "l3-pre48", RTE_ETH_RSS_L3_PRE48 },
+	{ "l3-pre40", RTE_ETH_RSS_L3_PRE40 },
+	{ "l3-pre32", RTE_ETH_RSS_L3_PRE32 },
+	{ "l2-dst-only", RTE_ETH_RSS_L2_DST_ONLY },
+	{ "l2-src-only", RTE_ETH_RSS_L2_SRC_ONLY },
+	{ "l4-dst-only", RTE_ETH_RSS_L4_DST_ONLY },
+	{ "l4-src-only", RTE_ETH_RSS_L4_SRC_ONLY },
+	{ "l3-dst-only", RTE_ETH_RSS_L3_DST_ONLY },
+	{ "l3-src-only", RTE_ETH_RSS_L3_SRC_ONLY },
+	{ NULL, 0},
 };
 
 static const struct {
@@ -167,6 +168,35 @@ static const struct {
 		.mode = RTE_ETH_FEC_RS,
 		.name = "rs",
 	},
+};
+
+static const struct {
+	char str[32];
+	uint16_t ftype;
+} flowtype_str_table[] = {
+	{"raw", RTE_ETH_FLOW_RAW},
+	{"ipv4", RTE_ETH_FLOW_IPV4},
+	{"ipv4-frag", RTE_ETH_FLOW_FRAG_IPV4},
+	{"ipv4-tcp", RTE_ETH_FLOW_NONFRAG_IPV4_TCP},
+	{"ipv4-udp", RTE_ETH_FLOW_NONFRAG_IPV4_UDP},
+	{"ipv4-sctp", RTE_ETH_FLOW_NONFRAG_IPV4_SCTP},
+	{"ipv4-other", RTE_ETH_FLOW_NONFRAG_IPV4_OTHER},
+	{"ipv6", RTE_ETH_FLOW_IPV6},
+	{"ipv6-frag", RTE_ETH_FLOW_FRAG_IPV6},
+	{"ipv6-tcp", RTE_ETH_FLOW_NONFRAG_IPV6_TCP},
+	{"ipv6-udp", RTE_ETH_FLOW_NONFRAG_IPV6_UDP},
+	{"ipv6-sctp", RTE_ETH_FLOW_NONFRAG_IPV6_SCTP},
+	{"ipv6-other", RTE_ETH_FLOW_NONFRAG_IPV6_OTHER},
+	{"l2_payload", RTE_ETH_FLOW_L2_PAYLOAD},
+	{"ipv6-ex", RTE_ETH_FLOW_IPV6_EX},
+	{"ipv6-tcp-ex", RTE_ETH_FLOW_IPV6_TCP_EX},
+	{"ipv6-udp-ex", RTE_ETH_FLOW_IPV6_UDP_EX},
+	{"port", RTE_ETH_FLOW_PORT},
+	{"vxlan", RTE_ETH_FLOW_VXLAN},
+	{"geneve", RTE_ETH_FLOW_GENEVE},
+	{"nvgre", RTE_ETH_FLOW_NVGRE},
+	{"vxlan-gpe", RTE_ETH_FLOW_VXLAN_GPE},
+	{"gtpu", RTE_ETH_FLOW_GTPU},
 };
 
 static void
@@ -675,6 +705,65 @@ print_dev_capabilities(uint64_t capabilities)
 	}
 }
 
+uint64_t
+str_to_rsstypes(const char *str)
+{
+	uint16_t i;
+
+	for (i = 0; rss_type_table[i].str != NULL; i++) {
+		if (strcmp(rss_type_table[i].str, str) == 0)
+			return rss_type_table[i].rss_type;
+	}
+
+	return 0;
+}
+
+const char *
+rsstypes_to_str(uint64_t rss_type)
+{
+	uint16_t i;
+
+	for (i = 0; rss_type_table[i].str != NULL; i++) {
+		if (rss_type_table[i].rss_type == rss_type)
+			return rss_type_table[i].str;
+	}
+
+	return NULL;
+}
+
+static void
+rss_offload_types_display(uint64_t offload_types, uint16_t char_num_per_line)
+{
+	uint16_t user_defined_str_len;
+	uint16_t total_len = 0;
+	uint16_t str_len = 0;
+	uint64_t rss_offload;
+	uint16_t i;
+
+	for (i = 0; i < sizeof(offload_types) * CHAR_BIT; i++) {
+		rss_offload = RTE_BIT64(i);
+		if ((offload_types & rss_offload) != 0) {
+			const char *p = rsstypes_to_str(rss_offload);
+
+			user_defined_str_len =
+				strlen("user-defined-") + (i / 10 + 1);
+			str_len = p ? strlen(p) : user_defined_str_len;
+			str_len += 2; /* add two spaces */
+			if (total_len + str_len >= char_num_per_line) {
+				total_len = 0;
+				printf("\n");
+			}
+
+			if (p)
+				printf("  %s", p);
+			else
+				printf("  user-defined-%u", i);
+			total_len += str_len;
+		}
+	}
+	printf("\n");
+}
+
 void
 port_infos_display(portid_t port_id)
 {
@@ -779,20 +868,9 @@ port_infos_display(portid_t port_id)
 	if (!dev_info.flow_type_rss_offloads)
 		printf("No RSS offload flow type is supported.\n");
 	else {
-		uint16_t i;
-		char *p;
-
 		printf("Supported RSS offload flow types:\n");
-		for (i = RTE_ETH_FLOW_UNKNOWN + 1;
-		     i < sizeof(dev_info.flow_type_rss_offloads) * CHAR_BIT; i++) {
-			if (!(dev_info.flow_type_rss_offloads & (1ULL << i)))
-				continue;
-			p = flowtype_to_str(i);
-			if (p)
-				printf("  %s\n", p);
-			else
-				printf("  user defined %d\n", i);
-		}
+		rss_offload_types_display(dev_info.flow_type_rss_offloads,
+				TESTPMD_RSS_TYPES_CHAR_NUM_PER_LINE);
 	}
 
 	printf("Minimum size of RX buffer: %u\n", dev_info.min_rx_bufsize);
@@ -1545,6 +1623,35 @@ port_flow_complain(struct rte_flow_error *error)
 }
 
 static void
+rss_types_display(uint64_t rss_types, uint16_t char_num_per_line)
+{
+	uint16_t total_len = 0;
+	uint16_t str_len;
+	uint16_t i;
+
+	if (rss_types == 0)
+		return;
+
+	for (i = 0; rss_type_table[i].str; i++) {
+		if (rss_type_table[i].rss_type == 0)
+			continue;
+
+		if ((rss_types & rss_type_table[i].rss_type) ==
+					rss_type_table[i].rss_type) {
+			/* Contain two spaces */
+			str_len = strlen(rss_type_table[i].str) + 2;
+			if (total_len + str_len > char_num_per_line) {
+				printf("\n");
+				total_len = 0;
+			}
+			printf("  %s", rss_type_table[i].str);
+			total_len += str_len;
+		}
+	}
+	printf("\n");
+}
+
+static void
 rss_config_display(struct rte_flow_action_rss *rss_conf)
 {
 	uint8_t i;
@@ -1586,13 +1693,7 @@ rss_config_display(struct rte_flow_action_rss *rss_conf)
 		printf("  none\n");
 		return;
 	}
-	for (i = 0; rss_type_table[i].str; i++) {
-		if ((rss_conf->types &
-		    rss_type_table[i].rss_type) ==
-		    rss_type_table[i].rss_type &&
-		    rss_type_table[i].rss_type != 0)
-			printf("  %s\n", rss_type_table[i].str);
-	}
+	rss_types_display(rss_conf->types, TESTPMD_RSS_TYPES_CHAR_NUM_PER_LINE);
 }
 
 static struct port_indirect_action *
@@ -3822,14 +3923,8 @@ port_rss_hash_conf_show(portid_t port_id, int show_rss_key)
 		printf("RSS disabled\n");
 		return;
 	}
-	printf("RSS functions:\n ");
-	for (i = 0; rss_type_table[i].str; i++) {
-		if (rss_type_table[i].rss_type == 0)
-			continue;
-		if ((rss_hf & rss_type_table[i].rss_type) == rss_type_table[i].rss_type)
-			printf("%s ", rss_type_table[i].str);
-	}
-	printf("\n");
+	printf("RSS functions:\n");
+	rss_types_display(rss_hf, TESTPMD_RSS_TYPES_CHAR_NUM_PER_LINE);
 	if (!show_rss_key)
 		return;
 	printf("RSS key:\n");
@@ -3844,15 +3939,10 @@ port_rss_hash_key_update(portid_t port_id, char rss_type[], uint8_t *hash_key,
 {
 	struct rte_eth_rss_conf rss_conf;
 	int diag;
-	unsigned int i;
 
 	rss_conf.rss_key = NULL;
 	rss_conf.rss_key_len = 0;
-	rss_conf.rss_hf = 0;
-	for (i = 0; rss_type_table[i].str; i++) {
-		if (!strcmp(rss_type_table[i].str, rss_type))
-			rss_conf.rss_hf = rss_type_table[i].rss_type;
-	}
+	rss_conf.rss_hf = str_to_rsstypes(rss_type);
 	diag = rte_eth_dev_rss_hash_conf_get(port_id, &rss_conf);
 	if (diag == 0) {
 		rss_conf.rss_key = hash_key;
@@ -5604,40 +5694,29 @@ set_record_burst_stats(uint8_t on_off)
 	record_burst_stats = on_off;
 }
 
-static char*
+uint16_t
+str_to_flowtype(const char *string)
+{
+	uint8_t i;
+
+	for (i = 0; i < RTE_DIM(flowtype_str_table); i++) {
+		if (!strcmp(flowtype_str_table[i].str, string))
+			return flowtype_str_table[i].ftype;
+	}
+
+	if (isdigit(string[0])) {
+		int val = atoi(string);
+		if (val > 0 && val < 64)
+			return (uint16_t)val;
+	}
+
+	return RTE_ETH_FLOW_UNKNOWN;
+}
+
+const char*
 flowtype_to_str(uint16_t flow_type)
 {
-	struct flow_type_info {
-		char str[32];
-		uint16_t ftype;
-	};
-
 	uint8_t i;
-	static struct flow_type_info flowtype_str_table[] = {
-		{"raw", RTE_ETH_FLOW_RAW},
-		{"ipv4", RTE_ETH_FLOW_IPV4},
-		{"ipv4-frag", RTE_ETH_FLOW_FRAG_IPV4},
-		{"ipv4-tcp", RTE_ETH_FLOW_NONFRAG_IPV4_TCP},
-		{"ipv4-udp", RTE_ETH_FLOW_NONFRAG_IPV4_UDP},
-		{"ipv4-sctp", RTE_ETH_FLOW_NONFRAG_IPV4_SCTP},
-		{"ipv4-other", RTE_ETH_FLOW_NONFRAG_IPV4_OTHER},
-		{"ipv6", RTE_ETH_FLOW_IPV6},
-		{"ipv6-frag", RTE_ETH_FLOW_FRAG_IPV6},
-		{"ipv6-tcp", RTE_ETH_FLOW_NONFRAG_IPV6_TCP},
-		{"ipv6-udp", RTE_ETH_FLOW_NONFRAG_IPV6_UDP},
-		{"ipv6-sctp", RTE_ETH_FLOW_NONFRAG_IPV6_SCTP},
-		{"ipv6-other", RTE_ETH_FLOW_NONFRAG_IPV6_OTHER},
-		{"l2_payload", RTE_ETH_FLOW_L2_PAYLOAD},
-		{"ipv6-ex", RTE_ETH_FLOW_IPV6_EX},
-		{"ipv6-tcp-ex", RTE_ETH_FLOW_IPV6_TCP_EX},
-		{"ipv6-udp-ex", RTE_ETH_FLOW_IPV6_UDP_EX},
-		{"port", RTE_ETH_FLOW_PORT},
-		{"vxlan", RTE_ETH_FLOW_VXLAN},
-		{"geneve", RTE_ETH_FLOW_GENEVE},
-		{"nvgre", RTE_ETH_FLOW_NVGRE},
-		{"vxlan-gpe", RTE_ETH_FLOW_VXLAN_GPE},
-		{"gtpu", RTE_ETH_FLOW_GTPU},
-	};
 
 	for (i = 0; i < RTE_DIM(flowtype_str_table); i++) {
 		if (flowtype_str_table[i].ftype == flow_type)
@@ -5713,7 +5792,7 @@ print_fdir_flex_mask(struct rte_eth_fdir_flex_conf *flex_conf, uint32_t num)
 {
 	struct rte_eth_fdir_flex_mask *mask;
 	uint32_t i, j;
-	char *p;
+	const char *p;
 
 	for (i = 0; i < flex_conf->nb_flexmasks; i++) {
 		mask = &flex_conf->flex_mask[i];
@@ -5729,7 +5808,7 @@ static inline void
 print_fdir_flow_type(uint32_t flow_types_mask)
 {
 	int i;
-	char *p;
+	const char *p;
 
 	for (i = RTE_ETH_FLOW_UNKNOWN; i < RTE_ETH_FLOW_MAX; i++) {
 		if (!(flow_types_mask & (1 << i)))
@@ -6300,49 +6379,6 @@ close_file(uint8_t *buf)
 	}
 
 	return -1;
-}
-
-void
-port_queue_region_info_display(portid_t port_id, void *buf)
-{
-#ifdef RTE_NET_I40E
-	uint16_t i, j;
-	struct rte_pmd_i40e_queue_regions *info =
-		(struct rte_pmd_i40e_queue_regions *)buf;
-	static const char *queue_region_info_stats_border = "-------";
-
-	if (!info->queue_region_number)
-		printf("there is no region has been set before");
-
-	printf("\n	%s All queue region info for port=%2d %s",
-			queue_region_info_stats_border, port_id,
-			queue_region_info_stats_border);
-	printf("\n	queue_region_number: %-14u \n",
-			info->queue_region_number);
-
-	for (i = 0; i < info->queue_region_number; i++) {
-		printf("\n	region_id: %-14u queue_number: %-14u "
-			"queue_start_index: %-14u \n",
-			info->region[i].region_id,
-			info->region[i].queue_num,
-			info->region[i].queue_start_index);
-
-		printf("  user_priority_num is	%-14u :",
-					info->region[i].user_priority_num);
-		for (j = 0; j < info->region[i].user_priority_num; j++)
-			printf(" %-14u ", info->region[i].user_priority[j]);
-
-		printf("\n	flowtype_num is  %-14u :",
-				info->region[i].flowtype_num);
-		for (j = 0; j < info->region[i].flowtype_num; j++)
-			printf(" %-14u ", info->region[i].hw_flowtype[j]);
-	}
-#else
-	RTE_SET_USED(port_id);
-	RTE_SET_USED(buf);
-#endif
-
-	printf("\n\n");
 }
 
 void

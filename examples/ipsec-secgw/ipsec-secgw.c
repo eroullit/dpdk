@@ -56,13 +56,16 @@
 #include "parser.h"
 #include "sad.h"
 
+#if defined(__ARM_NEON)
+#include "ipsec_lpm_neon.h"
+#endif
+
 volatile bool force_quit;
 
 #define MAX_JUMBO_PKT_LEN  9600
 
 #define MEMPOOL_CACHE_SIZE 256
 
-#define CDEV_QUEUE_DESC 2048
 #define CDEV_MAP_ENTRIES 16384
 #define CDEV_MP_CACHE_SZ 64
 #define CDEV_MP_CACHE_MULTIPLIER 1.5 /* from rte_mempool.c */
@@ -77,6 +80,11 @@ volatile bool force_quit;
 #define IPSEC_SECGW_TX_DESC_DEFAULT 1024
 static uint16_t nb_rxd = IPSEC_SECGW_RX_DESC_DEFAULT;
 static uint16_t nb_txd = IPSEC_SECGW_TX_DESC_DEFAULT;
+
+/*
+ * Configurable number of descriptors per queue pair
+ */
+static uint32_t qp_desc_nb = 2048;
 
 #define ETHADDR_TO_UINT64(addr) __BYTES_TO_UINT64( \
 		(addr)->addr_bytes[0], (addr)->addr_bytes[1], \
@@ -96,6 +104,12 @@ struct ethaddr_info ethaddr_tbl[RTE_MAX_ETHPORTS] = {
 	{ 0, ETHADDR(0x00, 0x16, 0x3e, 0x49, 0x9e, 0xdd) }
 };
 
+/*
+ * To hold ethernet header per port, which will be applied
+ * to outgoing packets.
+ */
+xmm_t val_eth[RTE_MAX_ETHPORTS];
+
 struct flow_info flow_info_tbl[RTE_MAX_ETHPORTS];
 
 #define CMD_LINE_OPT_CONFIG		"config"
@@ -113,6 +127,7 @@ struct flow_info flow_info_tbl[RTE_MAX_ETHPORTS];
 #define CMD_LINE_OPT_VECTOR_TIMEOUT	"vector-tmo"
 #define CMD_LINE_OPT_VECTOR_POOL_SZ	"vector-pool-sz"
 #define CMD_LINE_OPT_PER_PORT_POOL	"per-port-pool"
+#define CMD_LINE_OPT_QP_DESC_NB		"desc-nb"
 
 #define CMD_LINE_ARG_EVENT	"event"
 #define CMD_LINE_ARG_POLL	"poll"
@@ -142,6 +157,7 @@ enum {
 	CMD_LINE_OPT_VECTOR_TIMEOUT_NUM,
 	CMD_LINE_OPT_VECTOR_POOL_SZ_NUM,
 	CMD_LINE_OPT_PER_PORT_POOL_NUM,
+	CMD_LINE_OPT_QP_DESC_NB_NUM,
 };
 
 static const struct option lgopts[] = {
@@ -160,6 +176,7 @@ static const struct option lgopts[] = {
 	{CMD_LINE_OPT_VECTOR_TIMEOUT, 1, 0, CMD_LINE_OPT_VECTOR_TIMEOUT_NUM},
 	{CMD_LINE_OPT_VECTOR_POOL_SZ, 1, 0, CMD_LINE_OPT_VECTOR_POOL_SZ_NUM},
 	{CMD_LINE_OPT_PER_PORT_POOL, 0, 0, CMD_LINE_OPT_PER_PORT_POOL_NUM},
+	{CMD_LINE_OPT_QP_DESC_NB, 1, 0, CMD_LINE_OPT_QP_DESC_NB_NUM},
 	{NULL, 0, 0, 0}
 };
 
@@ -561,9 +578,16 @@ process_pkts(struct lcore_conf *qconf, struct rte_mbuf **pkts,
 			process_pkts_outbound(&qconf->outbound, &traffic);
 	}
 
+#if defined __ARM_NEON
+	/* Neon optimized packet routing */
+	route4_pkts_neon(qconf->rt4_ctx, traffic.ip4.pkts, traffic.ip4.num,
+			 qconf->outbound.ipv4_offloads, true);
+	route6_pkts_neon(qconf->rt6_ctx, traffic.ip6.pkts, traffic.ip6.num);
+#else
 	route4_pkts(qconf->rt4_ctx, traffic.ip4.pkts, traffic.ip4.num,
 		    qconf->outbound.ipv4_offloads, true);
 	route6_pkts(qconf->rt6_ctx, traffic.ip6.pkts, traffic.ip6.num);
+#endif
 }
 
 static inline void
@@ -886,6 +910,7 @@ print_usage(const char *prgname)
 		" [--event-vector]"
 		" [--vector-size SIZE]"
 		" [--vector-tmo TIMEOUT in ns]"
+		" [--" CMD_LINE_OPT_QP_DESC_NB " NUMBER_OF_DESC]"
 		"\n\n"
 		"  -p PORTMASK: Hexadecimal bitmask of ports to configure\n"
 		"  -P : Enable promiscuous mode\n"
@@ -948,6 +973,8 @@ print_usage(const char *prgname)
 		"  --" CMD_LINE_OPT_PER_PORT_POOL " Enable per port mbuf pool\n"
 		"  --" CMD_LINE_OPT_VECTOR_POOL_SZ " Vector pool size\n"
 		"                    (default value is based on mbuf count)\n"
+		"  --" CMD_LINE_OPT_QP_DESC_NB " DESC_NB"
+		": Number of descriptors per queue pair (default value: 2048)\n"
 		"\n",
 		prgname);
 }
@@ -1341,6 +1368,9 @@ parse_args(int32_t argc, char **argv, struct eh_conf *eh_conf)
 		case CMD_LINE_OPT_PER_PORT_POOL_NUM:
 			per_port_pool = 1;
 			break;
+		case CMD_LINE_OPT_QP_DESC_NB_NUM:
+			qp_desc_nb = parse_decimal(optarg);
+			break;
 		default:
 			print_usage(prgname);
 			return -1;
@@ -1390,6 +1420,8 @@ add_dst_ethaddr(uint16_t port, const struct rte_ether_addr *addr)
 		return -EINVAL;
 
 	ethaddr_tbl[port].dst = ETHADDR_TO_UINT64(addr);
+	rte_ether_addr_copy((struct rte_ether_addr *)&ethaddr_tbl[port].dst,
+			    (struct rte_ether_addr *)(val_eth + port));
 	return 0;
 }
 
@@ -1658,7 +1690,7 @@ cryptodevs_init(uint16_t req_queue_num)
 			rte_panic("Failed to initialize cryptodev %u\n",
 					cdev_id);
 
-		qp_conf.nb_descriptors = CDEV_QUEUE_DESC;
+		qp_conf.nb_descriptors = qp_desc_nb;
 		qp_conf.mp_session =
 			socket_ctx[dev_conf.socket_id].session_pool;
 		qp_conf.mp_session_private =
@@ -1795,7 +1827,7 @@ parse_ptype(struct rte_mbuf *m)
 		break;
 	}
 exit:
-	m->packet_type = packet_type;
+	m->packet_type |= packet_type;
 }
 
 static uint16_t
@@ -1852,6 +1884,12 @@ port_init(uint16_t portid, uint64_t req_rx_offloads, uint64_t req_tx_offloads)
 			portid, rte_strerror(-ret));
 
 	ethaddr_tbl[portid].src = ETHADDR_TO_UINT64(&ethaddr);
+
+	rte_ether_addr_copy((struct rte_ether_addr *)&ethaddr_tbl[portid].dst,
+			    (struct rte_ether_addr *)(val_eth + portid));
+	rte_ether_addr_copy((struct rte_ether_addr *)&ethaddr_tbl[portid].src,
+			    (struct rte_ether_addr *)(val_eth + portid) + 1);
+
 	print_ethaddr("Address: ", &ethaddr);
 	printf("\n");
 
@@ -2543,7 +2581,7 @@ calculate_nb_mbufs(uint16_t nb_ports, uint16_t nb_crypto_qp, uint32_t nb_rxq,
 			nb_ports * nb_lcores * MAX_PKT_BURST +
 			nb_ports * nb_txq * nb_txd +
 			nb_lcores * MEMPOOL_CACHE_SIZE +
-			nb_crypto_qp * CDEV_QUEUE_DESC +
+			nb_crypto_qp * qp_desc_nb +
 			nb_lcores * frag_tbl_sz *
 			FRAG_TBL_BUCKET_ENTRIES),
 		       8192U);
@@ -2875,7 +2913,6 @@ ipsec_secgw_telemetry_init(void)
 		"Optional Parameters: int <logical core id>");
 }
 
-
 int32_t
 main(int32_t argc, char **argv)
 {
@@ -3130,6 +3167,8 @@ skip_sec_ctx:
 		rte_cryptodev_close(cdev_id);
 		printf(" Done\n");
 	}
+
+	flow_print_counters();
 
 	RTE_ETH_FOREACH_DEV(portid) {
 		if ((enabled_port_mask & (1 << portid)) == 0)

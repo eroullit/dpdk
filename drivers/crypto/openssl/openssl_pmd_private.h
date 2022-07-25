@@ -11,6 +11,10 @@
 #include <openssl/rsa.h>
 #include <openssl/dh.h>
 #include <openssl/dsa.h>
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+#include <openssl/provider.h>
+#include <openssl/core_names.h>
+#endif
 
 #define CRYPTODEV_NAME_OPENSSL_PMD	crypto_openssl
 /**< Open SSL Crypto PMD device name */
@@ -134,7 +138,11 @@ struct openssl_session {
 				/**< pointer to EVP key */
 				const EVP_MD *evp_algo;
 				/**< pointer to EVP algorithm function */
+# if OPENSSL_VERSION_NUMBER >= 0x30000000L
+				EVP_MAC_CTX * ctx;
+# else
 				HMAC_CTX *ctx;
+# endif
 				/**< pointer to EVP context structure */
 			} hmac;
 		};
@@ -153,6 +161,9 @@ struct openssl_asym_session {
 	union {
 		struct rsa {
 			RSA *rsa;
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+			EVP_PKEY_CTX * ctx;
+#endif
 		} r;
 		struct exp {
 			BIGNUM *exp;
@@ -166,9 +177,16 @@ struct openssl_asym_session {
 		struct dh {
 			DH *dh_key;
 			uint32_t key_op;
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+			OSSL_PARAM_BLD * param_bld;
+			OSSL_PARAM_BLD *param_bld_peer;
+#endif
 		} dh;
 		struct {
 			DSA *dsa;
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+			OSSL_PARAM_BLD * param_bld;
+#endif
 		} s;
 	} u;
 } __rte_cache_aligned;

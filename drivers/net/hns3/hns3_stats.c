@@ -507,8 +507,8 @@ hns3_update_port_rx_ssu_drop_stats(struct hns3_hw *hw)
 
 	req = (struct hns3_query_ssu_cmd *)desc[0].data;
 	cnt = rte_le_to_cpu_32(req->oq_drop_cnt) +
-		rte_le_to_cpu_32(req->full_drop_cnt) +
-		rte_le_to_cpu_32(req->part_drop_cnt);
+	      rte_le_to_cpu_32(req->full_drop_cnt) +
+	      rte_le_to_cpu_32(req->part_drop_cnt);
 
 	stats->ssu_rx_drop_cnt += cnt;
 
@@ -532,8 +532,8 @@ hns3_update_port_tx_ssu_drop_stats(struct hns3_hw *hw)
 
 	req = (struct hns3_query_ssu_cmd *)desc[0].data;
 	cnt = rte_le_to_cpu_32(req->oq_drop_cnt) +
-		rte_le_to_cpu_32(req->full_drop_cnt) +
-		rte_le_to_cpu_32(req->part_drop_cnt);
+	      rte_le_to_cpu_32(req->full_drop_cnt) +
+	      rte_le_to_cpu_32(req->part_drop_cnt);
 
 	hw->oerror_stats += cnt;
 
@@ -629,6 +629,7 @@ hns3_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *rte_stats)
 	uint16_t i;
 	int ret;
 
+	rte_spinlock_lock(&hw->stats_lock);
 	/* Update imissed stats */
 	ret = hns3_update_imissed_stats(hw, false);
 	if (ret) {
@@ -644,10 +645,7 @@ hns3_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *rte_stats)
 		if (rxq == NULL)
 			continue;
 
-		rte_spinlock_lock(&hw->stats_lock);
 		hns3_rcb_rx_ring_stats_get(rxq, stats);
-		rte_spinlock_unlock(&hw->stats_lock);
-
 		rte_stats->ierrors += rxq->err_stats.l2_errors +
 				      rxq->err_stats.pkt_len_errors;
 		rte_stats->ibytes += rxq->basic_stats.bytes;
@@ -659,9 +657,7 @@ hns3_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *rte_stats)
 		if (txq == NULL)
 			continue;
 
-		rte_spinlock_lock(&hw->stats_lock);
 		hns3_rcb_tx_ring_stats_get(txq, stats);
-		rte_spinlock_unlock(&hw->stats_lock);
 		rte_stats->obytes += txq->basic_stats.bytes;
 	}
 
@@ -683,7 +679,10 @@ hns3_stats_get(struct rte_eth_dev *eth_dev, struct rte_eth_stats *rte_stats)
 	rte_stats->opackets  = stats->rcb_tx_ring_pktnum_rcd -
 		rte_stats->oerrors;
 	rte_stats->rx_nombuf = eth_dev->data->rx_mbuf_alloc_failed;
+
 out:
+	rte_spinlock_unlock(&hw->stats_lock);
+
 	return ret;
 }
 
@@ -697,6 +696,7 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 	uint16_t i;
 	int ret;
 
+	rte_spinlock_lock(&hw->stats_lock);
 	/*
 	 * Note: Reading hardware statistics of imissed registers will
 	 * clear them.
@@ -732,7 +732,6 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 		if (rxq == NULL)
 			continue;
 
-		rte_spinlock_lock(&hw->stats_lock);
 		memset(&rxq->basic_stats, 0,
 				sizeof(struct hns3_rx_basic_stats));
 
@@ -740,7 +739,6 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 		(void)hns3_read_dev(rxq, HNS3_RING_RX_PKTNUM_RECORD_REG);
 		rxq->err_stats.pkt_len_errors = 0;
 		rxq->err_stats.l2_errors = 0;
-		rte_spinlock_unlock(&hw->stats_lock);
 	}
 
 	/* Clear all the stats of a txq in a loop to keep them synchronized */
@@ -749,19 +747,18 @@ hns3_stats_reset(struct rte_eth_dev *eth_dev)
 		if (txq == NULL)
 			continue;
 
-		rte_spinlock_lock(&hw->stats_lock);
 		memset(&txq->basic_stats, 0,
 				sizeof(struct hns3_tx_basic_stats));
 
 		/* This register is read-clear */
 		(void)hns3_read_dev(txq, HNS3_RING_TX_PKTNUM_RECORD_REG);
-		rte_spinlock_unlock(&hw->stats_lock);
 	}
 
-	rte_spinlock_lock(&hw->stats_lock);
 	hns3_tqp_stats_clear(hw);
-	rte_spinlock_unlock(&hw->stats_lock);
+
 out:
+	rte_spinlock_unlock(&hw->stats_lock);
+
 	return ret;
 }
 
@@ -1082,11 +1079,11 @@ hns3_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 			count++;
 		}
 	}
-	rte_spinlock_unlock(&hw->stats_lock);
 
 	ret = hns3_update_imissed_stats(hw, false);
 	if (ret) {
 		hns3_err(hw, "update imissed stats failed, ret = %d", ret);
+		rte_spinlock_unlock(&hw->stats_lock);
 		return ret;
 	}
 
@@ -1115,7 +1112,6 @@ hns3_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 		}
 	}
 
-	rte_spinlock_lock(&hw->stats_lock);
 	hns3_tqp_dfx_stats_get(dev, xstats, &count);
 	hns3_queue_stats_get(dev, xstats, &count);
 	rte_spinlock_unlock(&hw->stats_lock);
@@ -1337,8 +1333,8 @@ hns3_dev_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
 	len = cnt_stats * sizeof(struct rte_eth_xstat);
 	values_copy = rte_zmalloc("hns3_xstats_values", len, 0);
 	if (values_copy == NULL) {
-		hns3_err(hw, "Failed to allocate 0x%" PRIx64 " bytes needed "
-			     "to store statistics values", len);
+		hns3_err(hw, "Failed to allocate 0x%" PRIx64 " bytes needed to store statistics values",
+			 len);
 		return -ENOMEM;
 	}
 
@@ -1359,8 +1355,8 @@ hns3_dev_xstats_get_by_id(struct rte_eth_dev *dev, const uint64_t *ids,
 
 	for (i = 0; i < size; i++) {
 		if (ids[i] >= cnt_stats) {
-			hns3_err(hw, "ids[%u] (%" PRIu64 ") is invalid, "
-				     "should < %u", i, ids[i], cnt_stats);
+			hns3_err(hw, "ids[%u] (%" PRIu64 ") is invalid, should < %u",
+				 i, ids[i], cnt_stats);
 			rte_free(values_copy);
 			return -EINVAL;
 		}
@@ -1419,8 +1415,8 @@ hns3_dev_xstats_get_names_by_id(struct rte_eth_dev *dev,
 	len = cnt_stats * sizeof(struct rte_eth_xstat_name);
 	names_copy = rte_zmalloc("hns3_xstats_names", len, 0);
 	if (names_copy == NULL) {
-		hns3_err(hw, "Failed to allocate 0x%" PRIx64 " bytes needed "
-			     "to store statistics names", len);
+		hns3_err(hw, "Failed to allocate 0x%" PRIx64 " bytes needed to store statistics names",
+			 len);
 		return -ENOMEM;
 	}
 
@@ -1428,8 +1424,8 @@ hns3_dev_xstats_get_names_by_id(struct rte_eth_dev *dev,
 
 	for (i = 0; i < size; i++) {
 		if (ids[i] >= cnt_stats) {
-			hns3_err(hw, "ids[%u] (%" PRIu64 ") is invalid, "
-				     "should < %u", i, ids[i], cnt_stats);
+			hns3_err(hw, "ids[%u] (%" PRIu64 ") is invalid, should < %u",
+				 i, ids[i], cnt_stats);
 			rte_free(names_copy);
 			return -EINVAL;
 		}
@@ -1501,14 +1497,14 @@ hns3_tqp_stats_init(struct hns3_hw *hw)
 	struct hns3_tqp_stats *tqp_stats = &hw->tqp_stats;
 
 	tqp_stats->rcb_rx_ring_pktnum = rte_zmalloc("hns3_rx_ring_pkt_num",
-					 sizeof(uint64_t) * hw->tqps_num, 0);
+					sizeof(uint64_t) * hw->tqps_num, 0);
 	if (tqp_stats->rcb_rx_ring_pktnum == NULL) {
 		hns3_err(hw, "failed to allocate rx_ring pkt_num.");
 		return -ENOMEM;
 	}
 
 	tqp_stats->rcb_tx_ring_pktnum = rte_zmalloc("hns3_tx_ring_pkt_num",
-					 sizeof(uint64_t) * hw->tqps_num, 0);
+					sizeof(uint64_t) * hw->tqps_num, 0);
 	if (tqp_stats->rcb_tx_ring_pktnum == NULL) {
 		hns3_err(hw, "failed to allocate tx_ring pkt_num.");
 		rte_free(tqp_stats->rcb_rx_ring_pktnum);

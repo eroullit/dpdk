@@ -8,9 +8,9 @@ MLX5 Common Driver
 ==================
 
 The mlx5 common driver library (**librte_common_mlx5**) provides support for
-**Mellanox ConnectX-4**, **Mellanox ConnectX-4 Lx**, **Mellanox ConnectX-5**,
-**Mellanox ConnectX-6**, **Mellanox ConnectX-6 Dx**, **Mellanox ConnectX-6 Lx**,
-**Mellanox BlueField** and **Mellanox BlueField-2** families of
+**NVIDIA ConnectX-4**, **NVIDIA ConnectX-4 Lx**, **NVIDIA ConnectX-5**,
+**NVIDIA ConnectX-6**, **NVIDIA ConnectX-6 Dx**, **NVIDIA ConnectX-6 Lx**,
+**NVIDIA ConnectX-7**, **NVIDIA BlueField**, and **NVIDIA BlueField-2** families of
 10/25/40/50/100/200 Gb/s adapters.
 
 Information and documentation for these adapters can be found on the
@@ -176,6 +176,8 @@ The minimal supported versions are:
   - ConnectX-5 Ex: **16.21.1000** and above.
   - ConnectX-6: **20.27.0090** and above.
   - ConnectX-6 Dx: **22.27.0090** and above.
+  - ConnectX-6 Lx: **26.27.0090** and above.
+  - ConnectX-7: **28.33.2028** and above.
   - BlueField: **18.25.1010** and above.
   - BlueField-2: **24.28.1002** and above.
 
@@ -404,25 +406,30 @@ The device can be bound again at this point.
 Run as Non-Root
 ^^^^^^^^^^^^^^^
 
-In order to run as a non-root user,
-some capabilities must be granted to the application::
+Hugepage and resource limit setup are documented
+in the :ref:`common Linux guide <Running_Without_Root_Privileges>`.
+This PMD can operate without access to physical addresses,
+therefore it does not require ``SYS_ADMIN`` to access ``/proc/self/pagemaps``.
+Note that this requirement may still come from other drivers.
 
-   setcap cap_sys_admin,cap_net_admin,cap_net_raw,cap_ipc_lock+ep <dpdk-app>
+Below are additional capabilities that must be granted to the application
+with the reasons for the need of each capability:
 
-Below are the reasons for the need of each capability:
+``NET_RAW``
+   For raw Ethernet queue allocation through the kernel driver.
 
-``cap_sys_admin``
-   When using physical addresses (PA mode), with Linux >= 4.0,
-   for access to ``/proc/self/pagemap``.
+``NET_ADMIN``
+   For device configuration, like setting link status or MTU.
 
-``cap_net_admin``
-   For device configuration.
+``SYS_RAWIO``
+   For using group 1 and above (software steering) in Flow API.
 
-``cap_net_raw``
-   For raw ethernet queue allocation through kernel driver.
+They can be manually granted for a specific executable file::
 
-``cap_ipc_lock``
-   For DMA memory pinning.
+   setcap cap_net_raw,cap_net_admin,cap_sys_rawio+ep <executable>
+
+Alternatively, a service manager or a container runtime
+may configure the capabilities for a process.
 
 
 Windows Environment

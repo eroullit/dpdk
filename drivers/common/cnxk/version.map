@@ -23,11 +23,16 @@ INTERNAL {
 	cnxk_ot_ipsec_outb_sa_fill;
 	cnxk_ot_ipsec_inb_sa_valid;
 	cnxk_ot_ipsec_outb_sa_valid;
+	cnxk_on_ipsec_inb_sa_create;
+	cnxk_on_ipsec_outb_sa_create;
 	roc_ae_ec_grp_get;
 	roc_ae_ec_grp_put;
 	roc_ae_fpm_get;
 	roc_ae_fpm_put;
 	roc_aes_xcbc_key_derive;
+	roc_bphy_cgx_cpri_mode_change;
+	roc_bphy_cgx_cpri_mode_misc;
+	roc_bphy_cgx_cpri_mode_tx_control;
 	roc_bphy_cgx_dev_fini;
 	roc_bphy_cgx_dev_init;
 	roc_bphy_cgx_fec_set;
@@ -72,6 +77,7 @@ INTERNAL {
 	roc_cpt_parse_hdr_dump;
 	roc_cpt_rxc_time_cfg;
 	roc_cpt_ctx_write;
+	roc_on_cpt_ctx_write;
 	roc_dpi_configure;
 	roc_dpi_dev_fini;
 	roc_dpi_dev_init;
@@ -122,7 +128,7 @@ INTERNAL {
 	roc_nix_fc_config_set;
 	roc_nix_fc_mode_set;
 	roc_nix_fc_mode_get;
-	rox_nix_fc_npa_bp_cfg;
+	roc_nix_fc_npa_bp_cfg;
 	roc_nix_get_base_chan;
 	roc_nix_get_pf;
 	roc_nix_get_pf_func;
@@ -161,6 +167,7 @@ INTERNAL {
 	roc_nix_inl_ts_pkind_set;
 	roc_nix_inl_ctx_write;
 	roc_nix_inl_dev_pffunc_get;
+	roc_nix_inl_outb_cpt_lfs_dump;
 	roc_nix_cpt_ctx_cache_sync;
 	roc_nix_is_lbk;
 	roc_nix_is_pf;
@@ -219,6 +226,7 @@ INTERNAL {
 	roc_nix_rq_ena_dis;
 	roc_nix_rq_fini;
 	roc_nix_rq_init;
+	roc_nix_rq_is_sso_enable;
 	roc_nix_rq_modify;
 	roc_nix_rss_default_setup;
 	roc_nix_rss_flowkey_set;
@@ -325,7 +333,10 @@ INTERNAL {
 	roc_npc_mcam_ena_dis_entry;
 	roc_npc_mcam_free_all_resources;
 	roc_npc_mcam_free_counter;
+	roc_npc_mcam_free;
 	roc_npc_mcam_free_entry;
+	roc_npc_mcam_init;
+	roc_npc_mcam_move;
 	roc_npc_mcam_merge_base_steering_rule;
 	roc_npc_mcam_write_entry;
 	roc_npc_mcam_read_counter;

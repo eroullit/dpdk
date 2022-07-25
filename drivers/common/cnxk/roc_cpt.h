@@ -99,6 +99,7 @@ struct roc_cpt_lmtline {
 	uint64_t io_addr;
 	uint64_t *fc_addr;
 	uintptr_t lmt_base;
+	uint32_t fc_thresh;
 };
 
 struct roc_cpt_lf {
@@ -114,8 +115,6 @@ struct roc_cpt_lf {
 	uint16_t msixoff;
 	uint16_t pf_func;
 	uint64_t *fc_addr;
-	uint32_t fc_hyst_bits;
-	uint64_t fc_thresh;
 	uint64_t io_addr;
 	uint8_t *iq_vaddr;
 	struct roc_nix *inl_outb_nix;
@@ -143,15 +142,6 @@ struct roc_cpt_rxc_time_cfg {
 	uint16_t zombie_limit;
 	uint16_t zombie_thres;
 };
-
-static inline int
-roc_cpt_is_iq_full(struct roc_cpt_lf *lf)
-{
-	if (*lf->fc_addr < lf->fc_thresh)
-		return 0;
-
-	return 1;
-}
 
 int __roc_api roc_cpt_rxc_time_cfg(struct roc_cpt *roc_cpt,
 				   struct roc_cpt_rxc_time_cfg *cfg);
@@ -181,4 +171,7 @@ void __roc_api roc_cpt_parse_hdr_dump(const struct cpt_parse_hdr_s *cpth);
 int __roc_api roc_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa_dptr,
 				void *sa_cptr, uint16_t sa_len);
 
+int __roc_api roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa,
+				   uint8_t opcode, uint16_t ctx_len,
+				   uint8_t egrp);
 #endif /* _ROC_CPT_H_ */

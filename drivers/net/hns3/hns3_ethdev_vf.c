@@ -141,7 +141,7 @@ hns3vf_enable_msix(const struct rte_pci_device *device, bool op)
 	pos = hns3vf_find_pci_capability(device, PCI_CAP_ID_MSIX);
 	if (pos) {
 		ret = rte_pci_read_config(device, &control, sizeof(control),
-				    (pos + PCI_MSIX_FLAGS));
+					  (pos + PCI_MSIX_FLAGS));
 		if (ret < 0) {
 			PMD_INIT_LOG(ERR, "Failed to read PCI offset 0x%x",
 				     (pos + PCI_MSIX_FLAGS));
@@ -153,10 +153,10 @@ hns3vf_enable_msix(const struct rte_pci_device *device, bool op)
 		else
 			control &= ~PCI_MSIX_FLAGS_ENABLE;
 		ret = rte_pci_write_config(device, &control, sizeof(control),
-					  (pos + PCI_MSIX_FLAGS));
+					   (pos + PCI_MSIX_FLAGS));
 		if (ret < 0) {
 			PMD_INIT_LOG(ERR, "failed to write PCI offset 0x%x",
-				    (pos + PCI_MSIX_FLAGS));
+				     (pos + PCI_MSIX_FLAGS));
 			return -ENXIO;
 		}
 
@@ -198,7 +198,7 @@ hns3vf_remove_uc_mac_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 				false, NULL, 0);
 	if (ret) {
 		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-				      mac_addr);
+				       mac_addr);
 		hns3_err(hw, "failed to add uc mac addr(%s), ret = %d",
 			 mac_str, ret);
 	}
@@ -240,12 +240,12 @@ hns3vf_set_default_mac_addr(struct rte_eth_dev *dev,
 		 */
 		if (ret == -EPERM) {
 			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-					      old_addr);
+					       old_addr);
 			hns3_warn(hw, "Has permanent mac addr(%s) for vf",
 				  mac_str);
 		} else {
 			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-					      mac_addr);
+					       mac_addr);
 			hns3_err(hw, "Failed to set mac addr(%s) for vf: %d",
 				 mac_str, ret);
 		}
@@ -292,7 +292,7 @@ hns3vf_remove_mc_mac_addr(struct hns3_hw *hw,
 				NULL, 0);
 	if (ret) {
 		hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
-				      mac_addr);
+				       mac_addr);
 		hns3_err(hw, "Failed to remove mc mac addr(%s) for vf: %d",
 			 mac_str, ret);
 	}
@@ -714,9 +714,8 @@ hns3vf_check_dev_specifications(struct hns3_hw *hw)
 {
 	if (hw->rss_ind_tbl_size == 0 ||
 	    hw->rss_ind_tbl_size > HNS3_RSS_IND_TBL_SIZE_MAX) {
-		hns3_warn(hw, "the size of hash lookup table configured (%u)"
-			      " exceeds the maximum(%u)", hw->rss_ind_tbl_size,
-			      HNS3_RSS_IND_TBL_SIZE_MAX);
+		hns3_warn(hw, "the size of hash lookup table configured (%u) exceeds the maximum(%u)",
+			  hw->rss_ind_tbl_size, HNS3_RSS_IND_TBL_SIZE_MAX);
 		return -EINVAL;
 	}
 
@@ -778,6 +777,14 @@ hns3vf_get_push_lsc_cap(struct hns3_hw *hw)
 
 	while (remain_ms > 0) {
 		rte_delay_ms(HNS3_POLL_RESPONE_MS);
+		/*
+		 * The probe process may perform in interrupt thread context.
+		 * For example, users attach a device in the secondary process.
+		 * At the moment, the handling mailbox task will be blocked. So
+		 * driver has to actively handle the HNS3_MBX_LINK_STAT_CHANGE
+		 * mailbox from PF driver to get this capability.
+		 */
+		hns3_dev_handle_mbx_msg(hw);
 		if (__atomic_load_n(&vf->pf_push_lsc_cap, __ATOMIC_ACQUIRE) !=
 			HNS3_PF_PUSH_LSC_CAP_UNKNOWN)
 			break;
@@ -1167,8 +1174,8 @@ hns3vf_vlan_offload_set(struct rte_eth_dev *dev, int mask)
 	int ret = 0;
 
 	if (__atomic_load_n(&hw->reset.resetting, __ATOMIC_RELAXED)) {
-		hns3_err(hw, "vf set vlan offload failed during resetting, "
-			     "mask = 0x%x", mask);
+		hns3_err(hw, "vf set vlan offload failed during resetting, mask = 0x%x",
+			 mask);
 		return -EIO;
 	}
 
@@ -1969,6 +1976,8 @@ hns3vf_stop_service(struct hns3_adapter *hns)
 	} else
 		hw->reset.mbuf_deferred_free = false;
 
+	rte_eal_alarm_cancel(hns3vf_keep_alive_handler, eth_dev);
+
 	/*
 	 * It is cumbersome for hardware to pick-and-choose entries for deletion
 	 * from table space. Hence, for function reset software intervention is
@@ -1990,6 +1999,10 @@ hns3vf_start_service(struct hns3_adapter *hns)
 	eth_dev = &rte_eth_devices[hw->data->port_id];
 	hns3_set_rxtx_function(eth_dev);
 	hns3_mp_req_start_rxtx(eth_dev);
+
+	rte_eal_alarm_set(HNS3VF_KEEP_ALIVE_INTERVAL, hns3vf_keep_alive_handler,
+			  eth_dev);
+
 	if (hw->adapter_state == HNS3_NIC_STARTED) {
 		hns3vf_start_poll_job(eth_dev);
 

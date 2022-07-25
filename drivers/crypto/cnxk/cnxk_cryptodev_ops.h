@@ -33,6 +33,7 @@ struct cpt_qp_meta_info {
 #define CPT_OP_FLAGS_METABUF	       (1 << 1)
 #define CPT_OP_FLAGS_AUTH_VERIFY       (1 << 0)
 #define CPT_OP_FLAGS_IPSEC_DIR_INBOUND (1 << 2)
+#define CPT_OP_FLAGS_IPSEC_INB_REPLAY  (1 << 3)
 
 struct cpt_inflight_req {
 	union cpt_res_s res;
@@ -69,16 +70,16 @@ struct cnxk_cpt_qp {
 	/**< Crypto LF */
 	struct pending_queue pend_q;
 	/**< Pending queue */
+	struct roc_cpt_lmtline lmtline;
+	/**< Lmtline information */
+	struct cpt_qp_meta_info meta_info;
+	/**< Metabuf info required to support operations on the queue pair */
+	struct crypto_adpter_info ca;
+	/**< Crypto adapter related info */
 	struct rte_mempool *sess_mp;
 	/**< Session mempool */
 	struct rte_mempool *sess_mp_priv;
 	/**< Session private data mempool */
-	struct cpt_qp_meta_info meta_info;
-	/**< Metabuf info required to support operations on the queue pair */
-	struct roc_cpt_lmtline lmtline;
-	/**< Lmtline information */
-	struct crypto_adpter_info ca;
-	/**< Crypto adapter related info */
 };
 
 int cnxk_cpt_dev_config(struct rte_cryptodev *dev,

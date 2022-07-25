@@ -5,6 +5,8 @@
 
 #include <rte_eventdev.h>
 
+#define CNXK_NIX_CQ_INL_CLAMP_MAX (64UL * 1024UL)
+
 static inline uint64_t
 nix_get_rx_offload_capa(struct cnxk_eth_dev *dev)
 {
@@ -38,6 +40,39 @@ nix_get_speed_capa(struct cnxk_eth_dev *dev)
 	}
 
 	return speed_capa;
+}
+
+static uint32_t
+nix_inl_cq_sz_clamp_up(struct roc_nix *nix, struct rte_mempool *mp,
+		       uint32_t nb_desc)
+{
+	struct roc_nix_rq *inl_rq;
+	uint64_t limit;
+
+	if (!roc_errata_cpt_hang_on_x2p_bp())
+		return nb_desc;
+
+	/* CQ should be able to hold all buffers in first pass RQ's aura
+	 * this RQ's aura.
+	 */
+	inl_rq = roc_nix_inl_dev_rq(nix);
+	if (!inl_rq) {
+		/* This itself is going to be inline RQ's aura */
+		limit = roc_npa_aura_op_limit_get(mp->pool_id);
+	} else {
+		limit = roc_npa_aura_op_limit_get(inl_rq->aura_handle);
+		/* Also add this RQ's aura if it is different */
+		if (inl_rq->aura_handle != mp->pool_id)
+			limit += roc_npa_aura_op_limit_get(mp->pool_id);
+	}
+	nb_desc = PLT_MAX(limit + 1, nb_desc);
+	if (nb_desc > CNXK_NIX_CQ_INL_CLAMP_MAX) {
+		plt_warn("Could not setup CQ size to accommodate"
+			 " all buffers in related auras (%" PRIu64 ")",
+			 limit);
+		nb_desc = CNXK_NIX_CQ_INL_CLAMP_MAX;
+	}
+	return nb_desc;
 }
 
 int
@@ -323,7 +358,7 @@ nix_init_flow_ctrl_config(struct rte_eth_dev *eth_dev)
 	struct cnxk_fc_cfg *fc = &dev->fc_cfg;
 	int rc;
 
-	if (roc_nix_is_sdp(&dev->nix))
+	if (roc_nix_is_vf_or_sdp(&dev->nix))
 		return 0;
 
 	/* To avoid Link credit deadlock on Ax, disable Tx FC if it's enabled */
@@ -439,6 +474,7 @@ cnxk_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
 	sq->qid = qid;
 	sq->nb_desc = nb_desc;
 	sq->max_sqe_sz = nix_sq_max_sqe_sz(dev);
+	sq->tc = ROC_NIX_PFC_CLASS_INVALID;
 
 	rc = roc_nix_sq_init(&dev->nix, sq);
 	if (rc) {
@@ -503,7 +539,7 @@ cnxk_nix_tx_queue_release(struct rte_eth_dev *eth_dev, uint16_t qid)
 
 int
 cnxk_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
-			uint16_t nb_desc, uint16_t fp_rx_q_sz,
+			uint32_t nb_desc, uint16_t fp_rx_q_sz,
 			const struct rte_eth_rxconf *rx_conf,
 			struct rte_mempool *mp)
 {
@@ -550,6 +586,12 @@ cnxk_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
 	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY ||
 	    dev->tx_offloads & RTE_ETH_TX_OFFLOAD_SECURITY)
 		roc_nix_inl_dev_xaq_realloc(mp->pool_id);
+
+	/* Increase CQ size to Aura size to avoid CQ overflow and
+	 * then CPT buffer leak.
+	 */
+	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY)
+		nb_desc = nix_inl_cq_sz_clamp_up(nix, mp, nb_desc);
 
 	/* Setup ROC CQ */
 	cq = &dev->cqs[qid];
@@ -604,6 +646,9 @@ cnxk_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
 	rxq_sp->qconf.conf.rx.offloads = dev->rx_offloads;
 	rxq_sp->qconf.nb_desc = nb_desc;
 	rxq_sp->qconf.mp = mp;
+	rxq_sp->tc = 0;
+	rxq_sp->tx_pause = (dev->fc_cfg.mode == RTE_ETH_FC_FULL ||
+			    dev->fc_cfg.mode == RTE_ETH_FC_TX_PAUSE);
 
 	if (dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY) {
 		/* Pass a tagmask used to handle error packets in inline device.
@@ -1278,8 +1323,6 @@ skip_lbk_setup:
 		goto cq_fini;
 	}
 
-	/* Initialize TC to SQ mapping as invalid */
-	memset(dev->pfc_tc_sq_map, 0xFF, sizeof(dev->pfc_tc_sq_map));
 	/*
 	 * Restore queue config when reconfigure followed by
 	 * reconfigure and no queue configure invoked from application case.
@@ -1791,22 +1834,18 @@ cnxk_eth_dev_uninit(struct rte_eth_dev *eth_dev, bool reset)
 	rc = cnxk_nix_flow_ctrl_set(eth_dev, &fc_conf);
 
 	pfc_conf.mode = RTE_ETH_FC_NONE;
-	for (i = 0; i < CNXK_NIX_PFC_CHAN_COUNT; i++) {
-		if (dev->pfc_tc_sq_map[i] != 0xFFFF) {
-			pfc_conf.rx_pause.tx_qid = dev->pfc_tc_sq_map[i];
-			pfc_conf.rx_pause.tc = i;
-			pfc_conf.tx_pause.rx_qid = i;
-			pfc_conf.tx_pause.tc = i;
-			rc = cnxk_nix_priority_flow_ctrl_queue_config(eth_dev,
-				&pfc_conf);
-			if (rc)
-				plt_err("Failed to reset PFC. error code(%d)",
-					rc);
-		}
+	for (i = 0; i < RTE_MAX(eth_dev->data->nb_rx_queues,
+				eth_dev->data->nb_tx_queues);
+	     i++) {
+		pfc_conf.rx_pause.tc = ROC_NIX_PFC_CLASS_INVALID;
+		pfc_conf.rx_pause.tx_qid = i;
+		pfc_conf.tx_pause.tc = ROC_NIX_PFC_CLASS_INVALID;
+		pfc_conf.tx_pause.rx_qid = i;
+		rc = cnxk_nix_priority_flow_ctrl_queue_config(eth_dev,
+							      &pfc_conf);
+		if (rc)
+			plt_err("Failed to reset PFC. error code(%d)", rc);
 	}
-
-	fc_conf.mode = RTE_ETH_FC_FULL;
-	rc = cnxk_nix_flow_ctrl_set(eth_dev, &fc_conf);
 
 	/* Disable and free rte_meter entries */
 	nix_meter_fini(dev);

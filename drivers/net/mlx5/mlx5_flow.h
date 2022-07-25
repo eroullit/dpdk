@@ -189,6 +189,10 @@ enum mlx5_feature_name {
 /* ESP item */
 #define MLX5_FLOW_ITEM_ESP (UINT64_C(1) << 40)
 
+/* Port Representor/Represented Port item */
+#define MLX5_FLOW_ITEM_PORT_REPRESENTOR (UINT64_C(1) << 41)
+#define MLX5_FLOW_ITEM_REPRESENTED_PORT (UINT64_C(1) << 42)
+
 /* Outer Masks. */
 #define MLX5_FLOW_LAYER_OUTER_L3 \
 	(MLX5_FLOW_LAYER_OUTER_L3_IPV4 | MLX5_FLOW_LAYER_OUTER_L3_IPV6)
@@ -1375,6 +1379,7 @@ typedef int (*mlx5_flow_create_mtr_acts_t)
 			(struct rte_eth_dev *dev,
 		      struct mlx5_flow_meter_policy *mtr_policy,
 		      const struct rte_flow_action *actions[RTE_COLORS],
+		      struct rte_flow_attr *attr,
 		      struct rte_mtr_error *error);
 typedef void (*mlx5_flow_destroy_mtr_acts_t)
 			(struct rte_eth_dev *dev,
@@ -2033,6 +2038,7 @@ void mlx5_flow_destroy_mtr_acts(struct rte_eth_dev *dev,
 int mlx5_flow_create_mtr_acts(struct rte_eth_dev *dev,
 		      struct mlx5_flow_meter_policy *mtr_policy,
 		      const struct rte_flow_action *actions[RTE_COLORS],
+		      struct rte_flow_attr *attr,
 		      struct rte_mtr_error *error);
 int mlx5_flow_create_policy_rules(struct rte_eth_dev *dev,
 			     struct mlx5_flow_meter_policy *mtr_policy);
@@ -2070,4 +2076,14 @@ int flow_dv_action_query(struct rte_eth_dev *dev,
 size_t flow_dv_get_item_hdr_len(const enum rte_flow_item_type item_type);
 int flow_dv_convert_encap_data(const struct rte_flow_item *items, uint8_t *buf,
 			   size_t *size, struct rte_flow_error *error);
+
+#define MLX5_PF_VPORT_ID 0
+#define MLX5_ECPF_VPORT_ID 0xFFFE
+
+int16_t mlx5_flow_get_esw_manager_vport_id(struct rte_eth_dev *dev);
+int mlx5_flow_get_item_vport_id(struct rte_eth_dev *dev,
+				const struct rte_flow_item *item,
+				uint16_t *vport_id,
+				struct rte_flow_error *error);
+
 #endif /* RTE_PMD_MLX5_FLOW_H_ */

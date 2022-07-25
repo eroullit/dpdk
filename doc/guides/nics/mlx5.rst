@@ -8,11 +8,11 @@ MLX5 Ethernet Poll Mode Driver
 ==============================
 
 The mlx5 Ethernet poll mode driver library (**librte_net_mlx5**) provides support
-for **Mellanox ConnectX-4**, **Mellanox ConnectX-4 Lx** , **Mellanox
-ConnectX-5**, **Mellanox ConnectX-6**, **Mellanox ConnectX-6 Dx**, **Mellanox
-ConnectX-6 Lx**, **Mellanox BlueField** and **Mellanox BlueField-2** families
-of 10/25/40/50/100/200 Gb/s adapters as well as their virtual functions (VF)
-in SR-IOV context.
+for **NVIDIA ConnectX-4**, **NVIDIA ConnectX-4 Lx** , **NVIDIA ConnectX-5**,
+**NVIDIA ConnectX-6**, **NVIDIA ConnectX-6 Dx**, **NVIDIA ConnectX-6 Lx**,
+**NVIDIA ConnectX-7**, **NVIDIA BlueField** and **NVIDIA BlueField-2**
+families of 10/25/40/50/100/200 Gb/s adapters
+as well as their virtual functions (VF) in SR-IOV context.
 
 
 Design
@@ -38,6 +38,8 @@ Features
 - Multiple TX and RX queues.
 - Shared Rx queue.
 - Rx queue delay drop.
+- Rx queue available descriptor threshold event.
+- Host shaper support.
 - Support steering for external Rx queue created outside the PMD.
 - Support for scattered TX frames.
 - Advanced support for scattered Rx frames with tunable buffer attributes.
@@ -82,6 +84,7 @@ Features
 - Matching on GTP extension header with raw encap/decap action.
 - Matching on Geneve TLV option header with raw encap/decap action.
 - Matching on ESP header SPI field.
+- Modify IPv4/IPv6 ECN field.
 - RSS support in sample action.
 - E-Switch mirroring and jump.
 - E-Switch mirroring and modify.
@@ -93,6 +96,7 @@ Features
 - Connection tracking.
 - Sub-Function representors.
 - Sub-Function.
+- Matching on represented port.
 
 
 Limitations
@@ -129,6 +133,16 @@ Limitations
 
   - Counters of received packets and bytes number of devices in same share group are same.
   - Counters of received packets and bytes number of queues in same group and queue ID are same.
+
+- Available descriptor threshold event:
+
+  - Does not support shared Rx queue and hairpin Rx queue.
+
+- Host shaper:
+
+  - Support BlueField series NIC from BlueField 2.
+  - When configuring host shaper with MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED flag set,
+    only rates 0 and 100Mbps are supported.
 
 - When using Verbs flow engine (``dv_flow_en`` = 0), flow pattern without any
   specific VLAN will match for VLAN packets as well:
@@ -344,6 +358,12 @@ Limitations
   - can be applied to VF ports only.
   - must specify PF port action (packet redirection from VF to PF).
 
+- E-Switch Manager matching:
+
+  - For Bluefield with old FW
+    which doesn't expose the E-Switch Manager vport ID in the capability,
+    matching E-Switch Manager should be used only in Bluefield embedded CPU mode.
+
 - Raw encapsulation:
 
   - The input buffer, used as outer header, is not validated.
@@ -444,8 +464,8 @@ Limitations
      - yellow: NULL or END.
      - RED: DROP / END.
   - The only supported meter policy actions:
-     - green: QUEUE, RSS, PORT_ID, REPRESENTED_PORT, JUMP, DROP, MARK, METER and SET_TAG.
-     - yellow: QUEUE, RSS, PORT_ID, REPRESENTED_PORT, JUMP, DROP, MARK, METER and SET_TAG.
+     - green: QUEUE, RSS, PORT_ID, REPRESENTED_PORT, JUMP, DROP, MODIFY_FIELD, MARK, METER and SET_TAG.
+     - yellow: QUEUE, RSS, PORT_ID, REPRESENTED_PORT, JUMP, DROP, MODIFY_FIELD, MARK, METER and SET_TAG.
      - RED: must be DROP.
   - Policy actions of RSS for green and yellow should have the same configuration except queues.
   - Policy with RSS/queue action is not supported when ``dv_xmeta_en`` enabled.
@@ -456,17 +476,18 @@ Limitations
 
 - Integrity:
 
-  - Integrity offload is enabled for **ConnectX-6** family.
+  - Integrity offload is enabled starting from **ConnectX-6 Dx**.
   - Verification bits provided by the hardware are ``l3_ok``, ``ipv4_csum_ok``, ``l4_ok``, ``l4_csum_ok``.
   - ``level`` value 0 references outer headers.
+  - Negative integrity item verification is not supported.
   - Multiple integrity items not supported in a single flow rule.
   - Flow rule items supplied by application must explicitly specify network headers referred by integrity item.
     For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits, reference to L4 network header,
     TCP or UDP, must be in the rule pattern as well::
 
       flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end …
-      or
-      flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec 0 / eth / ipv4 proto is udp / end …
+
+      flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec l4_ok / eth / ipv4 proto is udp / end …
 
 - Connection tracking:
 
@@ -528,7 +549,7 @@ MLX5 supports various methods to report statistics:
 
 Port statistics can be queried using ``rte_eth_stats_get()``. The received and sent statistics are through SW only and counts the number of packets received or sent successfully by the PMD. The imissed counter is the amount of packets that could not be delivered to SW because a queue was full. Packets not received due to congestion in the bus or on the NIC can be queried via the rx_discards_phy xstats counter.
 
-Extended statistics can be queried using ``rte_eth_xstats_get()``. The extended statistics expose a wider set of counters counted by the device. The extended port statistics counts the number of packets received or sent successfully by the port. As Mellanox NICs are using the :ref:`Bifurcated Linux Driver <linux_gsg_linux_drivers>` those counters counts also packet received or sent by the Linux kernel. The counters with ``_phy`` suffix counts the total events on the physical port, therefore not valid for VF.
+Extended statistics can be queried using ``rte_eth_xstats_get()``. The extended statistics expose a wider set of counters counted by the device. The extended port statistics counts the number of packets received or sent successfully by the port. As NVIDIA NICs are using the :ref:`Bifurcated Linux Driver <linux_gsg_linux_drivers>` those counters counts also packet received or sent by the Linux kernel. The counters with ``_phy`` suffix counts the total events on the physical port, therefore not valid for VF.
 
 Finally per-flow statistics can by queried using ``rte_flow_query`` when attaching a count action for specific flow. The flow counter counts the number of packets received successfully by the port and match the specific flow.
 
@@ -1100,7 +1121,7 @@ for an additional list of options shared with other mlx5 drivers.
 Supported NICs
 --------------
 
-The following Mellanox device families are supported by the same mlx5 driver:
+The following NVIDIA device families are supported by the same mlx5 driver:
 
   - ConnectX-4
   - ConnectX-4 Lx
@@ -1109,37 +1130,40 @@ The following Mellanox device families are supported by the same mlx5 driver:
   - ConnectX-6
   - ConnectX-6 Dx
   - ConnectX-6 Lx
+  - ConnectX-7
   - BlueField
   - BlueField-2
 
 Below are detailed device names:
 
-* Mellanox\ |reg| ConnectX\ |reg|-4 10G MCX4111A-XCAT (1x10G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 10G MCX412A-XCAT (2x10G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 25G MCX4111A-ACAT (1x25G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 25G MCX412A-ACAT (2x25G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 40G MCX413A-BCAT (1x40G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 40G MCX4131A-BCAT (1x40G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 40G MCX415A-BCAT (1x40G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX413A-GCAT (1x50G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX4131A-GCAT (1x50G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX414A-BCAT (2x50G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX415A-GCAT (1x50G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX416A-BCAT (2x50G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX416A-GCAT (2x50G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 50G MCX415A-CCAT (1x100G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 100G MCX416A-CCAT (2x100G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4111A-XCAT (1x10G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4121A-XCAT (2x10G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4111A-ACAT (1x25G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4121A-ACAT (2x25G)
-* Mellanox\ |reg| ConnectX\ |reg|-4 Lx 40G MCX4131A-BCAT (1x40G)
-* Mellanox\ |reg| ConnectX\ |reg|-5 100G MCX556A-ECAT (2x100G)
-* Mellanox\ |reg| ConnectX\ |reg|-5 Ex EN 100G MCX516A-CDAT (2x100G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
-* Mellanox\ |reg| ConnectX\ |reg|-6 Lx EN 25G MCX631102AN-ADAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 10G MCX4111A-XCAT (1x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 10G MCX412A-XCAT (2x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 25G MCX4111A-ACAT (1x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 25G MCX412A-ACAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX413A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX4131A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 40G MCX415A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX413A-GCAT (1x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX4131A-GCAT (1x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX414A-BCAT (2x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX415A-GCAT (1x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX416A-BCAT (2x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX416A-GCAT (2x50G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 50G MCX415A-CCAT (1x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 100G MCX416A-CCAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4111A-XCAT (1x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 10G MCX4121A-XCAT (2x10G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4111A-ACAT (1x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 25G MCX4121A-ACAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-4 Lx 40G MCX4131A-BCAT (1x40G)
+* NVIDIA\ |reg| ConnectX\ |reg|-5 100G MCX556A-ECAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-5 Ex EN 100G MCX516A-CDAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 200G MCX654106A-HCAT (2x200G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 100G MCX623106AN-CDAT (2x100G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Dx EN 200G MCX623105AN-VDAT (1x200G)
+* NVIDIA\ |reg| ConnectX\ |reg|-6 Lx EN 25G MCX631102AN-ADAT (2x25G)
+* NVIDIA\ |reg| ConnectX\ |reg|-7 200G CX713106AE-HEA_QP1_Ax (2x200G)
+* NVIDIA\ |reg| BlueField\ |reg|-2 25G MBF2H332A-AEEOT_A1 (2x25G)
 
 
 Sub-Function
@@ -1334,6 +1358,11 @@ Supported hardware offloads
    | |                     | | rdma-core 24  | | rdma-core 24  |
    | |                     | | ConnectX-5    | | ConnectX-5    |
    +-----------------------+-----------------+-----------------+
+   | | Header rewrite      | | DPDK 22.07    | | DPDK 22.07    |
+   | | (ipv4_ecn /         | | OFED 5.6-2    | | OFED 5.6-2    |
+   | | ipv6_ecn)           | | rdma-core 41  | | rdma-core 41  |
+   | |                     | | ConnectX-5    | | ConnectX-5    |
+   +-----------------------+-----------------+-----------------+
    | Jump                  | | DPDK 19.05    | | DPDK 19.02    |
    |                       | | OFED 4.7-1    | | OFED 4.7-1    |
    |                       | | rdma-core 24  | | N/A           |
@@ -1471,7 +1500,7 @@ behavior as librte_net_mlx4::
 Usage example
 -------------
 
-This section demonstrates how to launch **testpmd** with Mellanox
+This section demonstrates how to launch **testpmd** with NVIDIA
 ConnectX-4/ConnectX-5/ConnectX-6/BlueField devices managed by librte_net_mlx5.
 
 #. Load the kernel modules::
@@ -1680,3 +1709,162 @@ The procedure below is an example of using a ConnectX-5 adapter card (pf0) with 
 #. For each VF PCIe, using the following command to bind the driver::
 
    $ echo "0000:82:00.2" >> /sys/bus/pci/drivers/mlx5_core/bind
+
+Host shaper
+-----------
+
+Host shaper register is per host port register
+which sets a shaper on the host port.
+All VF/host PF representors belonging to one host port share one host shaper.
+For example, if representor 0 and representor 1 belong to the same host port,
+and a host shaper rate of 1Gbps is configured,
+the shaper throttles both representors traffic from the host.
+
+Host shaper has two modes for setting the shaper,
+immediate and deferred to available descriptor threshold event trigger.
+
+In immediate mode, the rate limit is configured immediately to host shaper.
+
+When deferring to the available descriptor threshold trigger,
+the shaper is not set until an available descriptor threshold event
+is received by any Rx queue in a VF representor belonging to the host port.
+The only rate supported for deferred mode is 100Mbps
+(there is no limit on the supported rates for immediate mode).
+In deferred mode, the shaper is set on the host port by the firmware
+upon receiving the available descriptor threshold event,
+which allows throttling host traffic on available descriptor threshold events
+at minimum latency, preventing excess drops in the Rx queue.
+
+Dependency on mstflint package
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+In order to configure host shaper register,
+``librte_net_mlx5`` depends on ``libmtcr_ul``
+which can be installed from OFED mstflint package.
+Meson detects ``libmtcr_ul`` existence at configure stage.
+If the library is detected, the application must link with ``-lmtcr_ul``,
+as done by the pkg-config file libdpdk.pc.
+
+Available descriptor threshold and host shaper
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+There is a command to configure the available descriptor threshold in testpmd.
+Testpmd also contains sample logic to handle available descriptor threshold events.
+The typical workflow is:
+testpmd configures available descriptor threshold for Rx queues,
+enables ``avail_thresh_triggered`` in host shaper and registers a callback.
+When traffic from the host is too high
+and Rx queue emptiness is below the available descriptor threshold,
+the PMD receives an event
+and the firmware configures a 100Mbps shaper on the host port automatically.
+Then the PMD call the callback registered previously,
+which will delay a while to let Rx queue empty,
+then disable host shaper.
+
+Let's assume we have a simple BlueField 2 setup:
+port 0 is uplink, port 1 is VF representor.
+Each port has 2 Rx queues.
+To control traffic from the host to the Arm device,
+we can enable the available descriptor threshold in testpmd by:
+
+.. code-block:: console
+
+   testpmd> mlx5 set port 1 host_shaper avail_thresh_triggered 1 rate 0
+   testpmd> set port 1 rxq 0 avail_thresh 70
+   testpmd> set port 1 rxq 1 avail_thresh 70
+
+The first command disables the current host shaper
+and enables the available descriptor threshold triggered mode.
+The other commands configure the available descriptor threshold
+to 70% of Rx queue size for both Rx queues.
+
+When traffic from the host is too high,
+testpmd console prints log about available descriptor threshold event,
+then host shaper is disabled.
+The traffic rate from the host is controlled and less drop happens in Rx queues.
+
+The threshold event and shaper can be disabled like this:
+
+.. code-block:: console
+
+   testpmd> mlx5 set port 1 host_shaper avail_thresh_triggered 0 rate 0
+   testpmd> set port 1 rxq 0 avail_thresh 0
+   testpmd> set port 1 rxq 1 avail_thresh 0
+
+It is recommended an application disables the available descriptor threshold
+and ``avail_thresh_triggered`` before exit,
+if it enables them before.
+
+The shaper can also be configured with a value, the rate unit is 100Mbps.
+Below, the command sets the current shaper to 5Gbps
+and disables ``avail_thresh_triggered``.
+
+.. code-block:: console
+
+   testpmd> mlx5 set port 1 host_shaper avail_thresh_triggered 0 rate 50
+
+
+Testpmd
+-------
+
+port attach with socket path
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is possible to allocate a port with ``libibverbs`` from external application.
+For importing the external port with extra device arguments,
+there is a specific testpmd command
+similar to :ref:`port attach command <port_attach>`::
+
+   testpmd> mlx5 port attach (identifier) socket=(path)
+
+where:
+
+* ``identifier``: device identifier with optional parameters
+  as same as :ref:`port attach command <port_attach>`.
+* ``path``: path to IPC server socket created by the external application.
+
+This command performs:
+
+#. Open IPC client socket using the given path, and connect it.
+
+#. Import ibverbs context and ibverbs protection domain.
+
+#. Add two device arguments for context (``cmd_fd``)
+   and protection domain (``pd_handle``) to the device identifier.
+   See :ref:`mlx5 driver options <mlx5_common_driver_options>` for more
+   information about these device arguments.
+
+#. Call the regular ``port attach`` function with updated identifier.
+
+For example, to attach a port whose PCI address is ``0000:0a:00.0``
+and its socket path is ``/var/run/import_ipc_socket``:
+
+.. code-block:: console
+
+   testpmd> mlx5 port attach 0000:0a:00.0 socket=/var/run/import_ipc_socket
+   testpmd: MLX5 socket path is /var/run/import_ipc_socket
+   testpmd: Attach port with extra devargs 0000:0a:00.0,cmd_fd=40,pd_handle=1
+   Attaching a new port...
+   EAL: Probe PCI driver: mlx5_pci (15b3:101d) device: 0000:0a:00.0 (socket 0)
+   Port 0 is attached. Now total ports is 1
+   Done
+
+
+port map external Rx queue
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+External Rx queue indexes mapping management.
+
+Map HW queue index (32-bit) to ethdev queue index (16-bit) for external Rx queue::
+
+   testpmd> mlx5 port (port_id) ext_rxq map (sw_queue_id) (hw_queue_id)
+
+Unmap external Rx queue::
+
+   testpmd> mlx5 port (port_id) ext_rxq unmap (sw_queue_id)
+
+where:
+
+* ``sw_queue_id``: queue index in range [64536, 65535].
+  This range is the highest 1000 numbers.
+* ``hw_queue_id``: queue index given by HW in queue creation.

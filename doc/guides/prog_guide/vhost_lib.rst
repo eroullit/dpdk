@@ -288,7 +288,13 @@ The following is an overview of some key Vhost API functions:
 
 * ``rte_vhost_clear_queue_thread_unsafe(vid, queue_id, **pkts, count, dma_id, vchan_id)``
 
-  Clear inflight packets which are submitted to DMA engine in vhost async data
+  Clear in-flight packets which are submitted to async channel in vhost
+  async data path without performing locking on virtqueue. Completed
+  packets are returned to applications through ``pkts``.
+
+* ``rte_vhost_clear_queue(vid, queue_id, **pkts, count, dma_id, vchan_id)``
+
+  Clear in-flight packets which are submitted to async channel in vhost async data
   path. Completed packets are returned to applications through ``pkts``.
 
 * ``rte_vhost_vring_stats_get_names(int vid, uint16_t queue_id, struct rte_vhost_stat_name *names, unsigned int size)``
@@ -345,7 +351,7 @@ vhost-user implementation has two options:
 
      * The vhost supported features must be exactly the same before and
        after the restart. For example, if TSO is disabled and then enabled,
-       nothing will work and issues undefined might happen.
+       nothing will work and undefined issues might happen.
 
 No matter which mode is used, once a connection is established, DPDK
 vhost-user will start receiving and processing vhost messages from QEMU.
@@ -376,12 +382,12 @@ Guest memory requirement
 
 * Memory pre-allocation
 
-  For non-async data path, guest memory pre-allocation is not a
-  must. This can help save of memory. If users really want the guest memory
-  to be pre-allocated (e.g., for performance reason), we can add option
-  ``-mem-prealloc`` when starting QEMU. Or, we can lock all memory at vhost
-  side which will force memory to be allocated when mmap at vhost side;
-  option --mlockall in ovs-dpdk is an example in hand.
+  For non-async data path guest memory pre-allocation is not a
+  must but can help save memory. To do this we can add option
+  ``-mem-prealloc`` when starting QEMU, or we can lock all memory at vhost
+  side which will force memory to be allocated when it calls mmap
+  (option --mlockall in ovs-dpdk is an example in hand).
+
 
   For async data path, we force the VM memory to be pre-allocated at vhost
   lib when mapping the guest memory; and also we need to lock the memory to
@@ -389,8 +395,8 @@ Guest memory requirement
 
 * Memory sharing
 
-  Make sure ``share=on`` QEMU option is given. vhost-user will not work with
-  a QEMU version without shared memory mapping.
+  Make sure ``share=on`` QEMU option is given. The vhost-user will not work with
+  a QEMU instance without shared memory mapping.
 
 Vhost supported vSwitch reference
 ---------------------------------
@@ -480,11 +486,19 @@ the same vring with their own DMA virtual channels. Besides, the number
 of DMA devices is limited. For the purpose of scaling, it's necessary to
 support sharing DMA channels among vrings.
 
-Recommended IOVA mode in async datapath
----------------------------------------
+* Async enqueue API usage
 
-When DMA devices are bound to VFIO driver, VA mode is recommended.
-For PA mode, page by page mapping may exceed IOMMU's max capability,
-better to use 1G guest hugepage.
+  In async enqueue path, rte_vhost_poll_enqueue_completed() needs to be
+  called in time to notify the guest of DMA copy completed packets.
+  Moreover, calling rte_vhost_submit_enqueue_burst() all the time but
+  not poll completed will cause the DMA ring to be full, which will
+  result in packet loss eventually.
 
-For UIO driver, any VFIO related error message can be ignored.
+* Recommended IOVA mode in async datapath
+
+  When DMA devices are bound to VFIO driver, VA mode is recommended.
+  For PA mode, page by page mapping may exceed IOMMU's max capability,
+  better to use 1G guest hugepage.
+
+  For UIO driver or kernel driver, any VFIO related error messages
+  can be ignored.

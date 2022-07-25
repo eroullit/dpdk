@@ -171,7 +171,7 @@ nfp_net_configure(struct rte_eth_dev *dev)
 
 	/* Checking RX mode */
 	if (rxmode->mq_mode & RTE_ETH_MQ_RX_RSS &&
-	    !(hw->cap & NFP_NET_CFG_CTRL_RSS)) {
+	    !(hw->cap & NFP_NET_CFG_CTRL_RSS_ANY)) {
 		PMD_INIT_LOG(INFO, "RSS not supported");
 		return -EINVAL;
 	}
@@ -274,7 +274,7 @@ nfp_net_write_mac(struct nfp_net_hw *hw, uint8_t *mac)
 }
 
 int
-nfp_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
+nfp_net_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr)
 {
 	struct nfp_net_hw *hw;
 	uint32_t update, ctrl;
@@ -769,7 +769,7 @@ nfp_net_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		.nb_mtu_seg_max = NFP_TX_MAX_MTU_SEG,
 	};
 
-	if (hw->cap & NFP_NET_CFG_CTRL_RSS) {
+	if (hw->cap & NFP_NET_CFG_CTRL_RSS_ANY) {
 		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_RSS_HASH;
 
 		dev_info->flow_type_rss_offloads = RTE_ETH_RSS_IPV4 |
@@ -1080,7 +1080,7 @@ nfp_net_reta_update(struct rte_eth_dev *dev,
 	uint32_t update;
 	int ret;
 
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY))
 		return -EINVAL;
 
 	ret = nfp_net_rss_reta_write(dev, reta_conf, reta_size);
@@ -1108,7 +1108,7 @@ nfp_net_reta_query(struct rte_eth_dev *dev,
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY))
 		return -EINVAL;
 
 	if (reta_size != NFP_NET_CFG_RSS_ITBL_SZ) {
@@ -1206,7 +1206,7 @@ nfp_net_rss_hash_update(struct rte_eth_dev *dev,
 	rss_hf = rss_conf->rss_hf;
 
 	/* Checking if RSS is enabled */
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS)) {
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY)) {
 		if (rss_hf != 0) { /* Enable RSS? */
 			PMD_DRV_LOG(ERR, "RSS unsupported");
 			return -EINVAL;
@@ -1241,7 +1241,7 @@ nfp_net_rss_hash_conf_get(struct rte_eth_dev *dev,
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS))
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY))
 		return -EINVAL;
 
 	rss_hf = rss_conf->rss_hf;
@@ -1318,6 +1318,56 @@ nfp_net_rss_config_default(struct rte_eth_dev *dev)
 	ret = nfp_net_rss_hash_write(dev, &rss_conf);
 
 	return ret;
+}
+
+void
+nfp_net_stop_rx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_rxq *this_rx_q;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		this_rx_q = (struct nfp_net_rxq *)dev->data->rx_queues[i];
+		nfp_net_reset_rx_queue(this_rx_q);
+	}
+}
+
+void
+nfp_net_close_rx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_rxq *this_rx_q;
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		this_rx_q = (struct nfp_net_rxq *)dev->data->rx_queues[i];
+		nfp_net_reset_rx_queue(this_rx_q);
+		nfp_net_rx_queue_release(dev, i);
+	}
+}
+
+void
+nfp_net_stop_tx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_txq *this_tx_q;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		this_tx_q = (struct nfp_net_txq *)dev->data->tx_queues[i];
+		nfp_net_reset_tx_queue(this_tx_q);
+	}
+}
+
+void
+nfp_net_close_tx_queue(struct rte_eth_dev *dev)
+{
+	uint16_t i;
+	struct nfp_net_txq *this_tx_q;
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		this_tx_q = (struct nfp_net_txq *)dev->data->tx_queues[i];
+		nfp_net_reset_tx_queue(this_tx_q);
+		nfp_net_tx_queue_release(dev, i);
+	}
 }
 
 RTE_LOG_REGISTER_SUFFIX(nfp_logtype_init, init, NOTICE);

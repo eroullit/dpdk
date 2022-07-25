@@ -146,21 +146,21 @@ s32 ngbe_setup_phy_link_yt(struct ngbe_hw *hw, u32 speed,
 			}
 			/* duplex full */
 			value |= YT_BCR_DUPLEX | YT_BCR_RESET;
-			hw->phy.write_reg(hw, YT_BCR, 0, value);
+			ngbe_write_phy_reg_mdi(hw, YT_BCR, 0, value);
 
 			goto skip_an;
 		}
 
 		/*disable 100/10base-T Self-negotiation ability*/
-		hw->phy.read_reg(hw, YT_ANA, 0, &value);
+		ngbe_read_phy_reg_mdi(hw, YT_ANA, 0, &value);
 		value &= ~(YT_ANA_100BASET_FULL | YT_ANA_100BASET_HALF |
 			YT_ANA_10BASET_FULL | YT_ANA_10BASET_HALF);
-		hw->phy.write_reg(hw, YT_ANA, 0, value);
+		ngbe_write_phy_reg_mdi(hw, YT_ANA, 0, value);
 
 		/*disable 1000base-T Self-negotiation ability*/
-		hw->phy.read_reg(hw, YT_MS_CTRL, 0, &value);
+		ngbe_read_phy_reg_mdi(hw, YT_MS_CTRL, 0, &value);
 		value &= ~(YT_MS_1000BASET_FULL | YT_MS_1000BASET_HALF);
-		hw->phy.write_reg(hw, YT_MS_CTRL, 0, value);
+		ngbe_write_phy_reg_mdi(hw, YT_MS_CTRL, 0, value);
 
 		if (speed & NGBE_LINK_SPEED_1GB_FULL) {
 			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
@@ -176,19 +176,19 @@ s32 ngbe_setup_phy_link_yt(struct ngbe_hw *hw, u32 speed,
 		}
 
 		/* enable 1000base-T Self-negotiation ability */
-		hw->phy.read_reg(hw, YT_MS_CTRL, 0, &value);
+		ngbe_read_phy_reg_mdi(hw, YT_MS_CTRL, 0, &value);
 		value |= value_r9;
-		hw->phy.write_reg(hw, YT_MS_CTRL, 0, value);
+		ngbe_write_phy_reg_mdi(hw, YT_MS_CTRL, 0, value);
 
 		/* enable 100/10base-T Self-negotiation ability */
-		hw->phy.read_reg(hw, YT_ANA, 0, &value);
+		ngbe_read_phy_reg_mdi(hw, YT_ANA, 0, &value);
 		value |= value_r4;
-		hw->phy.write_reg(hw, YT_ANA, 0, value);
+		ngbe_write_phy_reg_mdi(hw, YT_ANA, 0, value);
 
 		/* software reset to make the above configuration take effect*/
-		hw->phy.read_reg(hw, YT_BCR, 0, &value);
+		ngbe_read_phy_reg_mdi(hw, YT_BCR, 0, &value);
 		value |= YT_BCR_RESET | YT_BCR_ANE | YT_BCR_RESTART_AN;
-		hw->phy.write_reg(hw, YT_BCR, 0, value);
+		ngbe_write_phy_reg_mdi(hw, YT_BCR, 0, value);
 skip_an:
 		hw->phy.set_phy_power(hw, true);
 	} else if ((value & YT_CHIP_MODE_MASK) == YT_CHIP_MODE_SEL(1)) {
@@ -205,8 +205,26 @@ skip_an:
 			YT_CHIP_SW_RST;
 		ngbe_write_phy_reg_ext_yt(hw, YT_CHIP, 0, value);
 
+		ngbe_read_phy_reg_sds_ext_yt(hw, YT_AUTO, 0, &value);
+		value &= ~YT_AUTO_SENSING;
+		ngbe_write_phy_reg_sds_ext_yt(hw, YT_AUTO, 0, value);
+
+		ngbe_read_phy_reg_ext_yt(hw, YT_MISC, 0, &value);
+		value |= YT_MISC_RESV;
+		ngbe_write_phy_reg_ext_yt(hw, YT_MISC, 0, value);
+
+		ngbe_read_phy_reg_ext_yt(hw, YT_CHIP, 0, &value);
+		value &= ~YT_CHIP_SW_RST;
+		ngbe_write_phy_reg_ext_yt(hw, YT_CHIP, 0, value);
+
 		/* software reset */
-		ngbe_write_phy_reg_sds_ext_yt(hw, 0x0, 0, 0x9140);
+		if (hw->mac.autoneg)
+			value = YT_BCR_RESET | YT_BCR_ANE | YT_BCR_RESTART_AN |
+				YT_BCR_DUPLEX | YT_BCR_SPEED_SELECT1;
+		else
+			value = YT_BCR_RESET | YT_BCR_DUPLEX |
+				YT_BCR_SPEED_SELECT1;
+		hw->phy.write_reg(hw, YT_BCR, 0, value);
 
 		hw->phy.set_phy_power(hw, true);
 	} else if ((value & YT_CHIP_MODE_MASK) == YT_CHIP_MODE_SEL(2)) {
@@ -219,15 +237,15 @@ skip_an:
 		} else {
 			/* utp up */
 			/*disable 100/10base-T Self-negotiation ability*/
-			hw->phy.read_reg(hw, YT_ANA, 0, &value);
+			ngbe_read_phy_reg_mdi(hw, YT_ANA, 0, &value);
 			value &= ~(YT_ANA_100BASET_FULL | YT_ANA_100BASET_HALF |
 				YT_ANA_10BASET_FULL | YT_ANA_10BASET_HALF);
-			hw->phy.write_reg(hw, YT_ANA, 0, value);
+			ngbe_write_phy_reg_mdi(hw, YT_ANA, 0, value);
 
 			/*disable 1000base-T Self-negotiation ability*/
-			hw->phy.read_reg(hw, YT_MS_CTRL, 0, &value);
+			ngbe_read_phy_reg_mdi(hw, YT_MS_CTRL, 0, &value);
 			value &= ~(YT_MS_1000BASET_FULL | YT_MS_1000BASET_HALF);
-			hw->phy.write_reg(hw, YT_MS_CTRL, 0, value);
+			ngbe_write_phy_reg_mdi(hw, YT_MS_CTRL, 0, value);
 
 			if (speed & NGBE_LINK_SPEED_1GB_FULL) {
 				hw->phy.autoneg_advertised |=
@@ -246,21 +264,21 @@ skip_an:
 			}
 
 			/* enable 1000base-T Self-negotiation ability */
-			hw->phy.read_reg(hw, YT_MS_CTRL, 0, &value);
+			ngbe_read_phy_reg_mdi(hw, YT_MS_CTRL, 0, &value);
 			value |= value_r9;
-			hw->phy.write_reg(hw, YT_MS_CTRL, 0, value);
+			ngbe_write_phy_reg_mdi(hw, YT_MS_CTRL, 0, value);
 
 			/* enable 100/10base-T Self-negotiation ability */
-			hw->phy.read_reg(hw, YT_ANA, 0, &value);
+			ngbe_read_phy_reg_mdi(hw, YT_ANA, 0, &value);
 			value |= value_r4;
-			hw->phy.write_reg(hw, YT_ANA, 0, value);
+			ngbe_write_phy_reg_mdi(hw, YT_ANA, 0, value);
 
 			/* software reset to make the above configuration
 			 * take effect
 			 */
-			hw->phy.read_reg(hw, YT_BCR, 0, &value);
+			ngbe_read_phy_reg_mdi(hw, YT_BCR, 0, &value);
 			value |= YT_BCR_RESET;
-			hw->phy.write_reg(hw, YT_BCR, 0, value);
+			ngbe_write_phy_reg_mdi(hw, YT_BCR, 0, value);
 		}
 	} else if ((value & YT_CHIP_MODE_MASK) == YT_CHIP_MODE_SEL(4)) {
 		hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
@@ -280,6 +298,55 @@ skip_an:
 		value &= ~YT_SMI_PHY_SW_RST;
 		ngbe_write_phy_reg_ext_yt(hw, YT_CHIP, 0, value);
 
+		hw->phy.set_phy_power(hw, true);
+	} else if ((value & YT_CHIP_MODE_MASK) == YT_CHIP_MODE_SEL(5)) {
+		/* sgmii_to_rgmii */
+		if (!hw->mac.autoneg) {
+			switch (speed) {
+			case NGBE_LINK_SPEED_1GB_FULL:
+				value = YT_BCR_SPEED_SELECT1;
+				break;
+			case NGBE_LINK_SPEED_100M_FULL:
+				value = YT_BCR_SPEED_SELECT0;
+				break;
+			case NGBE_LINK_SPEED_10M_FULL:
+				value = 0;
+				break;
+			default:
+				value = YT_BCR_SPEED_SELECT0 |
+					YT_BCR_SPEED_SELECT1;
+				DEBUGOUT("unknown speed = 0x%x", speed);
+				break;
+			}
+			/* duplex full */
+			value |= YT_BCR_DUPLEX | YT_BCR_RESET;
+			hw->phy.write_reg(hw, YT_BCR, 0, value);
+
+			goto skip_an_sr;
+		}
+
+		value = 0;
+		if (speed & NGBE_LINK_SPEED_1GB_FULL) {
+			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_1GB_FULL;
+			value |= YT_BCR_SPEED_SELECT1;
+		}
+		if (speed & NGBE_LINK_SPEED_100M_FULL) {
+			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_100M_FULL;
+			value |= YT_BCR_SPEED_SELECT0;
+		}
+		if (speed & NGBE_LINK_SPEED_10M_FULL)
+			hw->phy.autoneg_advertised |= NGBE_LINK_SPEED_10M_FULL;
+
+		/* duplex full */
+		value |= YT_BCR_DUPLEX | YT_BCR_RESET;
+		hw->phy.write_reg(hw, YT_BCR, 0, value);
+
+		/* software reset to make the above configuration take effect */
+		hw->phy.read_reg(hw, YT_BCR, 0, &value);
+		value |= YT_BCR_RESET | YT_BCR_ANE | YT_BCR_RESTART_AN;
+		hw->phy.write_reg(hw, 0x0, 0, value);
+
+skip_an_sr:
 		hw->phy.set_phy_power(hw, true);
 	}
 

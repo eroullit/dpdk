@@ -412,8 +412,8 @@ run_regex(void *args)
 	mbuf_mp = rte_pktmbuf_pool_create(mbuf_pool,
 			rte_align32pow2(nb_jobs * nb_qps * nb_segs),
 			0, 0, (nb_segs == 1) ? MBUF_SIZE :
-			(rte_align32pow2(job_len) / nb_segs +
-			RTE_PKTMBUF_HEADROOM),
+			(rte_align32pow2(job_len + (data_len % nb_jobs)) /
+			 nb_segs + RTE_PKTMBUF_HEADROOM),
 			rte_socket_id());
 	if (mbuf_mp == NULL) {
 		printf("Error, can't create memory pool\n");
@@ -728,6 +728,8 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Number of QPs must be greater than 0\n");
 	if (nb_lcores == 0)
 		rte_exit(EXIT_FAILURE, "Number of lcores must be greater than 0\n");
+	if (nb_jobs == 0)
+		rte_exit(EXIT_FAILURE, "Number of jobs must be greater than 0\n");
 	if (distribute_qps_to_lcores(nb_lcores, nb_qps, &qps_per_lcore) < 0)
 		rte_exit(EXIT_FAILURE, "Failed to distribute queues to lcores!\n");
 	ret = init_port(&nb_max_payload, rules_file,

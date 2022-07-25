@@ -9,10 +9,8 @@
 #include "hns3_ethdev.h"
 #include "hns3_logs.h"
 
-/*
- * The hash key used for rss initialization.
- */
-static const uint8_t hns3_hash_key[] = {
+/* Default hash keys */
+const uint8_t hns3_hash_key[] = {
 	0x6D, 0x5A, 0x56, 0xDA, 0x25, 0x5B, 0x0E, 0xC2,
 	0x41, 0x67, 0x25, 0x3D, 0x43, 0xA3, 0x8F, 0xB0,
 	0xD0, 0xCA, 0x2B, 0xCB, 0xAE, 0x7B, 0x30, 0xB4,
@@ -631,7 +629,7 @@ hns3_rss_set_default_args(struct hns3_hw *hw)
 {
 	struct hns3_rss_conf *rss_cfg = &hw->rss_info;
 	uint16_t queue_num = hw->alloc_rss_size;
-	int i;
+	uint16_t i;
 
 	/* Default hash algorithm */
 	rss_cfg->conf.func = RTE_ETH_HASH_FUNCTION_TOEPLITZ;
