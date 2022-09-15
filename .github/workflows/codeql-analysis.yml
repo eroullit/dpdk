@@ -59,7 +59,7 @@ jobs:
       run: sudo apt install -y meson ccache libnuma-dev python3-setuptools
         python3-wheel python3-pip python3-pyelftools ninja-build libbsd-dev
         libpcap-dev libibverbs-dev libcrypto++-dev libfdt-dev libjansson-dev
-        libarchive-dev
+        libarchive-dev gcc-aarch64-linux-gnu
         
     # Autobuild attempts to build any compiled languages  (C/C++, C#, or Java).
     # If this step fails, then you should remove it and run the build manually (see below)
@@ -67,6 +67,9 @@ jobs:
     #  uses: github/codeql-action/autobuild@v2
 
     - name: Setup and build
+      env:
+        AARCH64: true
+        CC: gcc
       run: .ci/linux-setup.sh && .ci/linux-build.sh
 
     # ℹ️ Command-line programs to run using the OS shell.
