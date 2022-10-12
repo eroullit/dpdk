@@ -114,6 +114,7 @@ enum fips_tdes_test_types {
 	TDES_VARIABLE_KEY,
 	TDES_VARIABLE_TEXT,
 	TDES_KAT,
+	TDES_AFT, /* Functional Test */
 	TDES_MCT, /* Monte Carlo (Modes) Test */
 	TDES_MMT /* Multi block Message Test */
 };
@@ -182,6 +183,13 @@ struct xts_interim_data {
 };
 
 #ifdef USE_JANSSON
+/*
+ * Maximum length of buffer to hold any json string.
+ * Esp, in asym op, modulo bits decide char buffer size.
+ * max = (modulo / 4)
+ */
+#define FIPS_TEST_JSON_BUF_LEN (4096 / 4)
+
 struct fips_test_json_info {
 	/* Information used for reading from json */
 	json_t *json_root;
@@ -227,6 +235,7 @@ struct fips_test_interim_info {
 	const struct fips_test_callback *interim_callbacks;
 	const struct fips_test_callback *writeback_callbacks;
 
+	post_prcess_t parse_interim_writeback;
 	post_prcess_t parse_writeback;
 	post_prcess_t kat_check;
 };
@@ -290,6 +299,9 @@ parse_test_sha_json_algorithm(void);
 
 int
 parse_test_sha_json_test_type(void);
+
+int
+parse_test_tdes_json_init(void);
 #endif /* USE_JANSSON */
 
 int
@@ -368,5 +380,7 @@ int prepare_auth_op(void);
 int prepare_gcm_xform(struct rte_crypto_sym_xform *xform);
 
 int prepare_gmac_xform(struct rte_crypto_sym_xform *xform);
+
+int parse_test_sha_hash_size(enum rte_crypto_auth_algorithm algo);
 
 #endif

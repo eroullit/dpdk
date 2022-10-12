@@ -7,8 +7,9 @@
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_crypto_sym.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_byteorder.h>
+#include <rte_security_driver.h>
 
 #include "qat_sym.h"
 #include "qat_crypto.h"
@@ -67,12 +68,7 @@ qat_sym_build_request(void *in_op, uint8_t *out_msg,
 		return -EINVAL;
 
 	if (likely(op->sess_type == RTE_CRYPTO_OP_WITH_SESSION)) {
-		ctx = get_sym_session_private_data(op->sym->session,
-				qat_sym_driver_id);
-		if (unlikely(!ctx)) {
-			QAT_DP_LOG(ERR, "No session for this device");
-			return -EINVAL;
-		}
+		ctx = (void *)CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
 		if (sess != (uintptr_t)ctx) {
 			struct rte_cryptodev *cdev;
 			struct qat_cryptodev_private *internals;
@@ -105,7 +101,7 @@ qat_sym_build_request(void *in_op, uint8_t *out_msg,
 
 #ifdef RTE_LIB_SECURITY
 	else if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
-		ctx = get_sec_session_private_data(op->sym->sec_session);
+		ctx = SECURITY_GET_SESS_PRIV(op->sym->session);
 		if (unlikely(!ctx)) {
 			QAT_DP_LOG(ERR, "No session for this device");
 			return -EINVAL;
@@ -149,7 +145,7 @@ qat_sym_build_request(void *in_op, uint8_t *out_msg,
 				}
 			}
 
-			sess = (uintptr_t)op->sym->sec_session;
+			sess = (uintptr_t)op->sym->session;
 			build_request = ctx->build_request[proc_type];
 			opaque[0] = sess;
 			opaque[1] = (uintptr_t)build_request;
@@ -391,8 +387,7 @@ qat_sym_configure_dp_ctx(struct rte_cryptodev *dev, uint16_t qp_id,
 	if (sess_type != RTE_CRYPTO_OP_WITH_SESSION)
 		return -EINVAL;
 
-	ctx = (struct qat_sym_session *)get_sym_session_private_data(
-			session_ctx.crypto_sess, qat_sym_driver_id);
+	ctx = CRYPTODEV_GET_SYM_SESS_PRIV(session_ctx.crypto_sess);
 
 	dp_ctx->session = ctx;
 

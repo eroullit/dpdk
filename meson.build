@@ -12,16 +12,14 @@ project('DPDK', 'C',
             'default_library=static',
             'warning_level=2',
         ],
-        meson_version: '>= 0.49.2'
+        meson_version: '>= 0.53.2'
 )
 
 # check for developer mode
 developer_mode = false
 if get_option('developer_mode').auto()
-    if meson.version().version_compare('>=0.53') # fs module available
-        fs = import('fs')
-        developer_mode = fs.exists('.git')
-    endif
+    fs = import('fs')
+    developer_mode = fs.exists('.git')
 else
     developer_mode = get_option('developer_mode').enabled()
 endif
@@ -42,6 +40,7 @@ dpdk_chkinc_headers = []
 dpdk_driver_classes = []
 dpdk_drivers = []
 dpdk_extra_ldflags = []
+dpdk_libs_deprecated = []
 dpdk_libs_disabled = []
 dpdk_drvs_disabled = []
 testpmd_drivers_sources = []
@@ -52,6 +51,8 @@ if host_machine.cpu_family().startswith('x86')
     arch_subdir = 'x86'
 elif host_machine.cpu_family().startswith('arm') or host_machine.cpu_family().startswith('aarch')
     arch_subdir = 'arm'
+elif host_machine.cpu_family().startswith('loongarch')
+    arch_subdir = 'loongarch'
 elif host_machine.cpu_family().startswith('ppc')
     arch_subdir = 'ppc'
 elif host_machine.cpu_family().startswith('riscv')

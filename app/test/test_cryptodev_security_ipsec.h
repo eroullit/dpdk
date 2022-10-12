@@ -86,6 +86,8 @@ struct ipsec_test_flags {
 	bool display_alg;
 	bool sa_expiry_pkts_soft;
 	bool sa_expiry_pkts_hard;
+	bool sa_expiry_bytes_soft;
+	bool sa_expiry_bytes_hard;
 	bool icv_corrupt;
 	bool iv_gen;
 	uint32_t tunnel_hdr_verify;
@@ -132,6 +134,11 @@ static const struct crypto_param aead_list[] = {
 	{
 		.type = RTE_CRYPTO_SYM_XFORM_AEAD,
 		.alg.aead = RTE_CRYPTO_AEAD_AES_GCM,
+		.key_length = 32,
+	},
+	{
+		.type = RTE_CRYPTO_SYM_XFORM_AEAD,
+		.alg.aead = RTE_CRYPTO_AEAD_AES_CCM,
 		.key_length = 32
 	},
 };
@@ -272,7 +279,7 @@ int test_ipsec_status_check(const struct ipsec_test_data *td,
 			    int pkt_num);
 
 int test_ipsec_stats_verify(struct rte_security_ctx *ctx,
-			    struct rte_security_session *sess,
+			    void *sess,
 			    const struct ipsec_test_flags *flags,
 			    enum rte_security_ipsec_sa_direction dir);
 

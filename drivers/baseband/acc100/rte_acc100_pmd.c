@@ -6,7 +6,7 @@
 
 #include <rte_common.h>
 #include <rte_log.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_malloc.h>
 #include <rte_mempool.h>
 #include <rte_byteorder.h>
@@ -14,7 +14,7 @@
 #include <rte_branch_prediction.h>
 #include <rte_hexdump.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #ifdef RTE_BBDEV_OFFLOAD_COST
 #include <rte_cycles.h>
 #endif
@@ -967,6 +967,7 @@ acc100_dev_info_get(struct rte_bbdev *dev,
 		struct rte_bbdev_driver_info *dev_info)
 {
 	struct acc100_device *d = dev->data->dev_private;
+	int i;
 
 	static const struct rte_bbdev_op_cap bbdev_capabilities[] = {
 		{
@@ -1061,20 +1062,25 @@ acc100_dev_info_get(struct rte_bbdev *dev,
 
 	/* Read and save the populated config from ACC100 registers */
 	fetch_acc100_config(dev);
+	dev_info->device_status = RTE_BBDEV_DEV_NOT_SUPPORTED;
 
-	/* This isn't ideal because it reports the maximum number of queues but
-	 * does not provide info on how many can be uplink/downlink or different
-	 * priorities
-	 */
-	dev_info->max_num_queues =
-			d->acc100_conf.q_dl_5g.num_aqs_per_groups *
-			d->acc100_conf.q_dl_5g.num_qgroups +
-			d->acc100_conf.q_ul_5g.num_aqs_per_groups *
-			d->acc100_conf.q_ul_5g.num_qgroups +
-			d->acc100_conf.q_dl_4g.num_aqs_per_groups *
-			d->acc100_conf.q_dl_4g.num_qgroups +
-			d->acc100_conf.q_ul_4g.num_aqs_per_groups *
+	/* Expose number of queues */
+	dev_info->num_queues[RTE_BBDEV_OP_NONE] = 0;
+	dev_info->num_queues[RTE_BBDEV_OP_TURBO_DEC] = d->acc100_conf.q_ul_4g.num_aqs_per_groups *
 			d->acc100_conf.q_ul_4g.num_qgroups;
+	dev_info->num_queues[RTE_BBDEV_OP_TURBO_ENC] = d->acc100_conf.q_dl_4g.num_aqs_per_groups *
+			d->acc100_conf.q_dl_4g.num_qgroups;
+	dev_info->num_queues[RTE_BBDEV_OP_LDPC_DEC] = d->acc100_conf.q_ul_5g.num_aqs_per_groups *
+			d->acc100_conf.q_ul_5g.num_qgroups;
+	dev_info->num_queues[RTE_BBDEV_OP_LDPC_ENC] = d->acc100_conf.q_dl_5g.num_aqs_per_groups *
+			d->acc100_conf.q_dl_5g.num_qgroups;
+	dev_info->queue_priority[RTE_BBDEV_OP_TURBO_DEC] = d->acc100_conf.q_ul_4g.num_qgroups;
+	dev_info->queue_priority[RTE_BBDEV_OP_TURBO_ENC] = d->acc100_conf.q_dl_4g.num_qgroups;
+	dev_info->queue_priority[RTE_BBDEV_OP_LDPC_DEC] = d->acc100_conf.q_ul_5g.num_qgroups;
+	dev_info->queue_priority[RTE_BBDEV_OP_LDPC_ENC] = d->acc100_conf.q_dl_5g.num_qgroups;
+	dev_info->max_num_queues = 0;
+	for (i = RTE_BBDEV_OP_TURBO_DEC; i <= RTE_BBDEV_OP_LDPC_ENC; i++)
+		dev_info->max_num_queues += dev_info->num_queues[i];
 	dev_info->queue_size_lim = ACC100_MAX_QUEUE_DEPTH;
 	dev_info->hardware_accelerated = true;
 	dev_info->max_dl_queue_priority =

@@ -2,128 +2,7 @@
  * Copyright(C) 2021 Marvell.
  */
 
-#include "cnxk_cryptodev_ops.h"
 #include "cnxk_eventdev.h"
-
-static int
-crypto_adapter_qp_setup(const struct rte_cryptodev *cdev,
-			struct cnxk_cpt_qp *qp)
-{
-	char name[RTE_MEMPOOL_NAMESIZE];
-	uint32_t cache_size, nb_req;
-	unsigned int req_size;
-	uint32_t nb_desc_min;
-
-	/*
-	 * Update CPT FC threshold. Decrement by hardware burst size to allow
-	 * simultaneous enqueue from all available cores.
-	 */
-	if (roc_model_is_cn10k())
-		nb_desc_min = rte_lcore_count() * 32;
-	else
-		nb_desc_min = rte_lcore_count() * 2;
-
-	if (qp->lmtline.fc_thresh < nb_desc_min) {
-		plt_err("CPT queue depth not sufficient to allow enqueueing from %d cores",
-			rte_lcore_count());
-		return -ENOSPC;
-	}
-
-	qp->lmtline.fc_thresh -= nb_desc_min;
-
-	snprintf(name, RTE_MEMPOOL_NAMESIZE, "cnxk_ca_req_%u:%u",
-		 cdev->data->dev_id, qp->lf.lf_id);
-	req_size = sizeof(struct cpt_inflight_req);
-	cache_size = RTE_MIN(RTE_MEMPOOL_CACHE_MAX_SIZE, qp->lf.nb_desc / 1.5);
-	nb_req = RTE_MAX(qp->lf.nb_desc, cache_size * rte_lcore_count());
-	qp->ca.req_mp = rte_mempool_create(name, nb_req, req_size, cache_size,
-					   0, NULL, NULL, NULL, NULL,
-					   rte_socket_id(), 0);
-	if (qp->ca.req_mp == NULL)
-		return -ENOMEM;
-
-	qp->ca.enabled = true;
-
-	return 0;
-}
-
-int
-cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
-			   const struct rte_cryptodev *cdev,
-			   int32_t queue_pair_id)
-{
-	struct cnxk_sso_evdev *sso_evdev = cnxk_sso_pmd_priv(event_dev);
-	uint32_t adptr_xae_cnt = 0;
-	struct cnxk_cpt_qp *qp;
-	int ret;
-
-	if (queue_pair_id == -1) {
-		uint16_t qp_id;
-
-		for (qp_id = 0; qp_id < cdev->data->nb_queue_pairs; qp_id++) {
-			qp = cdev->data->queue_pairs[qp_id];
-			ret = crypto_adapter_qp_setup(cdev, qp);
-			if (ret) {
-				cnxk_crypto_adapter_qp_del(cdev, -1);
-				return ret;
-			}
-			adptr_xae_cnt += qp->ca.req_mp->size;
-		}
-	} else {
-		qp = cdev->data->queue_pairs[queue_pair_id];
-		ret = crypto_adapter_qp_setup(cdev, qp);
-		if (ret)
-			return ret;
-		adptr_xae_cnt = qp->ca.req_mp->size;
-	}
-
-	/* Update crypto adapter XAE count */
-	sso_evdev->adptr_xae_cnt += adptr_xae_cnt;
-	cnxk_sso_xae_reconfigure((struct rte_eventdev *)(uintptr_t)event_dev);
-
-	return 0;
-}
-
-static int
-crypto_adapter_qp_free(struct cnxk_cpt_qp *qp)
-{
-	int ret;
-
-	rte_mempool_free(qp->ca.req_mp);
-	qp->ca.enabled = false;
-
-	ret = roc_cpt_lmtline_init(qp->lf.roc_cpt, &qp->lmtline, qp->lf.lf_id);
-	if (ret < 0) {
-		plt_err("Could not reset lmtline for queue pair %d",
-			qp->lf.lf_id);
-		return ret;
-	}
-
-	return 0;
-}
-
-int
-cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev,
-			   int32_t queue_pair_id)
-{
-	struct cnxk_cpt_qp *qp;
-
-	if (queue_pair_id == -1) {
-		uint16_t qp_id;
-
-		for (qp_id = 0; qp_id < cdev->data->nb_queue_pairs; qp_id++) {
-			qp = cdev->data->queue_pairs[qp_id];
-			if (qp->ca.enabled)
-				crypto_adapter_qp_free(qp);
-		}
-	} else {
-		qp = cdev->data->queue_pairs[queue_pair_id];
-		if (qp->ca.enabled)
-			crypto_adapter_qp_free(qp);
-	}
-
-	return 0;
-}
 
 void
 cnxk_sso_info_get(struct cnxk_sso_evdev *dev,
@@ -321,6 +200,8 @@ cnxk_sso_queue_def_conf(struct rte_eventdev *event_dev, uint8_t queue_id,
 	queue_conf->nb_atomic_order_sequences = (1ULL << 20);
 	queue_conf->event_queue_cfg = RTE_EVENT_QUEUE_CFG_ALL_TYPES;
 	queue_conf->priority = RTE_EVENT_DEV_PRIORITY_NORMAL;
+	queue_conf->weight = RTE_EVENT_QUEUE_WEIGHT_LOWEST;
+	queue_conf->affinity = RTE_EVENT_QUEUE_AFFINITY_HIGHEST;
 }
 
 int
@@ -330,18 +211,12 @@ cnxk_sso_queue_setup(struct rte_eventdev *event_dev, uint8_t queue_id,
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
 	uint8_t priority, weight, affinity;
 
-	/* Default weight and affinity */
-	dev->mlt_prio[queue_id].weight = RTE_EVENT_QUEUE_WEIGHT_LOWEST;
-	dev->mlt_prio[queue_id].affinity = RTE_EVENT_QUEUE_AFFINITY_HIGHEST;
-
 	priority = CNXK_QOS_NORMALIZE(queue_conf->priority, 0,
 				      RTE_EVENT_DEV_PRIORITY_LOWEST,
 				      CNXK_SSO_PRIORITY_CNT);
-	weight = CNXK_QOS_NORMALIZE(
-		dev->mlt_prio[queue_id].weight, CNXK_SSO_WEIGHT_MIN,
-		RTE_EVENT_QUEUE_WEIGHT_HIGHEST, CNXK_SSO_WEIGHT_CNT);
-	affinity = CNXK_QOS_NORMALIZE(dev->mlt_prio[queue_id].affinity, 0,
-				      RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
+	weight = CNXK_QOS_NORMALIZE(queue_conf->weight, CNXK_SSO_WEIGHT_MIN,
+				    RTE_EVENT_QUEUE_WEIGHT_HIGHEST, CNXK_SSO_WEIGHT_CNT);
+	affinity = CNXK_QOS_NORMALIZE(queue_conf->affinity, 0, RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
 				      CNXK_SSO_AFFINITY_CNT);
 
 	plt_sso_dbg("Queue=%u prio=%u weight=%u affinity=%u", queue_id,
@@ -359,22 +234,6 @@ cnxk_sso_queue_release(struct rte_eventdev *event_dev, uint8_t queue_id)
 }
 
 int
-cnxk_sso_queue_attribute_get(struct rte_eventdev *event_dev, uint8_t queue_id,
-			     uint32_t attr_id, uint32_t *attr_value)
-{
-	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
-
-	if (attr_id == RTE_EVENT_QUEUE_ATTR_WEIGHT)
-		*attr_value = dev->mlt_prio[queue_id].weight;
-	else if (attr_id == RTE_EVENT_QUEUE_ATTR_AFFINITY)
-		*attr_value = dev->mlt_prio[queue_id].affinity;
-	else
-		return -EINVAL;
-
-	return 0;
-}
-
-int
 cnxk_sso_queue_attribute_set(struct rte_eventdev *event_dev, uint8_t queue_id,
 			     uint32_t attr_id, uint64_t attr_value)
 {
@@ -389,10 +248,10 @@ cnxk_sso_queue_attribute_set(struct rte_eventdev *event_dev, uint8_t queue_id,
 		conf->priority = attr_value;
 		break;
 	case RTE_EVENT_QUEUE_ATTR_WEIGHT:
-		dev->mlt_prio[queue_id].weight = attr_value;
+		conf->weight = attr_value;
 		break;
 	case RTE_EVENT_QUEUE_ATTR_AFFINITY:
-		dev->mlt_prio[queue_id].affinity = attr_value;
+		conf->affinity = attr_value;
 		break;
 	case RTE_EVENT_QUEUE_ATTR_NB_ATOMIC_FLOWS:
 	case RTE_EVENT_QUEUE_ATTR_NB_ATOMIC_ORDER_SEQUENCES:
@@ -409,11 +268,9 @@ cnxk_sso_queue_attribute_set(struct rte_eventdev *event_dev, uint8_t queue_id,
 	priority = CNXK_QOS_NORMALIZE(conf->priority, 0,
 				      RTE_EVENT_DEV_PRIORITY_LOWEST,
 				      CNXK_SSO_PRIORITY_CNT);
-	weight = CNXK_QOS_NORMALIZE(
-		dev->mlt_prio[queue_id].weight, CNXK_SSO_WEIGHT_MIN,
-		RTE_EVENT_QUEUE_WEIGHT_HIGHEST, CNXK_SSO_WEIGHT_CNT);
-	affinity = CNXK_QOS_NORMALIZE(dev->mlt_prio[queue_id].affinity, 0,
-				      RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
+	weight = CNXK_QOS_NORMALIZE(conf->weight, CNXK_SSO_WEIGHT_MIN,
+				    RTE_EVENT_QUEUE_WEIGHT_HIGHEST, CNXK_SSO_WEIGHT_CNT);
+	affinity = CNXK_QOS_NORMALIZE(conf->affinity, 0, RTE_EVENT_QUEUE_AFFINITY_HIGHEST,
 				      CNXK_SSO_AFFINITY_CNT);
 
 	return roc_sso_hwgrp_set_priority(&dev->sso, queue_id, weight, affinity,
@@ -543,10 +400,8 @@ cnxk_sso_start(struct rte_eventdev *event_dev, cnxk_sso_hws_reset_t reset_fn,
 		qos[i].hwgrp = dev->qos_parse_data[i].queue;
 		qos[i].iaq_prcnt = dev->qos_parse_data[i].iaq_prcnt;
 		qos[i].taq_prcnt = dev->qos_parse_data[i].taq_prcnt;
-		qos[i].xaq_prcnt = dev->qos_parse_data[i].xaq_prcnt;
 	}
-	rc = roc_sso_hwgrp_qos_config(&dev->sso, qos, dev->qos_queue_cnt,
-				      dev->xae_cnt);
+	rc = roc_sso_hwgrp_qos_config(&dev->sso, qos, dev->qos_queue_cnt);
 	if (rc < 0) {
 		plt_sso_dbg("failed to configure HWGRP QoS rc = %d", rc);
 		return -EINVAL;
@@ -620,7 +475,7 @@ parse_queue_param(char *value, void *opaque)
 	}
 
 	if (val != (&queue_qos.iaq_prcnt + 1)) {
-		plt_err("Invalid QoS parameter expected [Qx-XAQ-TAQ-IAQ]");
+		plt_err("Invalid QoS parameter expected [Qx-TAQ-IAQ]");
 		return;
 	}
 
@@ -668,9 +523,8 @@ parse_sso_kvargs_dict(const char *key, const char *value, void *opaque)
 {
 	RTE_SET_USED(key);
 
-	/* Dict format [Qx-XAQ-TAQ-IAQ][Qz-XAQ-TAQ-IAQ] use '-' cause ','
-	 * isn't allowed. Everything is expressed in percentages, 0 represents
-	 * default.
+	/* Dict format [Qx-TAQ-IAQ][Qz-TAQ-IAQ] use '-' cause ',' isn't allowed.
+	 * Everything is expressed in percentages, 0 represents default.
 	 */
 	parse_qos_list(value, opaque);
 

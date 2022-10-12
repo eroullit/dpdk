@@ -53,8 +53,8 @@
 
 #define MAX_LCORE_PARAMS 1024
 
-uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+uint16_t nb_rxd = RX_DESC_DEFAULT;
+uint16_t nb_txd = TX_DESC_DEFAULT;
 
 /**< Ports set in promiscuous mode off by default. */
 static int promiscuous_on;
@@ -121,7 +121,6 @@ static uint16_t nb_lcore_params = sizeof(lcore_params_array_default) /
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = RTE_ETH_MQ_RX_RSS,
-		.split_hdr_size = 0,
 		.offloads = RTE_ETH_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
@@ -135,7 +134,7 @@ static struct rte_eth_conf port_conf = {
 	},
 };
 
-static uint32_t max_pkt_len;
+uint32_t max_pkt_len;
 
 static struct rte_mempool *pktmbuf_pool[RTE_MAX_ETHPORTS][NB_SOCKETS];
 static struct rte_mempool *vector_pool[RTE_MAX_ETHPORTS];
@@ -445,7 +444,7 @@ print_usage(const char *prgname)
 		"                    another is route entry at while line leads with character '%c'.\n"
 		"  --rule_ipv6=FILE: Specify the ipv6 rules entries file.\n"
 		"  --alg: ACL classify method to use, one of: %s.\n\n",
-		prgname, RTE_TEST_RX_DESC_DEFAULT, RTE_TEST_TX_DESC_DEFAULT,
+		prgname, RX_DESC_DEFAULT, TX_DESC_DEFAULT,
 		ACL_LEAD_CHAR, ROUTE_LEAD_CHAR, alg);
 }
 
@@ -1181,7 +1180,7 @@ eth_dev_get_overhead_len(uint32_t max_rx_pktlen, uint16_t max_mtu)
 	return overhead_len;
 }
 
-static int
+int
 config_port_max_pkt_len(struct rte_eth_conf *conf,
 		struct rte_eth_dev_info *dev_info)
 {

@@ -1628,164 +1628,6 @@ sfc_mae_rule_parse_item_ethdev_based(const struct rte_flow_item *item,
 	return 0;
 }
 
-static int
-sfc_mae_rule_parse_item_phy_port(const struct rte_flow_item *item,
-				 struct sfc_flow_parse_ctx *ctx,
-				 struct rte_flow_error *error)
-{
-	struct sfc_mae_parse_ctx *ctx_mae = ctx->mae;
-	const struct rte_flow_item_phy_port supp_mask = {
-		.index = 0xffffffff,
-	};
-	const void *def_mask = &rte_flow_item_phy_port_mask;
-	const struct rte_flow_item_phy_port *spec = NULL;
-	const struct rte_flow_item_phy_port *mask = NULL;
-	efx_mport_sel_t mport_v;
-	int rc;
-
-	if (ctx_mae->match_mport_set) {
-		return rte_flow_error_set(error, ENOTSUP,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Can't handle multiple traffic source items");
-	}
-
-	rc = sfc_flow_parse_init(item,
-				 (const void **)&spec, (const void **)&mask,
-				 (const void *)&supp_mask, def_mask,
-				 sizeof(struct rte_flow_item_phy_port), error);
-	if (rc != 0)
-		return rc;
-
-	if (mask->index != supp_mask.index) {
-		return rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Bad mask in the PHY_PORT pattern item");
-	}
-
-	/* If "spec" is not set, could be any physical port */
-	if (spec == NULL)
-		return 0;
-
-	rc = efx_mae_mport_by_phy_port(spec->index, &mport_v);
-	if (rc != 0) {
-		return rte_flow_error_set(error, rc,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Failed to convert the PHY_PORT index");
-	}
-
-	rc = efx_mae_match_spec_mport_set(ctx_mae->match_spec, &mport_v, NULL);
-	if (rc != 0) {
-		return rte_flow_error_set(error, rc,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Failed to set MPORT for the PHY_PORT");
-	}
-
-	ctx_mae->match_mport_set = B_TRUE;
-
-	return 0;
-}
-
-static int
-sfc_mae_rule_parse_item_pf(const struct rte_flow_item *item,
-			   struct sfc_flow_parse_ctx *ctx,
-			   struct rte_flow_error *error)
-{
-	struct sfc_mae_parse_ctx *ctx_mae = ctx->mae;
-	const efx_nic_cfg_t *encp = efx_nic_cfg_get(ctx_mae->sa->nic);
-	efx_mport_sel_t mport_v;
-	int rc;
-
-	if (ctx_mae->match_mport_set) {
-		return rte_flow_error_set(error, ENOTSUP,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Can't handle multiple traffic source items");
-	}
-
-	rc = efx_mae_mport_by_pcie_function(encp->enc_pf, EFX_PCI_VF_INVALID,
-					    &mport_v);
-	if (rc != 0) {
-		return rte_flow_error_set(error, rc,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Failed to convert the PF ID");
-	}
-
-	rc = efx_mae_match_spec_mport_set(ctx_mae->match_spec, &mport_v, NULL);
-	if (rc != 0) {
-		return rte_flow_error_set(error, rc,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Failed to set MPORT for the PF");
-	}
-
-	ctx_mae->match_mport_set = B_TRUE;
-
-	return 0;
-}
-
-static int
-sfc_mae_rule_parse_item_vf(const struct rte_flow_item *item,
-			   struct sfc_flow_parse_ctx *ctx,
-			   struct rte_flow_error *error)
-{
-	struct sfc_mae_parse_ctx *ctx_mae = ctx->mae;
-	const efx_nic_cfg_t *encp = efx_nic_cfg_get(ctx_mae->sa->nic);
-	const struct rte_flow_item_vf supp_mask = {
-		.id = 0xffffffff,
-	};
-	const void *def_mask = &rte_flow_item_vf_mask;
-	const struct rte_flow_item_vf *spec = NULL;
-	const struct rte_flow_item_vf *mask = NULL;
-	efx_mport_sel_t mport_v;
-	int rc;
-
-	if (ctx_mae->match_mport_set) {
-		return rte_flow_error_set(error, ENOTSUP,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Can't handle multiple traffic source items");
-	}
-
-	rc = sfc_flow_parse_init(item,
-				 (const void **)&spec, (const void **)&mask,
-				 (const void *)&supp_mask, def_mask,
-				 sizeof(struct rte_flow_item_vf), error);
-	if (rc != 0)
-		return rc;
-
-	if (mask->id != supp_mask.id) {
-		return rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Bad mask in the VF pattern item");
-	}
-
-	/*
-	 * If "spec" is not set, the item requests any VF related to the
-	 * PF of the current DPDK port (but not the PF itself).
-	 * Reject this match criterion as unsupported.
-	 */
-	if (spec == NULL) {
-		return rte_flow_error_set(error, EINVAL,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Bad spec in the VF pattern item");
-	}
-
-	rc = efx_mae_mport_by_pcie_function(encp->enc_pf, spec->id, &mport_v);
-	if (rc != 0) {
-		return rte_flow_error_set(error, rc,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Failed to convert the PF + VF IDs");
-	}
-
-	rc = efx_mae_match_spec_mport_set(ctx_mae->match_spec, &mport_v, NULL);
-	if (rc != 0) {
-		return rte_flow_error_set(error, rc,
-				RTE_FLOW_ERROR_TYPE_ITEM, item,
-				"Failed to set MPORT for the PF + VF");
-	}
-
-	ctx_mae->match_mport_set = B_TRUE;
-
-	return 0;
-}
-
 /*
  * Having this field ID in a field locator means that this
  * locator cannot be used to actually set the field at the
@@ -2578,42 +2420,6 @@ static const struct sfc_flow_item sfc_flow_items[] = {
 		.layer = SFC_FLOW_ITEM_ANY_LAYER,
 		.ctx_type = SFC_FLOW_PARSE_CTX_MAE,
 		.parse = sfc_mae_rule_parse_item_ethdev_based,
-	},
-	{
-		.type = RTE_FLOW_ITEM_TYPE_PHY_PORT,
-		.name = "PHY_PORT",
-		/*
-		 * In terms of RTE flow, this item is a META one,
-		 * and its position in the pattern is don't care.
-		 */
-		.prev_layer = SFC_FLOW_ITEM_ANY_LAYER,
-		.layer = SFC_FLOW_ITEM_ANY_LAYER,
-		.ctx_type = SFC_FLOW_PARSE_CTX_MAE,
-		.parse = sfc_mae_rule_parse_item_phy_port,
-	},
-	{
-		.type = RTE_FLOW_ITEM_TYPE_PF,
-		.name = "PF",
-		/*
-		 * In terms of RTE flow, this item is a META one,
-		 * and its position in the pattern is don't care.
-		 */
-		.prev_layer = SFC_FLOW_ITEM_ANY_LAYER,
-		.layer = SFC_FLOW_ITEM_ANY_LAYER,
-		.ctx_type = SFC_FLOW_PARSE_CTX_MAE,
-		.parse = sfc_mae_rule_parse_item_pf,
-	},
-	{
-		.type = RTE_FLOW_ITEM_TYPE_VF,
-		.name = "VF",
-		/*
-		 * In terms of RTE flow, this item is a META one,
-		 * and its position in the pattern is don't care.
-		 */
-		.prev_layer = SFC_FLOW_ITEM_ANY_LAYER,
-		.layer = SFC_FLOW_ITEM_ANY_LAYER,
-		.ctx_type = SFC_FLOW_PARSE_CTX_MAE,
-		.parse = sfc_mae_rule_parse_item_vf,
 	},
 	{
 		.type = RTE_FLOW_ITEM_TYPE_ETH,
@@ -3658,36 +3464,6 @@ fail_counter_queue_uninit:
 }
 
 static int
-sfc_mae_rule_parse_action_phy_port(struct sfc_adapter *sa,
-				   const struct rte_flow_action_phy_port *conf,
-				   efx_mae_actions_t *spec)
-{
-	efx_mport_sel_t mport;
-	uint32_t phy_port;
-	int rc;
-
-	if (conf->original != 0)
-		phy_port = efx_nic_cfg_get(sa->nic)->enc_assigned_port;
-	else
-		phy_port = conf->index;
-
-	rc = efx_mae_mport_by_phy_port(phy_port, &mport);
-	if (rc != 0) {
-		sfc_err(sa, "failed to convert phys. port ID %u to m-port selector: %s",
-			phy_port, strerror(rc));
-		return rc;
-	}
-
-	rc = efx_mae_action_set_populate_deliver(spec, &mport);
-	if (rc != 0) {
-		sfc_err(sa, "failed to request action DELIVER with m-port selector 0x%08x: %s",
-			mport.sel, strerror(rc));
-	}
-
-	return rc;
-}
-
-static int
 sfc_mae_rule_parse_action_pf_vf(struct sfc_adapter *sa,
 				const struct rte_flow_action_vf *vf_conf,
 				efx_mae_actions_t *spec)
@@ -3820,7 +3596,6 @@ static const char * const action_names[] = {
 	[RTE_FLOW_ACTION_TYPE_COUNT] = "COUNT",
 	[RTE_FLOW_ACTION_TYPE_FLAG] = "FLAG",
 	[RTE_FLOW_ACTION_TYPE_MARK] = "MARK",
-	[RTE_FLOW_ACTION_TYPE_PHY_PORT] = "PHY_PORT",
 	[RTE_FLOW_ACTION_TYPE_PF] = "PF",
 	[RTE_FLOW_ACTION_TYPE_VF] = "VF",
 	[RTE_FLOW_ACTION_TYPE_PORT_ID] = "PORT_ID",
@@ -3938,11 +3713,6 @@ sfc_mae_rule_parse_action(struct sfc_adapter *sa,
 						"mark delivery has not been negotiated");
 			custom_error = B_TRUE;
 		}
-		break;
-	case RTE_FLOW_ACTION_TYPE_PHY_PORT:
-		SFC_BUILD_SET_OVERFLOW(RTE_FLOW_ACTION_TYPE_PHY_PORT,
-				       bundle->actions_mask);
-		rc = sfc_mae_rule_parse_action_phy_port(sa, action->conf, spec);
 		break;
 	case RTE_FLOW_ACTION_TYPE_PF:
 		SFC_BUILD_SET_OVERFLOW(RTE_FLOW_ACTION_TYPE_PF,

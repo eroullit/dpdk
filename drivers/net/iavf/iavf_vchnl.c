@@ -19,7 +19,7 @@
 #include <rte_ether.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 
 #include "iavf.h"
 #include "iavf_rxtx.h"
@@ -502,6 +502,7 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 		VIRTCHNL_VF_OFFLOAD_RX_FLEX_DESC |
 		VIRTCHNL_VF_OFFLOAD_FDIR_PF |
 		VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF |
+		VIRTCHNL_VF_OFFLOAD_FSUB_PF |
 		VIRTCHNL_VF_OFFLOAD_REQ_QUEUES |
 		VIRTCHNL_VF_OFFLOAD_CRC |
 		VIRTCHNL_VF_OFFLOAD_VLAN_V2 |
@@ -1523,14 +1524,150 @@ iavf_fdir_check(struct iavf_adapter *adapter,
 		PMD_DRV_LOG(ERR,
 			"Failed to check rule request due to parameters validation"
 			" or HW doesn't support");
-		return -1;
+		err = -1;
 	} else {
 		PMD_DRV_LOG(ERR,
 			"Failed to check rule request due to other reasons");
-		return -1;
+		err =  -1;
 	}
 
-	return 0;
+	return err;
+}
+
+int
+iavf_flow_sub(struct iavf_adapter *adapter, struct iavf_fsub_conf *filter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct virtchnl_flow_sub *fsub_cfg;
+	struct iavf_cmd_info args;
+	int err;
+
+	filter->sub_fltr.vsi_id = vf->vsi_res->vsi_id;
+	filter->sub_fltr.validate_only = 0;
+
+	memset(&args, 0, sizeof(args));
+	args.ops = VIRTCHNL_OP_FLOW_SUBSCRIBE;
+	args.in_args = (uint8_t *)(&filter->sub_fltr);
+	args.in_args_size = sizeof(*(&filter->sub_fltr));
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	if (err) {
+		PMD_DRV_LOG(ERR, "Failed to execute command of "
+				 "OP_FLOW_SUBSCRIBE");
+		return err;
+	}
+
+	fsub_cfg = (struct virtchnl_flow_sub *)args.out_buffer;
+	filter->flow_id = fsub_cfg->flow_id;
+
+	if (fsub_cfg->status == VIRTCHNL_FSUB_SUCCESS) {
+		PMD_DRV_LOG(INFO, "Succeed in adding rule request by PF");
+	} else if (fsub_cfg->status == VIRTCHNL_FSUB_FAILURE_RULE_NORESOURCE) {
+		PMD_DRV_LOG(ERR, "Failed to add rule request due to no hw "
+				 "resource");
+		err = -1;
+	} else if (fsub_cfg->status == VIRTCHNL_FSUB_FAILURE_RULE_EXIST) {
+		PMD_DRV_LOG(ERR, "Failed to add rule request due to the rule "
+				 "is already existed");
+		err = -1;
+	} else if (fsub_cfg->status == VIRTCHNL_FSUB_FAILURE_RULE_INVALID) {
+		PMD_DRV_LOG(ERR, "Failed to add rule request due to the hw "
+				 "doesn't support");
+		err = -1;
+	} else {
+		PMD_DRV_LOG(ERR, "Failed to add rule request due to other "
+				 "reasons");
+		err = -1;
+	}
+
+	return err;
+}
+
+int
+iavf_flow_unsub(struct iavf_adapter *adapter, struct iavf_fsub_conf *filter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct virtchnl_flow_unsub *unsub_cfg;
+	struct iavf_cmd_info args;
+	int err;
+
+	filter->unsub_fltr.vsi_id = vf->vsi_res->vsi_id;
+	filter->unsub_fltr.flow_id = filter->flow_id;
+
+	memset(&args, 0, sizeof(args));
+	args.ops = VIRTCHNL_OP_FLOW_UNSUBSCRIBE;
+	args.in_args = (uint8_t *)(&filter->unsub_fltr);
+	args.in_args_size = sizeof(filter->unsub_fltr);
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	if (err) {
+		PMD_DRV_LOG(ERR, "Failed to execute command of "
+				 "OP_FLOW_UNSUBSCRIBE");
+		return err;
+	}
+
+	unsub_cfg = (struct virtchnl_flow_unsub *)args.out_buffer;
+
+	if (unsub_cfg->status == VIRTCHNL_FSUB_SUCCESS) {
+		PMD_DRV_LOG(INFO, "Succeed in deleting rule request by PF");
+	} else if (unsub_cfg->status == VIRTCHNL_FSUB_FAILURE_RULE_NONEXIST) {
+		PMD_DRV_LOG(ERR, "Failed to delete rule request due to this "
+				 "rule doesn't exist");
+		err = -1;
+	} else {
+		PMD_DRV_LOG(ERR, "Failed to delete rule request due to other "
+				 "reasons");
+		err = -1;
+	}
+
+	return err;
+}
+
+int
+iavf_flow_sub_check(struct iavf_adapter *adapter,
+		    struct iavf_fsub_conf *filter)
+{
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct virtchnl_flow_sub *fsub_cfg;
+
+	struct iavf_cmd_info args;
+	int err;
+
+	filter->sub_fltr.vsi_id = vf->vsi_res->vsi_id;
+	filter->sub_fltr.validate_only = 1;
+
+	args.ops = VIRTCHNL_OP_FLOW_SUBSCRIBE;
+	args.in_args = (uint8_t *)(&filter->sub_fltr);
+	args.in_args_size = sizeof(*(&filter->sub_fltr));
+	args.out_buffer = vf->aq_resp;
+	args.out_size = IAVF_AQ_BUF_SZ;
+
+	err = iavf_execute_vf_cmd(adapter, &args, 0);
+	if (err) {
+		PMD_DRV_LOG(ERR, "Failed to check flow subscription rule");
+		return err;
+	}
+
+	fsub_cfg = (struct virtchnl_flow_sub *)args.out_buffer;
+
+	if (fsub_cfg->status == VIRTCHNL_FSUB_SUCCESS) {
+		PMD_DRV_LOG(INFO, "Succeed in checking rule request by PF");
+	} else if (fsub_cfg->status == VIRTCHNL_FSUB_FAILURE_RULE_INVALID) {
+		PMD_DRV_LOG(ERR, "Failed to check rule request due to "
+				 "parameters validation or HW doesn't "
+				 "support");
+		err = -1;
+	} else {
+		PMD_DRV_LOG(ERR, "Failed to check rule request due to other "
+				 "reasons");
+		err = -1;
+	}
+
+	return err;
 }
 
 int

@@ -17,7 +17,7 @@
 #include <rte_config.h>
 #include <rte_cycles.h>
 #include <rte_debug.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_errno.h>
 #include <rte_eventdev.h>
 #include <eventdev_pmd.h>
@@ -34,6 +34,16 @@
 #include "dlb2_priv.h"
 #include "dlb2_iface.h"
 #include "dlb2_inline_fns.h"
+
+/*
+ * Bypass memory fencing instructions when port is of Producer type.
+ * This should be enabled very carefully with understanding that producer
+ * is not doing any writes which need fencing. The movdir64 instruction used to
+ * enqueue events to DLB is a weakly-ordered instruction and movdir64 write
+ * to DLB can go ahead of relevant application writes like updates to buffers
+ * being sent with event
+ */
+#define DLB2_BYPASS_FENCE_ON_PP 0  /* 1 == Bypass fence, 0 == do not bypass */
 
 /*
  * Resources exposed to eventdev. Some values overridden at runtime using
@@ -290,6 +300,23 @@ dlb2_string_to_int(int *result, const char *str)
 		return -EINVAL;
 
 	*result = ret;
+	return 0;
+}
+
+static int
+set_producer_coremask(const char *key __rte_unused,
+		      const char *value,
+		      void *opaque)
+{
+	const char **mask_str = opaque;
+
+	if (value == NULL || opaque == NULL) {
+		DLB2_LOG_ERR("NULL pointer\n");
+		return -EINVAL;
+	}
+
+	*mask_str = value;
+
 	return 0;
 }
 
@@ -618,6 +645,26 @@ set_vector_opts_enab(const char *key __rte_unused,
 }
 
 static int
+set_default_ldb_port_allocation(const char *key __rte_unused,
+		      const char *value,
+		      void *opaque)
+{
+	bool *default_ldb_port_allocation = opaque;
+
+	if (value == NULL || opaque == NULL) {
+		DLB2_LOG_ERR("NULL pointer\n");
+		return -EINVAL;
+	}
+
+	if ((*value == 'y') || (*value == 'Y'))
+		*default_ldb_port_allocation = true;
+	else
+		*default_ldb_port_allocation = false;
+
+	return 0;
+}
+
+static int
 set_qid_depth_thresh(const char *key __rte_unused,
 		     const char *value,
 		     void *opaque)
@@ -813,7 +860,7 @@ dlb2_hw_create_sched_domain(struct dlb2_eventdev *dlb2,
 		cfg->num_ldb_queues;
 
 	cfg->num_hist_list_entries = resources_asked->num_ldb_ports *
-		DLB2_NUM_HIST_LIST_ENTRIES_PER_LDB_PORT;
+		evdev_dlb2_default_info.max_event_port_dequeue_depth;
 
 	if (device_version == DLB2_HW_V2_5) {
 		DLB2_LOG_DBG("sched domain create - ldb_qs=%d, ldb_ports=%d, dir_ports=%d, atomic_inflights=%d, hist_list_entries=%d, credits=%d\n",
@@ -1538,7 +1585,7 @@ dlb2_hw_create_ldb_port(struct dlb2_eventdev *dlb2,
 	cfg.cq_depth = rte_align32pow2(dequeue_depth);
 	cfg.cq_depth_threshold = 1;
 
-	cfg.cq_history_list_size = DLB2_NUM_HIST_LIST_ENTRIES_PER_LDB_PORT;
+	cfg.cq_history_list_size = cfg.cq_depth;
 
 	cfg.cos_id = ev_port->cos_id;
 	cfg.cos_strict = 0;/* best effots */
@@ -1785,6 +1832,9 @@ dlb2_hw_create_dir_port(struct dlb2_eventdev *dlb2,
 	} else
 		credit_high_watermark = enqueue_depth;
 
+	if (ev_port->conf.event_port_cfg & RTE_EVENT_PORT_CFG_HINT_PRODUCER)
+		cfg.is_producer = 1;
+
 	/* Per QM values */
 
 	ret = dlb2_iface_dir_port_create(handle, &cfg,  dlb2->poll_mode);
@@ -1915,8 +1965,8 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 {
 	struct dlb2_eventdev *dlb2;
 	struct dlb2_eventdev_port *ev_port;
-	int ret;
 	uint32_t hw_credit_quanta, sw_credit_quanta;
+	int ret;
 
 	if (dev == NULL || port_conf == NULL) {
 		DLB2_LOG_ERR("Null parameter\n");
@@ -1945,21 +1995,15 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 	sw_credit_quanta = dlb2->sw_credit_quanta;
 	hw_credit_quanta = dlb2->hw_credit_quanta;
 
+	ev_port->qm_port.is_producer = false;
 	ev_port->qm_port.is_directed = port_conf->event_port_cfg &
 		RTE_EVENT_PORT_CFG_SINGLE_LINK;
-
-	/*
-	 * Validate credit config before creating port
-	 */
-
-	/* Default for worker ports */
-	sw_credit_quanta = dlb2->sw_credit_quanta;
-	hw_credit_quanta = dlb2->hw_credit_quanta;
 
 	if (port_conf->event_port_cfg & RTE_EVENT_PORT_CFG_HINT_PRODUCER) {
 		/* Producer type ports. Mostly enqueue */
 		sw_credit_quanta = DLB2_SW_CREDIT_P_QUANTA_DEFAULT;
 		hw_credit_quanta = DLB2_SW_CREDIT_P_BATCH_SZ;
+		ev_port->qm_port.is_producer = true;
 	}
 	if (port_conf->event_port_cfg & RTE_EVENT_PORT_CFG_HINT_CONSUMER) {
 		/* Consumer type ports. Mostly dequeue */
@@ -1968,6 +2012,10 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 	}
 	ev_port->credit_update_quanta = sw_credit_quanta;
 	ev_port->qm_port.hw_credit_quanta = hw_credit_quanta;
+
+	/*
+	 * Validate credit config before creating port
+	 */
 
 	if (port_conf->enqueue_depth > sw_credit_quanta ||
 	    port_conf->enqueue_depth > hw_credit_quanta) {
@@ -1978,6 +2026,10 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 		return -EINVAL;
 	}
 	ev_port->enq_retries = port_conf->enqueue_depth / sw_credit_quanta;
+
+	/* Save off port config for reconfig */
+	ev_port->conf = *port_conf;
+
 
 	/*
 	 * Create port
@@ -2005,9 +2057,6 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 		}
 	}
 
-	/* Save off port config for reconfig */
-	ev_port->conf = *port_conf;
-
 	ev_port->id = ev_port_id;
 	ev_port->enq_configured = true;
 	ev_port->setup_done = true;
@@ -2017,6 +2066,24 @@ dlb2_eventdev_port_setup(struct rte_eventdev *dev,
 	ev_port->outstanding_releases = 0;
 	ev_port->inflight_credits = 0;
 	ev_port->dlb2 = dlb2; /* reverse link */
+
+	/* Default for worker ports */
+	sw_credit_quanta = dlb2->sw_credit_quanta;
+	hw_credit_quanta = dlb2->hw_credit_quanta;
+
+	if (port_conf->event_port_cfg & RTE_EVENT_PORT_CFG_HINT_PRODUCER) {
+		/* Producer type ports. Mostly enqueue */
+		sw_credit_quanta = DLB2_SW_CREDIT_P_QUANTA_DEFAULT;
+		hw_credit_quanta = DLB2_SW_CREDIT_P_BATCH_SZ;
+	}
+	if (port_conf->event_port_cfg & RTE_EVENT_PORT_CFG_HINT_CONSUMER) {
+		/* Consumer type ports. Mostly dequeue */
+		sw_credit_quanta = DLB2_SW_CREDIT_C_QUANTA_DEFAULT;
+		hw_credit_quanta = DLB2_SW_CREDIT_C_BATCH_SZ;
+	}
+	ev_port->credit_update_quanta = sw_credit_quanta;
+	ev_port->qm_port.hw_credit_quanta = hw_credit_quanta;
+
 
 	/* Tear down pre-existing port->queue links */
 	if (dlb2->run_state == DLB2_RUN_STATE_STOPPED)
@@ -2966,6 +3033,7 @@ __dlb2_event_enqueue_burst(void *event_port,
 	struct dlb2_port *qm_port = &ev_port->qm_port;
 	struct process_local_port_data *port_data;
 	int retries = ev_port->enq_retries;
+	int num_tx;
 	int i;
 
 	RTE_ASSERT(ev_port->enq_configured);
@@ -2974,8 +3042,8 @@ __dlb2_event_enqueue_burst(void *event_port,
 	i = 0;
 
 	port_data = &dlb2_port[qm_port->id][PORT_TYPE(qm_port)];
-
-	while (i < num) {
+	num_tx = RTE_MIN(num, ev_port->conf.enqueue_depth);
+	while (i < num_tx) {
 		uint8_t sched_types[DLB2_NUM_QES_PER_CACHE_LINE];
 		uint8_t queue_ids[DLB2_NUM_QES_PER_CACHE_LINE];
 		int pop_offs = 0;
@@ -3032,7 +3100,12 @@ __dlb2_event_enqueue_burst(void *event_port,
 		dlb2_event_build_hcws(qm_port, &events[i], j - pop_offs,
 				      sched_types, queue_ids);
 
+#if DLB2_BYPASS_FENCE_ON_PP == 1
+		/* Bypass fence instruction for producer ports */
+		dlb2_hw_do_enqueue(qm_port, i == 0 && !qm_port->is_producer, port_data);
+#else
 		dlb2_hw_do_enqueue(qm_port, i == 0, port_data);
+#endif
 
 		/* Don't include the token pop QE in the enqueue count */
 		i += j - pop_offs;
@@ -4700,6 +4773,8 @@ dlb2_parse_params(const char *params,
 					     DLB2_CQ_WEIGHT,
 					     DLB2_PORT_COS,
 					     DLB2_COS_BW,
+					     DLB2_PRODUCER_COREMASK,
+					     DLB2_DEFAULT_LDB_PORT_ALLOCATION_ARG,
 					     NULL };
 
 	if (params != NULL && params[0] != '\0') {
@@ -4880,6 +4955,29 @@ dlb2_parse_params(const char *params,
 				return ret;
 			}
 
+
+			ret = rte_kvargs_process(kvlist,
+						 DLB2_PRODUCER_COREMASK,
+						 set_producer_coremask,
+						 &dlb2_args->producer_coremask);
+			if (ret != 0) {
+				DLB2_LOG_ERR(
+					"%s: Error parsing producer coremask",
+					name);
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
+
+			ret = rte_kvargs_process(kvlist,
+						 DLB2_DEFAULT_LDB_PORT_ALLOCATION_ARG,
+						 set_default_ldb_port_allocation,
+						 &dlb2_args->default_ldb_port_allocation);
+			if (ret != 0) {
+				DLB2_LOG_ERR("%s: Error parsing ldb default port allocation arg",
+					     name);
+				rte_kvargs_free(kvlist);
+				return ret;
+			}
 
 			rte_kvargs_free(kvlist);
 		}

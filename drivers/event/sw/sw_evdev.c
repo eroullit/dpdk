@@ -3,9 +3,10 @@
  */
 
 #include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 
-#include <rte_bus_vdev.h>
+#include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
 #include <rte_ring.h>
 #include <rte_errno.h>
@@ -564,7 +565,7 @@ sw_timer_adapter_caps_get(const struct rte_eventdev *dev, uint64_t flags,
 {
 	RTE_SET_USED(dev);
 	RTE_SET_USED(flags);
-	*caps = 0;
+	*caps = RTE_EVENT_TIMER_ADAPTER_SW_CAP;
 
 	/* Use default SW ops */
 	*ops = NULL;
@@ -622,8 +623,8 @@ sw_dump(struct rte_eventdev *dev, FILE *f)
 			"Ordered", "Atomic", "Parallel", "Directed"
 	};
 	uint32_t i;
-	fprintf(f, "EventDev %s: ports %d, qids %d\n", "todo-fix-name",
-			sw->port_count, sw->qid_count);
+	fprintf(f, "EventDev %s: ports %d, qids %d\n",
+		dev->data->name, sw->port_count, sw->qid_count);
 
 	fprintf(f, "\trx   %"PRIu64"\n\tdrop %"PRIu64"\n\ttx   %"PRIu64"\n",
 		sw->stats.rx_pkts, sw->stats.rx_dropped, sw->stats.tx_pkts);
@@ -933,8 +934,7 @@ set_refill_once(const char *key __rte_unused, const char *value, void *opaque)
 static int32_t sw_sched_service_func(void *args)
 {
 	struct rte_eventdev *dev = args;
-	sw_event_schedule(dev);
-	return 0;
+	return sw_event_schedule(dev);
 }
 
 static int

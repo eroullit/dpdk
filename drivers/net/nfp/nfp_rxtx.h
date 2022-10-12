@@ -330,6 +330,126 @@ struct nfp_net_rxq {
 	int rx_qcidx;
 } __rte_aligned(64);
 
+static inline void
+nfp_net_mbuf_alloc_failed(struct nfp_net_rxq *rxq)
+{
+	rte_eth_devices[rxq->port_id].data->rx_mbuf_alloc_failed++;
+}
+
+/* Leaving always free descriptors for avoiding wrapping confusion */
+static inline uint32_t
+nfp_net_nfd3_free_tx_desc(struct nfp_net_txq *txq)
+{
+	if (txq->wr_p >= txq->rd_p)
+		return txq->tx_count - (txq->wr_p - txq->rd_p) - 8;
+	else
+		return txq->rd_p - txq->wr_p - 8;
+}
+
+/*
+ * nfp_net_nfd3_txq_full - Check if the TX queue free descriptors
+ * is below tx_free_threshold
+ *
+ * @txq: TX queue to check
+ *
+ * This function uses the host copy* of read/write pointers
+ */
+static inline uint32_t
+nfp_net_nfd3_txq_full(struct nfp_net_txq *txq)
+{
+	return (nfp_net_nfd3_free_tx_desc(txq) < txq->tx_free_thresh);
+}
+
+/* set mbuf checksum flags based on RX descriptor flags */
+static inline void
+nfp_net_rx_cksum(struct nfp_net_rxq *rxq, struct nfp_net_rx_desc *rxd,
+		 struct rte_mbuf *mb)
+{
+	struct nfp_net_hw *hw = rxq->hw;
+
+	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RXCSUM))
+		return;
+
+	/* If IPv4 and IP checksum error, fail */
+	if (unlikely((rxd->rxd.flags & PCIE_DESC_RX_IP4_CSUM) &&
+			!(rxd->rxd.flags & PCIE_DESC_RX_IP4_CSUM_OK)))
+		mb->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_BAD;
+	else
+		mb->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_GOOD;
+
+	/* If neither UDP nor TCP return */
+	if (!(rxd->rxd.flags & PCIE_DESC_RX_TCP_CSUM) &&
+			!(rxd->rxd.flags & PCIE_DESC_RX_UDP_CSUM))
+		return;
+
+	if (likely(rxd->rxd.flags & PCIE_DESC_RX_L4_CSUM_OK))
+		mb->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
+	else
+		mb->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_BAD;
+}
+
+/* Set NFD3 TX descriptor for TSO */
+static inline void
+nfp_net_nfd3_tx_tso(struct nfp_net_txq *txq,
+		struct nfp_net_nfd3_tx_desc *txd,
+		struct rte_mbuf *mb)
+{
+	uint64_t ol_flags;
+	struct nfp_net_hw *hw = txq->hw;
+
+	if (!(hw->cap & NFP_NET_CFG_CTRL_LSO_ANY))
+		goto clean_txd;
+
+	ol_flags = mb->ol_flags;
+
+	if (!(ol_flags & RTE_MBUF_F_TX_TCP_SEG))
+		goto clean_txd;
+
+	txd->l3_offset = mb->l2_len;
+	txd->l4_offset = mb->l2_len + mb->l3_len;
+	txd->lso_hdrlen = mb->l2_len + mb->l3_len + mb->l4_len;
+	txd->mss = rte_cpu_to_le_16(mb->tso_segsz);
+	txd->flags = PCIE_DESC_TX_LSO;
+	return;
+
+clean_txd:
+	txd->flags = 0;
+	txd->l3_offset = 0;
+	txd->l4_offset = 0;
+	txd->lso_hdrlen = 0;
+	txd->mss = 0;
+}
+
+/* Set TX CSUM offload flags in NFD3 TX descriptor */
+static inline void
+nfp_net_nfd3_tx_cksum(struct nfp_net_txq *txq, struct nfp_net_nfd3_tx_desc *txd,
+		 struct rte_mbuf *mb)
+{
+	uint64_t ol_flags;
+	struct nfp_net_hw *hw = txq->hw;
+
+	if (!(hw->cap & NFP_NET_CFG_CTRL_TXCSUM))
+		return;
+
+	ol_flags = mb->ol_flags;
+
+	/* IPv6 does not need checksum */
+	if (ol_flags & RTE_MBUF_F_TX_IP_CKSUM)
+		txd->flags |= PCIE_DESC_TX_IP4_CSUM;
+
+	switch (ol_flags & RTE_MBUF_F_TX_L4_MASK) {
+	case RTE_MBUF_F_TX_UDP_CKSUM:
+		txd->flags |= PCIE_DESC_TX_UDP_CSUM;
+		break;
+	case RTE_MBUF_F_TX_TCP_CKSUM:
+		txd->flags |= PCIE_DESC_TX_TCP_CSUM;
+		break;
+	}
+
+	if (ol_flags & (RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_L4_MASK))
+		txd->flags |= PCIE_DESC_TX_CSUM;
+}
+
 int nfp_net_rx_freelist_setup(struct rte_eth_dev *dev);
 uint32_t nfp_net_rx_queue_count(void *rx_queue);
 uint16_t nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
@@ -342,12 +462,9 @@ int nfp_net_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 				  struct rte_mempool *mp);
 void nfp_net_tx_queue_release(struct rte_eth_dev *dev, uint16_t queue_idx);
 void nfp_net_reset_tx_queue(struct nfp_net_txq *txq);
-int nfp_net_nfd3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
-				  uint16_t nb_desc, unsigned int socket_id,
-				  const struct rte_eth_txconf *tx_conf);
 uint16_t nfp_net_nfd3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 				  uint16_t nb_pkts);
-int nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
+int nfp_net_tx_queue_setup(struct rte_eth_dev *dev,
 		uint16_t queue_idx,
 		uint16_t nb_desc,
 		unsigned int socket_id,
@@ -355,6 +472,7 @@ int nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 uint16_t nfp_net_nfdk_xmit_pkts(void *tx_queue,
 		struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts);
+int nfp_net_tx_free_bufs(struct nfp_net_txq *txq);
 
 #endif /* _NFP_RXTX_H_ */
 /*

@@ -41,7 +41,8 @@ print_usage () {
 	usage: $(basename $0) [-h] [-q] [-v] [-nX|-r range|patch1 [patch2] ...]
 
 	Run Linux kernel checkpatch.pl with DPDK options.
-	The environment variable DPDK_CHECKPATCH_PATH must be set.
+	The environment variable DPDK_CHECKPATCH_PATH can be set, if not we will
+	try to find the script in the sources of the currently running kernel.
 
 	The patches to check can be from stdin, files specified on the command line,
 	latest git commits limited with -n option, or commits in the git range
@@ -139,6 +140,14 @@ check_forbidden_additions() { # <patch>
 		-v EXPRESSIONS='\\<RTE_LOG_REGISTER\\>' \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using RTE_LOG_REGISTER, prefer RTE_LOG_REGISTER_(DEFAULT|SUFFIX)' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
+	# forbid inclusion of driver specific headers in apps and examples
+	awk -v FOLDERS='app examples' \
+		-v EXPRESSIONS='include.*_driver\\.h include.*_pmd\\.h' \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Using driver specific headers in applications' \
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
@@ -256,10 +265,15 @@ done
 shift $(($OPTIND - 1))
 
 if [ ! -f "$DPDK_CHECKPATCH_PATH" ] || [ ! -x "$DPDK_CHECKPATCH_PATH" ] ; then
-	print_usage >&2
-	echo
-	echo 'Cannot execute DPDK_CHECKPATCH_PATH' >&2
-	exit 1
+	default_path="/lib/modules/$(uname -r)/source/scripts/checkpatch.pl"
+	if [ -f "$default_path" ] && [ -x "$default_path" ] ; then
+		DPDK_CHECKPATCH_PATH="$default_path"
+	else
+		print_usage >&2
+		echo
+		echo 'Cannot execute DPDK_CHECKPATCH_PATH' >&2
+		exit 1
+	fi
 fi
 
 print_headline() { # <title>

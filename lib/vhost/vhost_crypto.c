@@ -197,7 +197,6 @@ struct vhost_crypto {
 	struct rte_hash *session_map;
 	struct rte_mempool *mbuf_pool;
 	struct rte_mempool *sess_pool;
-	struct rte_mempool *sess_priv_pool;
 	struct rte_mempool *wb_pool;
 
 	/** DPDK cryptodev ID */
@@ -376,16 +375,10 @@ vhost_crypto_create_sess(struct vhost_crypto *vcrypto,
 		return;
 	}
 
-	session = rte_cryptodev_sym_session_create(vcrypto->sess_pool);
+	session = rte_cryptodev_sym_session_create(vcrypto->cid, &xform1,
+			vcrypto->sess_pool);
 	if (!session) {
 		VC_LOG_ERR("Failed to create session");
-		sess_param->session_id = -VIRTIO_CRYPTO_ERR;
-		return;
-	}
-
-	if (rte_cryptodev_sym_session_init(vcrypto->cid, session, &xform1,
-			vcrypto->sess_priv_pool) < 0) {
-		VC_LOG_ERR("Failed to initialize session");
 		sess_param->session_id = -VIRTIO_CRYPTO_ERR;
 		return;
 	}
@@ -395,12 +388,8 @@ vhost_crypto_create_sess(struct vhost_crypto *vcrypto,
 			&vcrypto->last_session_id, session) < 0) {
 		VC_LOG_ERR("Failed to insert session to hash table");
 
-		if (rte_cryptodev_sym_session_clear(vcrypto->cid, session) < 0)
-			VC_LOG_ERR("Failed to clear session");
-		else {
-			if (rte_cryptodev_sym_session_free(session) < 0)
-				VC_LOG_ERR("Failed to free session");
-		}
+		if (rte_cryptodev_sym_session_free(vcrypto->cid, session) < 0)
+			VC_LOG_ERR("Failed to free session");
 		sess_param->session_id = -VIRTIO_CRYPTO_ERR;
 		return;
 	}
@@ -427,12 +416,7 @@ vhost_crypto_close_sess(struct vhost_crypto *vcrypto, uint64_t session_id)
 		return -VIRTIO_CRYPTO_INVSESS;
 	}
 
-	if (rte_cryptodev_sym_session_clear(vcrypto->cid, session) < 0) {
-		VC_LOG_DBG("Failed to clear session");
-		return -VIRTIO_CRYPTO_ERR;
-	}
-
-	if (rte_cryptodev_sym_session_free(session) < 0) {
+	if (rte_cryptodev_sym_session_free(vcrypto->cid, session) < 0) {
 		VC_LOG_DBG("Failed to free session");
 		return -VIRTIO_CRYPTO_ERR;
 	}
@@ -823,11 +807,10 @@ prepare_sym_cipher_op(struct vhost_crypto *vcrypto, struct rte_crypto_op *op,
 	switch (vcrypto->option) {
 	case RTE_VHOST_CRYPTO_ZERO_COPY_ENABLE:
 		m_src->data_len = cipher->para.src_data_len;
-		m_src->buf_iova = gpa_to_hpa(vcrypto->dev, desc->addr,
-				cipher->para.src_data_len);
+		rte_mbuf_iova_set(m_src,
+				  gpa_to_hpa(vcrypto->dev, desc->addr, cipher->para.src_data_len));
 		m_src->buf_addr = get_data_ptr(vc_req, desc, VHOST_ACCESS_RO);
-		if (unlikely(m_src->buf_iova == 0 ||
-				m_src->buf_addr == NULL)) {
+		if (unlikely(rte_mbuf_iova_get(m_src) == 0 || m_src->buf_addr == NULL)) {
 			VC_LOG_ERR("zero_copy may fail due to cross page data");
 			ret = VIRTIO_CRYPTO_ERR;
 			goto error_exit;
@@ -867,10 +850,10 @@ prepare_sym_cipher_op(struct vhost_crypto *vcrypto, struct rte_crypto_op *op,
 
 	switch (vcrypto->option) {
 	case RTE_VHOST_CRYPTO_ZERO_COPY_ENABLE:
-		m_dst->buf_iova = gpa_to_hpa(vcrypto->dev,
-				desc->addr, cipher->para.dst_data_len);
+		rte_mbuf_iova_set(m_dst,
+				  gpa_to_hpa(vcrypto->dev, desc->addr, cipher->para.dst_data_len));
 		m_dst->buf_addr = get_data_ptr(vc_req, desc, VHOST_ACCESS_RW);
-		if (unlikely(m_dst->buf_iova == 0 || m_dst->buf_addr == NULL)) {
+		if (unlikely(rte_mbuf_iova_get(m_dst) == 0 || m_dst->buf_addr == NULL)) {
 			VC_LOG_ERR("zero_copy may fail due to cross page data");
 			ret = VIRTIO_CRYPTO_ERR;
 			goto error_exit;
@@ -981,10 +964,10 @@ prepare_sym_chain_op(struct vhost_crypto *vcrypto, struct rte_crypto_op *op,
 		m_src->data_len = chain->para.src_data_len;
 		m_dst->data_len = chain->para.dst_data_len;
 
-		m_src->buf_iova = gpa_to_hpa(vcrypto->dev, desc->addr,
-				chain->para.src_data_len);
+		rte_mbuf_iova_set(m_src,
+				  gpa_to_hpa(vcrypto->dev, desc->addr, chain->para.src_data_len));
 		m_src->buf_addr = get_data_ptr(vc_req, desc, VHOST_ACCESS_RO);
-		if (unlikely(m_src->buf_iova == 0 || m_src->buf_addr == NULL)) {
+		if (unlikely(rte_mbuf_iova_get(m_src) == 0 || m_src->buf_addr == NULL)) {
 			VC_LOG_ERR("zero_copy may fail due to cross page data");
 			ret = VIRTIO_CRYPTO_ERR;
 			goto error_exit;
@@ -1024,10 +1007,10 @@ prepare_sym_chain_op(struct vhost_crypto *vcrypto, struct rte_crypto_op *op,
 
 	switch (vcrypto->option) {
 	case RTE_VHOST_CRYPTO_ZERO_COPY_ENABLE:
-		m_dst->buf_iova = gpa_to_hpa(vcrypto->dev,
-				desc->addr, chain->para.dst_data_len);
+		rte_mbuf_iova_set(m_dst,
+				  gpa_to_hpa(vcrypto->dev, desc->addr, chain->para.dst_data_len));
 		m_dst->buf_addr = get_data_ptr(vc_req, desc, VHOST_ACCESS_RW);
-		if (unlikely(m_dst->buf_iova == 0 || m_dst->buf_addr == NULL)) {
+		if (unlikely(rte_mbuf_iova_get(m_dst) == 0 || m_dst->buf_addr == NULL)) {
 			VC_LOG_ERR("zero_copy may fail due to cross page data");
 			ret = VIRTIO_CRYPTO_ERR;
 			goto error_exit;
@@ -1393,7 +1376,6 @@ rte_vhost_crypto_driver_start(const char *path)
 int
 rte_vhost_crypto_create(int vid, uint8_t cryptodev_id,
 		struct rte_mempool *sess_pool,
-		struct rte_mempool *sess_priv_pool,
 		int socket_id)
 {
 	struct virtio_net *dev = get_device(vid);
@@ -1415,7 +1397,6 @@ rte_vhost_crypto_create(int vid, uint8_t cryptodev_id,
 	}
 
 	vcrypto->sess_pool = sess_pool;
-	vcrypto->sess_priv_pool = sess_priv_pool;
 	vcrypto->cid = cryptodev_id;
 	vcrypto->cache_session_id = UINT64_MAX;
 	vcrypto->last_session_id = 1;

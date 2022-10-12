@@ -151,7 +151,6 @@ struct mlx5_dev_cap {
 	/* HW has bug working with tunnel packet decap and scatter FCS. */
 	uint32_t hw_fcs_strip:1; /* FCS stripping is supported. */
 	uint32_t rt_timestamp:1; /* Realtime timestamp format. */
-	uint32_t lro_supported:1; /* Whether LRO is supported. */
 	uint32_t rq_delay_drop_en:1; /* Enable RxQ delay drop. */
 	uint32_t tunnel_en:3;
 	/* Whether tunnel stateless offloads are supported. */
@@ -308,6 +307,7 @@ struct mlx5_sh_config {
 	uint32_t decap_en:1; /* Whether decap will be used or not. */
 	uint32_t hw_fcs_strip:1; /* FCS stripping is supported. */
 	uint32_t allow_duplicate_pattern:1;
+	uint32_t lro_allowed:1; /* Whether LRO is allowed. */
 	/* Allow/Prevent the duplicate rules pattern. */
 };
 
@@ -775,6 +775,8 @@ struct mlx5_flow_meter_policy {
 	/* Is queue action in policy table. */
 	uint32_t is_hierarchy:1;
 	/* Is meter action in policy table. */
+	uint32_t hierarchy_drop_cnt:1;
+	/* Is any meter in hierarchy contains drop_cnt. */
 	uint32_t skip_y:1;
 	/* If yellow color policy is skipped. */
 	uint32_t skip_g:1;
@@ -850,7 +852,7 @@ struct mlx5_flow_meter_info {
 	 * applications) at the device level.
 	 *
 	 * It complements the behavior of some pattern items such as
-	 * RTE_FLOW_ITEM_TYPE_PHY_PORT and is meaningless without them.
+	 * RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT and is meaningless without them.
 	 *
 	 * When transferring flow rules, ingress and egress attributes keep
 	 * their original meaning, as if processing traffic emitted or
@@ -1384,6 +1386,8 @@ struct mlx5_txq_obj {
 			struct mlx5_devx_obj *sq;
 			/* DevX object for Sx queue. */
 			struct mlx5_devx_obj *tis; /* The TIS object. */
+			void *umem_buf_wq_buffer;
+			void *umem_obj_wq_buffer;
 		};
 		struct {
 			struct rte_eth_dev *dev;

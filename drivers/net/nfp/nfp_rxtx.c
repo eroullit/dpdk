@@ -17,9 +17,9 @@
 #include <ethdev_pci.h>
 
 #include "nfp_common.h"
+#include "nfp_ctrl.h"
 #include "nfp_rxtx.h"
 #include "nfp_logs.h"
-#include "nfp_ctrl.h"
 #include "nfpcore/nfp_mip.h"
 #include "nfpcore/nfp_rtsym.h"
 #include "nfpcore/nfp-common/nfp_platform.h"
@@ -116,12 +116,6 @@ nfp_net_rx_queue_count(void *rx_queue)
 	return count;
 }
 
-static inline void
-nfp_net_mbuf_alloc_failed(struct nfp_net_rxq *rxq)
-{
-	rte_eth_devices[rxq->port_id].data->rx_mbuf_alloc_failed++;
-}
-
 /*
  * nfp_net_set_hash - Set mbuf hash data
  *
@@ -214,34 +208,6 @@ nfp_net_set_hash(struct nfp_net_rxq *rxq, struct nfp_net_rx_desc *rxd,
 	}
 }
 
-/* nfp_net_rx_cksum - set mbuf checksum flags based on RX descriptor flags */
-static inline void
-nfp_net_rx_cksum(struct nfp_net_rxq *rxq, struct nfp_net_rx_desc *rxd,
-		 struct rte_mbuf *mb)
-{
-	struct nfp_net_hw *hw = rxq->hw;
-
-	if (!(hw->ctrl & NFP_NET_CFG_CTRL_RXCSUM))
-		return;
-
-	/* If IPv4 and IP checksum error, fail */
-	if (unlikely((rxd->rxd.flags & PCIE_DESC_RX_IP4_CSUM) &&
-	    !(rxd->rxd.flags & PCIE_DESC_RX_IP4_CSUM_OK)))
-		mb->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_BAD;
-	else
-		mb->ol_flags |= RTE_MBUF_F_RX_IP_CKSUM_GOOD;
-
-	/* If neither UDP nor TCP return */
-	if (!(rxd->rxd.flags & PCIE_DESC_RX_TCP_CSUM) &&
-	    !(rxd->rxd.flags & PCIE_DESC_RX_UDP_CSUM))
-		return;
-
-	if (likely(rxd->rxd.flags & PCIE_DESC_RX_L4_CSUM_OK))
-		mb->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_GOOD;
-	else
-		mb->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_BAD;
-}
-
 /*
  * RX path design:
  *
@@ -281,8 +247,9 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	struct rte_mbuf *new_mb;
 	uint16_t nb_hold;
 	uint64_t dma_addr;
-	int avail;
+	uint16_t avail;
 
+	avail = 0;
 	rxq = rx_queue;
 	if (unlikely(rxq == NULL)) {
 		/*
@@ -290,11 +257,10 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		 * enabled. But the queue needs to be configured
 		 */
 		RTE_LOG_DP(ERR, PMD, "RX Bad queue\n");
-		return -EINVAL;
+		return avail;
 	}
 
 	hw = rxq->hw;
-	avail = 0;
 	nb_hold = 0;
 
 	while (avail < nb_pkts) {
@@ -360,7 +326,8 @@ nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 				hw->rx_offset,
 				rxq->mbuf_size - hw->rx_offset,
 				mb->data_len);
-			return -EINVAL;
+			rte_pktmbuf_free(mb);
+			break;
 		}
 
 		/* Filling the received mbuf with packet info */
@@ -583,7 +550,7 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
  * @txq: TX queue to work with
  * Returns number of descriptors freed
  */
-static int
+int
 nfp_net_tx_free_bufs(struct nfp_net_txq *txq)
 {
 	uint32_t qcp_rd_p;
@@ -657,7 +624,7 @@ nfp_net_reset_tx_queue(struct nfp_net_txq *txq)
 	txq->rd_p = 0;
 }
 
-int
+static int
 nfp_net_nfd3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 		       uint16_t nb_desc, unsigned int socket_id,
 		       const struct rte_eth_txconf *tx_conf)
@@ -772,91 +739,6 @@ nfp_net_nfd3_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,
 	nn_cfg_writeb(hw, NFP_NET_CFG_TXR_SZ(queue_idx), rte_log2_u32(nb_desc));
 
 	return 0;
-}
-
-/* Leaving always free descriptors for avoiding wrapping confusion */
-static inline
-uint32_t nfp_net_nfd3_free_tx_desc(struct nfp_net_txq *txq)
-{
-	if (txq->wr_p >= txq->rd_p)
-		return txq->tx_count - (txq->wr_p - txq->rd_p) - 8;
-	else
-		return txq->rd_p - txq->wr_p - 8;
-}
-
-/*
- * nfp_net_txq_full - Check if the TX queue free descriptors
- * is below tx_free_threshold
- *
- * @txq: TX queue to check
- *
- * This function uses the host copy* of read/write pointers
- */
-static inline
-uint32_t nfp_net_nfd3_txq_full(struct nfp_net_txq *txq)
-{
-	return (nfp_net_nfd3_free_tx_desc(txq) < txq->tx_free_thresh);
-}
-
-/* nfp_net_tx_tso - Set TX descriptor for TSO */
-static inline void
-nfp_net_nfd3_tx_tso(struct nfp_net_txq *txq, struct nfp_net_nfd3_tx_desc *txd,
-	       struct rte_mbuf *mb)
-{
-	uint64_t ol_flags;
-	struct nfp_net_hw *hw = txq->hw;
-
-	if (!(hw->cap & NFP_NET_CFG_CTRL_LSO_ANY))
-		goto clean_txd;
-
-	ol_flags = mb->ol_flags;
-
-	if (!(ol_flags & RTE_MBUF_F_TX_TCP_SEG))
-		goto clean_txd;
-
-	txd->l3_offset = mb->l2_len;
-	txd->l4_offset = mb->l2_len + mb->l3_len;
-	txd->lso_hdrlen = mb->l2_len + mb->l3_len + mb->l4_len;
-	txd->mss = rte_cpu_to_le_16(mb->tso_segsz);
-	txd->flags = PCIE_DESC_TX_LSO;
-	return;
-
-clean_txd:
-	txd->flags = 0;
-	txd->l3_offset = 0;
-	txd->l4_offset = 0;
-	txd->lso_hdrlen = 0;
-	txd->mss = 0;
-}
-
-/* nfp_net_tx_cksum - Set TX CSUM offload flags in TX descriptor */
-static inline void
-nfp_net_nfd3_tx_cksum(struct nfp_net_txq *txq, struct nfp_net_nfd3_tx_desc *txd,
-		 struct rte_mbuf *mb)
-{
-	uint64_t ol_flags;
-	struct nfp_net_hw *hw = txq->hw;
-
-	if (!(hw->cap & NFP_NET_CFG_CTRL_TXCSUM))
-		return;
-
-	ol_flags = mb->ol_flags;
-
-	/* IPv6 does not need checksum */
-	if (ol_flags & RTE_MBUF_F_TX_IP_CKSUM)
-		txd->flags |= PCIE_DESC_TX_IP4_CSUM;
-
-	switch (ol_flags & RTE_MBUF_F_TX_L4_MASK) {
-	case RTE_MBUF_F_TX_UDP_CKSUM:
-		txd->flags |= PCIE_DESC_TX_UDP_CSUM;
-		break;
-	case RTE_MBUF_F_TX_TCP_CKSUM:
-		txd->flags |= PCIE_DESC_TX_TCP_CSUM;
-		break;
-	}
-
-	if (ol_flags & (RTE_MBUF_F_TX_IP_CKSUM | RTE_MBUF_F_TX_L4_MASK))
-		txd->flags |= PCIE_DESC_TX_CSUM;
 }
 
 uint16_t
@@ -991,7 +873,7 @@ xmit_end:
 	return i;
 }
 
-int
+static int
 nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 		uint16_t queue_idx,
 		uint16_t nb_desc,
@@ -1106,6 +988,35 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 	nn_cfg_writeb(hw, NFP_NET_CFG_TXR_SZ(queue_idx), rte_log2_u32(txq->tx_count));
 
 	return 0;
+}
+
+int
+nfp_net_tx_queue_setup(struct rte_eth_dev *dev,
+		uint16_t queue_idx,
+		uint16_t nb_desc,
+		unsigned int socket_id,
+		const struct rte_eth_txconf *tx_conf)
+{
+	struct nfp_net_hw *hw;
+
+	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	switch (NFD_CFG_CLASS_VER_of(hw->ver)) {
+	case NFP_NET_CFG_VERSION_DP_NFD3:
+		return nfp_net_nfd3_tx_queue_setup(dev, queue_idx,
+				nb_desc, socket_id, tx_conf);
+	case NFP_NET_CFG_VERSION_DP_NFDK:
+		if (NFD_CFG_MAJOR_VERSION_of(hw->ver) < 5) {
+			PMD_DRV_LOG(ERR, "NFDK must use ABI 5 or newer, found: %d",
+				NFD_CFG_MAJOR_VERSION_of(hw->ver));
+			return -EINVAL;
+		}
+		return nfp_net_nfdk_tx_queue_setup(dev, queue_idx,
+				nb_desc, socket_id, tx_conf);
+	default:
+		PMD_DRV_LOG(ERR, "The version of firmware is not correct.");
+		return -EINVAL;
+	}
 }
 
 static inline uint32_t

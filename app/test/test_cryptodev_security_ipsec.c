@@ -392,6 +392,9 @@ test_ipsec_td_prepare(const struct crypto_param *param1,
 			else
 				memcpy(td, &pkt_aes_256_gcm, sizeof(*td));
 
+			if (param1->alg.aead == RTE_CRYPTO_AEAD_AES_CCM)
+				td->salt.len = 3;
+
 			td->aead = true;
 			td->xform.aead.aead.algo = param1->alg.aead;
 			td->xform.aead.aead.key.length = param1->key_length;
@@ -1123,7 +1126,7 @@ test_ipsec_status_check(const struct ipsec_test_data *td,
 
 int
 test_ipsec_stats_verify(struct rte_security_ctx *ctx,
-			struct rte_security_session *sess,
+			void *sess,
 			const struct ipsec_test_flags *flags,
 			enum rte_security_ipsec_sa_direction dir)
 {

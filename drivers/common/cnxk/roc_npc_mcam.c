@@ -232,80 +232,64 @@ npc_get_kex_capability(struct npc *npc)
 	memset(&kex_cap, 0, sizeof(kex_cap));
 
 	/* Ethtype: Offset 12B, len 2B */
-	kex_cap.bit.ethtype_0 = npc_is_kex_enabled(
-		npc, NPC_LID_LA, NPC_LT_LA_ETHER, 12 * 8, 2 * 8);
+	kex_cap.bit.ethtype_0 = npc_is_kex_enabled(npc, NPC_LID_LA, NPC_LT_LA_ETHER, 12 * 8, 2 * 8);
 	/* QINQ VLAN Ethtype: offset 8B, len 2B */
-	kex_cap.bit.ethtype_x = npc_is_kex_enabled(
-		npc, NPC_LID_LB, NPC_LT_LB_STAG_QINQ, 8 * 8, 2 * 8);
+	kex_cap.bit.ethtype_x =
+		npc_is_kex_enabled(npc, NPC_LID_LB, NPC_LT_LB_STAG_QINQ, 8 * 8, 2 * 8);
 	/* VLAN ID0 : Outer VLAN: Offset 2B, len 2B */
-	kex_cap.bit.vlan_id_0 = npc_is_kex_enabled(
-		npc, NPC_LID_LB, NPC_LT_LB_CTAG, 2 * 8, 2 * 8);
-	/* VLAN ID0 : Inner VLAN: offset 6B, len 2B */
-	kex_cap.bit.vlan_id_x = npc_is_kex_enabled(
-		npc, NPC_LID_LB, NPC_LT_LB_STAG_QINQ, 6 * 8, 2 * 8);
+	kex_cap.bit.vlan_id_0 = npc_is_kex_enabled(npc, NPC_LID_LB, NPC_LT_LB_CTAG, 2 * 8, 2 * 8);
+	/* VLAN PCP0 : Outer VLAN: Offset 2B, len 1B */
+	kex_cap.bit.vlan_pcp_0 = npc_is_kex_enabled(npc, NPC_LID_LB, NPC_LT_LB_CTAG, 2 * 8, 2 * 1);
+	/* VLAN IDX : Inner VLAN: offset 6B, len 2B */
+	kex_cap.bit.vlan_id_x =
+		npc_is_kex_enabled(npc, NPC_LID_LB, NPC_LT_LB_STAG_QINQ, 6 * 8, 2 * 8);
 	/* DMCA: offset 0B, len 6B */
-	kex_cap.bit.dmac = npc_is_kex_enabled(npc, NPC_LID_LA, NPC_LT_LA_ETHER,
-					      0 * 8, 6 * 8);
+	kex_cap.bit.dmac = npc_is_kex_enabled(npc, NPC_LID_LA, NPC_LT_LA_ETHER, 0 * 8, 6 * 8);
 	/* IP proto: offset 9B, len 1B */
-	kex_cap.bit.ip_proto =
-		npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP, 9 * 8, 1 * 8);
+	kex_cap.bit.ip_proto = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP, 9 * 8, 1 * 8);
+	/* IPv4 dscp: offset 1B, len 1B, IPv6 dscp: offset 0B, len 2B */
+	kex_cap.bit.ip_dscp = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP, 1 * 8, 1 * 8) &&
+			      npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP6, 0, 2 * 8);
 	/* UDP dport: offset 2B, len 2B */
-	kex_cap.bit.udp_dport = npc_is_kex_enabled(npc, NPC_LID_LD,
-						   NPC_LT_LD_UDP, 2 * 8, 2 * 8);
+	kex_cap.bit.udp_dport = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_UDP, 2 * 8, 2 * 8);
 	/* UDP sport: offset 0B, len 2B */
-	kex_cap.bit.udp_sport = npc_is_kex_enabled(npc, NPC_LID_LD,
-						   NPC_LT_LD_UDP, 0 * 8, 2 * 8);
+	kex_cap.bit.udp_sport = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_UDP, 0 * 8, 2 * 8);
 	/* TCP dport: offset 2B, len 2B */
-	kex_cap.bit.tcp_dport = npc_is_kex_enabled(npc, NPC_LID_LD,
-						   NPC_LT_LD_TCP, 2 * 8, 2 * 8);
+	kex_cap.bit.tcp_dport = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_TCP, 2 * 8, 2 * 8);
 	/* TCP sport: offset 0B, len 2B */
-	kex_cap.bit.tcp_sport = npc_is_kex_enabled(npc, NPC_LID_LD,
-						   NPC_LT_LD_TCP, 0 * 8, 2 * 8);
+	kex_cap.bit.tcp_sport = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_TCP, 0 * 8, 2 * 8);
 	/* IP SIP: offset 12B, len 4B */
-	kex_cap.bit.sip_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP,
-						  12 * 8, 4 * 8);
+	kex_cap.bit.sip_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP, 12 * 8, 4 * 8);
 	/* IP DIP: offset 14B, len 4B */
-	kex_cap.bit.dip_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP,
-						  14 * 8, 4 * 8);
+	kex_cap.bit.dip_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP, 14 * 8, 4 * 8);
 	/* IP6 SIP: offset 8B, len 16B */
-	kex_cap.bit.sip6_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP6,
-					8 * 8, 16 * 8);
+	kex_cap.bit.sip6_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP6, 8 * 8, 16 * 8);
 	/* IP6 DIP: offset 24B, len 16B */
-	kex_cap.bit.dip6_addr = npc_is_kex_enabled(
-		npc, NPC_LID_LC, NPC_LT_LC_IP6, 24 * 8, 16 * 8);
+	kex_cap.bit.dip6_addr = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_IP6, 24 * 8, 16 * 8);
 	/* ESP SPI: offset 0B, len 4B */
-	kex_cap.bit.ipsec_spi = npc_is_kex_enabled(npc, NPC_LID_LE,
-						   NPC_LT_LE_ESP, 0 * 8, 4 * 8);
+	kex_cap.bit.ipsec_spi = npc_is_kex_enabled(npc, NPC_LID_LE, NPC_LT_LE_ESP, 0 * 8, 4 * 8);
 	/* VXLAN VNI: offset 4B, len 3B */
-	kex_cap.bit.ld_vni = npc_is_kex_enabled(npc, NPC_LID_LE,
-						NPC_LT_LE_VXLAN, 0 * 8, 3 * 8);
+	kex_cap.bit.ld_vni = npc_is_kex_enabled(npc, NPC_LID_LE, NPC_LT_LE_VXLAN, 0 * 8, 3 * 8);
 
 	/* Custom L3 frame: varied offset and lengths */
-	kex_cap.bit.custom_l3 =
-		npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_CUSTOM0, 0, 0);
-	kex_cap.bit.custom_l3 |= (uint64_t)npc_is_kex_enabled(npc, NPC_LID_LC,
-					NPC_LT_LC_CUSTOM1, 0, 0);
+	kex_cap.bit.custom_l3 = npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_CUSTOM0, 0, 0);
+	kex_cap.bit.custom_l3 |=
+		(uint64_t)npc_is_kex_enabled(npc, NPC_LID_LC, NPC_LT_LC_CUSTOM1, 0, 0);
 	/* SCTP sport : offset 0B, len 2B */
-	kex_cap.bit.sctp_sport = npc_is_kex_enabled(
-		npc, NPC_LID_LD, NPC_LT_LD_SCTP, 0 * 8, 2 * 8);
+	kex_cap.bit.sctp_sport = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_SCTP, 0 * 8, 2 * 8);
 	/* SCTP dport : offset 2B, len 2B */
-	kex_cap.bit.sctp_dport = npc_is_kex_enabled(
-		npc, NPC_LID_LD, NPC_LT_LD_SCTP, 2 * 8, 2 * 8);
+	kex_cap.bit.sctp_dport = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_SCTP, 2 * 8, 2 * 8);
 	/* ICMP type : offset 0B, len 1B */
-	kex_cap.bit.icmp_type = npc_is_kex_enabled(
-		npc, NPC_LID_LD, NPC_LT_LD_ICMP, 0 * 8, 1 * 8);
+	kex_cap.bit.icmp_type = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_ICMP, 0 * 8, 1 * 8);
 	/* ICMP code : offset 1B, len 1B */
-	kex_cap.bit.icmp_code = npc_is_kex_enabled(
-		npc, NPC_LID_LD, NPC_LT_LD_ICMP, 1 * 8, 1 * 8);
+	kex_cap.bit.icmp_code = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_ICMP, 1 * 8, 1 * 8);
 	/* ICMP id : offset 4B, len 2B */
-	kex_cap.bit.icmp_id = npc_is_kex_enabled(npc, NPC_LID_LD,
-						 NPC_LT_LD_ICMP, 4 * 8, 2 * 8);
+	kex_cap.bit.icmp_id = npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_ICMP, 4 * 8, 2 * 8);
 	/* IGMP grp_addr : offset 4B, len 4B */
-	kex_cap.bit.igmp_grp_addr = npc_is_kex_enabled(
-		npc, NPC_LID_LD, NPC_LT_LD_IGMP, 4 * 8, 4 * 8);
+	kex_cap.bit.igmp_grp_addr =
+		npc_is_kex_enabled(npc, NPC_LID_LD, NPC_LT_LD_IGMP, 4 * 8, 4 * 8);
 	/* GTPU teid : offset 4B, len 4B */
-	kex_cap.bit.gtpu_teid = npc_is_kex_enabled(
-		npc, NPC_LID_LE, NPC_LT_LE_GTPU, 4 * 8, 4 * 8);
+	kex_cap.bit.gtpv1_teid = npc_is_kex_enabled(npc, NPC_LID_LE, NPC_LT_LE_GTPU, 4 * 8, 4 * 8);
 	return kex_cap.all_bits;
 }
 
@@ -736,10 +720,13 @@ npc_program_mcam(struct npc *npc, struct npc_parse_state *pst, bool mcam_alloc)
 	uint64_t key_data[2] = {0ULL, 0ULL};
 	uint64_t key_mask[2] = {0ULL, 0ULL};
 	int key_len, bit = 0, index, rc = 0;
+	struct nix_inl_dev *inl_dev = NULL;
 	int intf = pst->flow->nix_intf;
 	struct mcam_entry *base_entry;
+	bool skip_base_rule = false;
 	int off, idx, data_off = 0;
 	uint8_t lid, mask, data;
+	struct idev_cfg *idev;
 	uint16_t layer_info;
 	uint64_t lt, flags;
 
@@ -805,7 +792,14 @@ npc_program_mcam(struct npc *npc, struct npc_parse_state *pst, bool mcam_alloc)
 	if (pst->set_ipv6ext_ltype_mask)
 		npc_set_ipv6ext_ltype_mask(pst);
 
-	if (pst->is_vf && pst->flow->nix_intf == NIX_INTF_RX) {
+	idev = idev_get_cfg();
+	if (idev)
+		inl_dev = idev->nix_inl_dev;
+	if (inl_dev && inl_dev->is_multi_channel &&
+	    (pst->flow->npc_action & NIX_RX_ACTIONOP_UCAST_IPSEC))
+		skip_base_rule = true;
+
+	if (pst->is_vf && pst->flow->nix_intf == NIX_INTF_RX && !skip_base_rule) {
 		(void)mbox_alloc_msg_npc_read_base_steer_rule(npc->mbox);
 		rc = mbox_process_msg(npc->mbox, (void *)&base_rule_rsp);
 		if (rc) {
@@ -866,8 +860,10 @@ npc_flow_free_all_resources(struct npc *npc)
 	for (idx = 0; idx < npc->flow_max_priority; idx++) {
 		while ((flow = TAILQ_FIRST(&npc->flow_list[idx])) != NULL) {
 			npc_rss_group_free(npc, flow);
-			if (flow->ctr_id != NPC_COUNTER_NONE)
+			if (flow->ctr_id != NPC_COUNTER_NONE) {
+				rc |= npc_mcam_clear_counter(npc, flow->ctr_id);
 				rc |= npc_mcam_free_counter(npc, flow->ctr_id);
+			}
 
 			npc_delete_prio_list_entry(npc, flow);
 

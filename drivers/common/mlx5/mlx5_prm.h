@@ -2020,7 +2020,12 @@ struct mlx5_ifc_cmd_hca_cap_2_bits {
 	u8 reserved_at_d8[0x3];
 	u8 log_max_conn_track_offload[0x5];
 	u8 reserved_at_e0[0x20]; /* End of DW7. */
-	u8 reserved_at_100[0x700];
+	u8 reserved_at_100[0x60];
+	u8 reserved_at_160[0x3];
+	u8 hairpin_sq_wqe_bb_size[0x5];
+	u8 hairpin_sq_wq_in_host_mem[0x1];
+	u8 hairpin_data_buffer_locked[0x1];
+	u8 reserved_at_16a[0x696];
 };
 
 struct mlx5_ifc_esw_cap_bits {
@@ -2300,7 +2305,9 @@ struct mlx5_ifc_rqc_bits {
 	u8 reserved_at_c[0x1];
 	u8 flush_in_error_en[0x1];
 	u8 hairpin[0x1];
-	u8 reserved_at_f[0xB];
+	u8 reserved_at_f[0x6];
+	u8 hairpin_data_buffer_type[0x3];
+	u8 reserved_at_a8[0x2];
 	u8 ts_format[0x02];
 	u8 reserved_at_1c[0x4];
 	u8 reserved_at_20[0x8];
@@ -2673,6 +2680,11 @@ enum {
 	MLX5_SQC_STATE_ERR  = 0x3,
 };
 
+enum {
+	MLX5_SQC_HAIRPIN_WQ_BUFFER_TYPE_INTERNAL_BUFFER = 0x0,
+	MLX5_SQC_HAIRPIN_WQ_BUFFER_TYPE_HOST_MEMORY = 0x1,
+};
+
 struct mlx5_ifc_sqc_bits {
 	u8 rlky[0x1];
 	u8 cd_master[0x1];
@@ -2686,7 +2698,9 @@ struct mlx5_ifc_sqc_bits {
 	u8 hairpin[0x1];
 	u8 non_wire[0x1];
 	u8 static_sq_wq[0x1];
-	u8 reserved_at_11[0x9];
+	u8 reserved_at_11[0x4];
+	u8 hairpin_wq_buffer_type[0x3];
+	u8 reserved_at_18[0x2];
 	u8 ts_format[0x02];
 	u8 reserved_at_1c[0x4];
 	u8 reserved_at_20[0x8];
@@ -2800,6 +2814,11 @@ enum {
 enum {
 	MLX5_CQE_SIZE_64B = 0x0,
 	MLX5_CQE_SIZE_128B = 0x1,
+};
+
+enum {
+	MLX5_RQC_HAIRPIN_DATA_BUFFER_TYPE_UNLOCKED_INTERNAL_BUFFER = 0x0,
+	MLX5_RQC_HAIRPIN_DATA_BUFFER_TYPE_LOCKED_INTERNAL_BUFFER = 0x1,
 };
 
 struct mlx5_ifc_cqc_bits {

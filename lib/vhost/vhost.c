@@ -771,7 +771,8 @@ vhost_set_ifname(int vid, const char *if_name, unsigned int if_len)
 }
 
 void
-vhost_setup_virtio_net(int vid, bool enable, bool compliant_ol_flags, bool stats_enabled)
+vhost_setup_virtio_net(int vid, bool enable, bool compliant_ol_flags, bool stats_enabled,
+	bool support_iommu)
 {
 	struct virtio_net *dev = get_device(vid);
 
@@ -790,6 +791,10 @@ vhost_setup_virtio_net(int vid, bool enable, bool compliant_ol_flags, bool stats
 		dev->flags |= VIRTIO_DEV_STATS_ENABLED;
 	else
 		dev->flags &= ~VIRTIO_DEV_STATS_ENABLED;
+	if (support_iommu)
+		dev->flags |= VIRTIO_DEV_SUPPORT_IOMMU;
+	else
+		dev->flags &= ~VIRTIO_DEV_SUPPORT_IOMMU;
 }
 
 void
@@ -857,17 +862,6 @@ rte_vhost_get_numa_node(int vid)
 	RTE_SET_USED(vid);
 	return -1;
 #endif
-}
-
-uint32_t
-rte_vhost_get_queue_num(int vid)
-{
-	struct virtio_net *dev = get_device(vid);
-
-	if (dev == NULL)
-		return 0;
-
-	return dev->nr_vring / 2;
 }
 
 uint16_t

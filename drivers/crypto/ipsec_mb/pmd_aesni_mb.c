@@ -192,20 +192,28 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 	if (xform->auth.algo == RTE_CRYPTO_AUTH_ZUC_EIA3) {
 		if (xform->auth.key.length == 16) {
 			sess->auth.algo = IMB_AUTH_ZUC_EIA3_BITLEN;
+
+			if (sess->auth.req_digest_len != 4) {
+				IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+				return -EINVAL;
+			}
 		} else if (xform->auth.key.length == 32) {
 			sess->auth.algo = IMB_AUTH_ZUC256_EIA3_BITLEN;
+#if IMB_VERSION(1, 2, 0) > IMB_VERSION_NUM
+			if (sess->auth.req_digest_len != 4 &&
+					sess->auth.req_digest_len != 8 &&
+					sess->auth.req_digest_len != 16) {
+#else
+			if (sess->auth.req_digest_len != 4) {
+#endif
+				IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+				return -EINVAL;
+			}
 		} else {
 			IPSEC_MB_LOG(ERR, "Invalid authentication key length\n");
 			return -EINVAL;
 		}
 
-		uint16_t zuc_eia3_digest_len =
-			get_truncated_digest_byte_length(
-						IMB_AUTH_ZUC_EIA3_BITLEN);
-		if (sess->auth.req_digest_len != zuc_eia3_digest_len) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
-			return -EINVAL;
-		}
 		sess->auth.gen_digest_len = sess->auth.req_digest_len;
 
 		memcpy(sess->auth.zuc_auth_key, xform->auth.key.data,
@@ -1584,8 +1592,7 @@ set_sec_mb_job_params(IMB_JOB *job, struct ipsec_mb_qp *qp,
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
 		return -1;
 	}
-	session = (struct aesni_mb_session *)
-		get_sec_session_private_data(op->sym->sec_session);
+	session = SECURITY_GET_SESS_PRIV(op->sym->session);
 
 	if (unlikely(session == NULL)) {
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
@@ -1710,8 +1717,6 @@ post_process_mb_job(struct ipsec_mb_qp *qp, IMB_JOB *job)
 {
 	struct rte_crypto_op *op = (struct rte_crypto_op *)job->user_data;
 	struct aesni_mb_session *sess = NULL;
-	uint32_t driver_id = ipsec_mb_get_driver_id(
-						IPSEC_MB_PMD_TYPE_AESNI_MB);
 
 #ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 	uint8_t is_docsis_sec = 0;
@@ -1722,18 +1727,10 @@ post_process_mb_job(struct ipsec_mb_qp *qp, IMB_JOB *job)
 		 * this is for DOCSIS
 		 */
 		is_docsis_sec = 1;
-		sess = get_sec_session_private_data(op->sym->sec_session);
+		sess = SECURITY_GET_SESS_PRIV(op->sym->session);
 	} else
 #endif
-	{
-		sess = get_sym_session_private_data(op->sym->session,
-						driver_id);
-	}
-
-	if (unlikely(sess == NULL)) {
-		op->status = RTE_CRYPTO_OP_STATUS_INVALID_SESSION;
-		return op;
-	}
+		sess = CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
 
 	if (likely(op->status == RTE_CRYPTO_OP_STATUS_NOT_PROCESSED)) {
 		switch (job->status) {
@@ -1771,10 +1768,6 @@ post_process_mb_job(struct ipsec_mb_qp *qp, IMB_JOB *job)
 	/* Free session if a session-less crypto op */
 	if (op->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 		memset(sess, 0, sizeof(struct aesni_mb_session));
-		memset(op->sym->session, 0,
-			rte_cryptodev_sym_get_existing_header_session_size(
-				op->sym->session));
-		rte_mempool_put(qp->sess_mp_priv, sess);
 		rte_mempool_put(qp->sess_mp, op->sym->session);
 		op->sym->session = NULL;
 	}
@@ -1962,16 +1955,6 @@ aesni_mb_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 	return processed_jobs;
 }
 
-
-static inline void
-ipsec_mb_fill_error_code(struct rte_crypto_sym_vec *vec, int32_t err)
-{
-	uint32_t i;
-
-	for (i = 0; i != vec->num; ++i)
-		vec->status[i] = err;
-}
-
 static inline int
 check_crypto_sgl(union rte_crypto_sym_ofs so, const struct rte_crypto_sgl *sgl)
 {
@@ -2028,7 +2011,7 @@ verify_sync_dgst(struct rte_crypto_sym_vec *vec,
 }
 
 static uint32_t
-aesni_mb_process_bulk(struct rte_cryptodev *dev,
+aesni_mb_process_bulk(struct rte_cryptodev *dev __rte_unused,
 	struct rte_cryptodev_sym_session *sess, union rte_crypto_sym_ofs sofs,
 	struct rte_crypto_sym_vec *vec)
 {
@@ -2037,14 +2020,8 @@ aesni_mb_process_bulk(struct rte_cryptodev *dev,
 	void *buf;
 	IMB_JOB *job;
 	IMB_MGR *mb_mgr;
-	struct aesni_mb_session *s;
+	struct aesni_mb_session *s = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 	uint8_t tmp_dgst[vec->num][DIGEST_LENGTH_MAX];
-
-	s = get_sym_session_private_data(sess, dev->driver_id);
-	if (s == NULL) {
-		ipsec_mb_fill_error_code(vec, EINVAL);
-		return 0;
-	}
 
 	/* get per-thread MB MGR, create one if needed */
 	mb_mgr = get_per_thread_mb_mgr();
@@ -2125,10 +2102,9 @@ struct rte_cryptodev_ops aesni_mb_pmd_ops = {
  */
 static int
 aesni_mb_pmd_sec_sess_create(void *dev, struct rte_security_session_conf *conf,
-		struct rte_security_session *sess,
-		struct rte_mempool *mempool)
+		struct rte_security_session *sess)
 {
-	void *sess_private_data;
+	void *sess_private_data = SECURITY_GET_SESS_PRIV(sess);
 	struct rte_cryptodev *cdev = (struct rte_cryptodev *)dev;
 	int ret;
 
@@ -2138,23 +2114,13 @@ aesni_mb_pmd_sec_sess_create(void *dev, struct rte_security_session_conf *conf,
 		return -EINVAL;
 	}
 
-	if (rte_mempool_get(mempool, &sess_private_data)) {
-		IPSEC_MB_LOG(ERR, "Couldn't get object from session mempool");
-		return -ENOMEM;
-	}
-
 	ret = aesni_mb_set_docsis_sec_session_parameters(cdev, conf,
 			sess_private_data);
 
 	if (ret != 0) {
 		IPSEC_MB_LOG(ERR, "Failed to configure session parameters");
-
-		/* Return session to mempool */
-		rte_mempool_put(mempool, sess_private_data);
 		return ret;
 	}
-
-	set_sec_session_private_data(sess, sess_private_data);
 
 	return ret;
 }
@@ -2164,16 +2130,18 @@ static int
 aesni_mb_pmd_sec_sess_destroy(void *dev __rte_unused,
 		struct rte_security_session *sess)
 {
-	void *sess_priv = get_sec_session_private_data(sess);
+	void *sess_priv = SECURITY_GET_SESS_PRIV(sess);
 
 	if (sess_priv) {
-		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-
 		memset(sess_priv, 0, sizeof(struct aesni_mb_session));
-		set_sec_session_private_data(sess, NULL);
-		rte_mempool_put(sess_mp, sess_priv);
 	}
 	return 0;
+}
+
+static unsigned int
+aesni_mb_pmd_sec_sess_get_size(void *device __rte_unused)
+{
+	return sizeof(struct aesni_mb_session);
 }
 
 /** Get security capabilities for aesni multi-buffer */
@@ -2186,6 +2154,7 @@ aesni_mb_pmd_sec_capa_get(void *device __rte_unused)
 static struct rte_security_ops aesni_mb_pmd_sec_ops = {
 		.session_create = aesni_mb_pmd_sec_sess_create,
 		.session_update = NULL,
+		.session_get_size = aesni_mb_pmd_sec_sess_get_size,
 		.session_stats_get = NULL,
 		.session_destroy = aesni_mb_pmd_sec_sess_destroy,
 		.set_pkt_metadata = NULL,

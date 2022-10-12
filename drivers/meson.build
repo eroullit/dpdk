@@ -91,6 +91,7 @@ foreach subpath:subdirs
         name = drv
         sources = []
         headers = []
+        driver_sdk_headers = [] # public headers included by drivers
         objs = []
         cflags = default_cflags
         includes = [include_directories(drv_path)]
@@ -105,6 +106,7 @@ foreach subpath:subdirs
         ext_deps = []
         pkgconfig_extra_libs = []
         testpmd_sources = []
+        pmd_supports_disable_iova_as_pa = false
 
         if not enable_drivers.contains(drv_path)
             build = false
@@ -122,6 +124,11 @@ foreach subpath:subdirs
             # pull in driver directory which should update all the local variables
             subdir(drv_path)
 
+            if dpdk_conf.get('RTE_IOVA_AS_PA') == 0 and not pmd_supports_disable_iova_as_pa and not always_enable.contains(drv_path)
+                build = false
+                reason = 'driver does not support disabling IOVA as PA mode'
+            endif
+
             # get dependency objs from strings
             shared_deps = ext_deps
             static_deps = ext_deps
@@ -132,6 +139,9 @@ foreach subpath:subdirs
                 if not is_variable('shared_rte_' + d)
                     build = false
                     reason = 'missing internal dependency, "@0@"'.format(d)
+                    if dpdk_libs_deprecated.contains(d)
+                        reason += ' (deprecated lib)'
+                    endif
                     message('Disabling @1@ [@2@]: missing internal dependency "@0@"'
                             .format(d, name, 'drivers/' + drv_path))
                 else
@@ -160,6 +170,9 @@ foreach subpath:subdirs
         dpdk_extra_ldflags += pkgconfig_extra_libs
 
         install_headers(headers)
+        if get_option('enable_driver_sdk')
+            install_headers(driver_sdk_headers)
+        endif
 
         # generate pmdinfo sources by building a temporary
         # lib and then running pmdinfogen on the contents of

@@ -10,6 +10,7 @@
 
 #include "hns3_ethdev.h"
 #include "hns3_common.h"
+#include "hns3_dump.h"
 #include "hns3_logs.h"
 #include "hns3_rxtx.h"
 #include "hns3_regs.h"
@@ -700,13 +701,16 @@ static void
 hns3vf_parse_dev_specifications(struct hns3_hw *hw, struct hns3_cmd_desc *desc)
 {
 	struct hns3_dev_specs_0_cmd *req0;
+	struct hns3_dev_specs_1_cmd *req1;
 
 	req0 = (struct hns3_dev_specs_0_cmd *)desc[0].data;
+	req1 = (struct hns3_dev_specs_1_cmd *)desc[1].data;
 
 	hw->max_non_tso_bd_num = req0->max_non_tso_bd_num;
 	hw->rss_ind_tbl_size = rte_le_to_cpu_16(req0->rss_ind_tbl_size);
 	hw->rss_key_size = rte_le_to_cpu_16(req0->rss_key_size);
 	hw->intr.int_ql_max = rte_le_to_cpu_16(req0->intr_ql_max);
+	hw->min_tx_pkt_len = req1->min_tx_pkt_len;
 }
 
 static int
@@ -845,7 +849,6 @@ hns3vf_get_capability(struct hns3_hw *hw)
 	hw->intr.gl_unit = HNS3_INTR_COALESCE_GL_UINT_1US;
 	hw->tso_mode = HNS3_TSO_HW_CAL_PSEUDO_H_CSUM;
 	hw->drop_stats_mode = HNS3_PKTS_DROP_STATS_MODE2;
-	hw->min_tx_pkt_len = HNS3_HIP09_MIN_TX_PKT_LEN;
 	hw->rss_info.ipv6_sctp_offload_supported = true;
 	hw->promisc_mode = HNS3_LIMIT_PROMISC_MODE;
 
@@ -1740,13 +1743,7 @@ hns3vf_do_start(struct hns3_adapter *hns, bool reset_queue)
 	if (ret)
 		hns3_err(hw, "failed to init queues, ret = %d.", ret);
 
-	return ret;
-}
-
-static void
-hns3vf_restore_filter(struct rte_eth_dev *dev)
-{
-	hns3_restore_rss_filter(dev);
+	return hns3_restore_filter(hns);
 }
 
 static int
@@ -1797,8 +1794,6 @@ hns3vf_dev_start(struct rte_eth_dev *dev)
 	hns3_rx_scattered_calc(dev);
 	hns3_set_rxtx_function(dev);
 	hns3_mp_req_start_rxtx(dev);
-
-	hns3vf_restore_filter(dev);
 
 	/* Enable interrupt of all rx queues before enabling queues */
 	hns3_dev_all_rx_queue_intr_enable(hw, true);
@@ -1863,8 +1858,15 @@ hns3vf_is_reset_pending(struct hns3_adapter *hns)
 	if (hw->reset.level == HNS3_VF_FULL_RESET)
 		return false;
 
-	/* Check the registers to confirm whether there is reset pending */
-	hns3vf_check_event_cause(hns, NULL);
+	/*
+	 * Check the registers to confirm whether there is reset pending.
+	 * Note: This check may lead to schedule reset task, but only primary
+	 *       process can process the reset event. Therefore, limit the
+	 *       checking under only primary process.
+	 */
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		hns3vf_check_event_cause(hns, NULL);
+
 	reset = hns3vf_get_reset_level(hw, &hw->reset.pending);
 	if (hw->reset.level != HNS3_NONE_RESET && reset != HNS3_NONE_RESET &&
 	    hw->reset.level < reset) {
@@ -2300,6 +2302,8 @@ static const struct eth_dev_ops hns3vf_eth_dev_ops = {
 	.dev_supported_ptypes_get = hns3_dev_supported_ptypes_get,
 	.tx_done_cleanup    = hns3_tx_done_cleanup,
 	.eth_dev_priv_dump  = hns3_eth_dev_priv_dump,
+	.eth_rx_descriptor_dump = hns3_rx_descriptor_dump,
+	.eth_tx_descriptor_dump = hns3_tx_descriptor_dump,
 };
 
 static const struct hns3_reset_ops hns3vf_reset_ops = {

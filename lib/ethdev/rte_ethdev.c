@@ -7,10 +7,12 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/queue.h>
 
+#include <bus_driver.h>
 #include <rte_log.h>
 #include <rte_interrupts.h>
 #include <rte_memcpy.h>
@@ -92,7 +94,6 @@ static const struct {
 	RTE_RX_OFFLOAD_BIT2STR(QINQ_STRIP),
 	RTE_RX_OFFLOAD_BIT2STR(OUTER_IPV4_CKSUM),
 	RTE_RX_OFFLOAD_BIT2STR(MACSEC_STRIP),
-	RTE_RX_OFFLOAD_BIT2STR(HEADER_SPLIT),
 	RTE_RX_OFFLOAD_BIT2STR(VLAN_FILTER),
 	RTE_RX_OFFLOAD_BIT2STR(VLAN_EXTEND),
 	RTE_RX_OFFLOAD_BIT2STR(SCATTER),
@@ -560,8 +561,16 @@ rte_eth_dev_owner_get(const uint16_t port_id, struct rte_eth_dev_owner *owner)
 int
 rte_eth_dev_socket_id(uint16_t port_id)
 {
-	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -1);
-	return rte_eth_devices[port_id].data->numa_node;
+	int socket_id = SOCKET_ID_ANY;
+
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		rte_errno = EINVAL;
+	} else {
+		socket_id = rte_eth_devices[port_id].data->numa_node;
+		if (socket_id == SOCKET_ID_ANY)
+			rte_errno = 0;
+	}
+	return socket_id;
 }
 
 void *
@@ -641,7 +650,7 @@ rte_eth_dev_get_port_by_name(const char *name, uint16_t *port_id)
 	return -ENODEV;
 }
 
-static int
+int
 eth_err(uint16_t port_id, int ret)
 {
 	if (ret == 0)
@@ -719,7 +728,8 @@ rte_eth_dev_rx_queue_start(uint16_t port_id, uint16_t rx_queue_id)
 	if (ret != 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_start, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_start == NULL)
+		return -ENOTSUP;
 
 	if (rte_eth_dev_is_rx_hairpin_queue(dev, rx_queue_id)) {
 		RTE_ETHDEV_LOG(INFO,
@@ -751,7 +761,8 @@ rte_eth_dev_rx_queue_stop(uint16_t port_id, uint16_t rx_queue_id)
 	if (ret != 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_stop, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_stop == NULL)
+		return -ENOTSUP;
 
 	if (rte_eth_dev_is_rx_hairpin_queue(dev, rx_queue_id)) {
 		RTE_ETHDEV_LOG(INFO,
@@ -790,7 +801,8 @@ rte_eth_dev_tx_queue_start(uint16_t port_id, uint16_t tx_queue_id)
 	if (ret != 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_queue_start, -ENOTSUP);
+	if (*dev->dev_ops->tx_queue_start == NULL)
+		return -ENOTSUP;
 
 	if (rte_eth_dev_is_tx_hairpin_queue(dev, tx_queue_id)) {
 		RTE_ETHDEV_LOG(INFO,
@@ -822,7 +834,8 @@ rte_eth_dev_tx_queue_stop(uint16_t port_id, uint16_t tx_queue_id)
 	if (ret != 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_queue_stop, -ENOTSUP);
+	if (*dev->dev_ops->tx_queue_stop == NULL)
+		return -ENOTSUP;
 
 	if (rte_eth_dev_is_tx_hairpin_queue(dev, tx_queue_id)) {
 		RTE_ETHDEV_LOG(INFO,
@@ -1077,7 +1090,8 @@ rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_configure, -ENOTSUP);
+	if (*dev->dev_ops->dev_configure == NULL)
+		return -ENOTSUP;
 
 	if (dev->data->dev_started) {
 		RTE_ETHDEV_LOG(ERR,
@@ -1447,7 +1461,8 @@ rte_eth_dev_start(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_start, -ENOTSUP);
+	if (*dev->dev_ops->dev_start == NULL)
+		return -ENOTSUP;
 
 	if (dev->data->dev_configured == 0) {
 		RTE_ETHDEV_LOG(INFO,
@@ -1493,7 +1508,8 @@ rte_eth_dev_start(uint16_t port_id)
 	}
 
 	if (dev->data->dev_conf.intr_conf.lsc == 0) {
-		RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->link_update, -ENOTSUP);
+		if (*dev->dev_ops->link_update == NULL)
+			return -ENOTSUP;
 		(*dev->dev_ops->link_update)(dev, 0);
 	}
 
@@ -1513,7 +1529,8 @@ rte_eth_dev_stop(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_stop, -ENOTSUP);
+	if (*dev->dev_ops->dev_stop == NULL)
+		return -ENOTSUP;
 
 	if (dev->data->dev_started == 0) {
 		RTE_ETHDEV_LOG(INFO,
@@ -1541,7 +1558,8 @@ rte_eth_dev_set_link_up(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_set_link_up, -ENOTSUP);
+	if (*dev->dev_ops->dev_set_link_up == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->dev_set_link_up)(dev));
 }
 
@@ -1553,7 +1571,8 @@ rte_eth_dev_set_link_down(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_set_link_down, -ENOTSUP);
+	if (*dev->dev_ops->dev_set_link_down == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->dev_set_link_down)(dev));
 }
 
@@ -1579,7 +1598,8 @@ rte_eth_dev_close(uint16_t port_id)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_close, -ENOTSUP);
+	if (*dev->dev_ops->dev_close == NULL)
+		return -ENOTSUP;
 	*lasterr = (*dev->dev_ops->dev_close)(dev);
 	if (*lasterr != 0)
 		lasterr = &binerr;
@@ -1599,7 +1619,8 @@ rte_eth_dev_reset(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_reset, -ENOTSUP);
+	if (*dev->dev_ops->dev_reset == NULL)
+		return -ENOTSUP;
 
 	ret = rte_eth_dev_stop(port_id);
 	if (ret != 0) {
@@ -1624,7 +1645,8 @@ rte_eth_dev_is_removed(uint16_t port_id)
 	if (dev->state == RTE_ETH_DEV_REMOVED)
 		return 1;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->is_removed, 0);
+	if (*dev->dev_ops->is_removed == NULL)
+		return 0;
 
 	ret = dev->dev_ops->is_removed(dev);
 	if (ret != 0)
@@ -1635,14 +1657,71 @@ rte_eth_dev_is_removed(uint16_t port_id)
 }
 
 static int
-rte_eth_rx_queue_check_split(const struct rte_eth_rxseg_split *rx_seg,
-			     uint16_t n_seg, uint32_t *mbp_buf_size,
-			     const struct rte_eth_dev_info *dev_info)
+rte_eth_check_rx_mempool(struct rte_mempool *mp, uint16_t offset,
+			 uint16_t min_length)
+{
+	uint16_t data_room_size;
+
+	/*
+	 * Check the size of the mbuf data buffer, this value
+	 * must be provided in the private data of the memory pool.
+	 * First check that the memory pool(s) has a valid private data.
+	 */
+	if (mp->private_data_size <
+			sizeof(struct rte_pktmbuf_pool_private)) {
+		RTE_ETHDEV_LOG(ERR, "%s private_data_size %u < %u\n",
+			mp->name, mp->private_data_size,
+			(unsigned int)
+			sizeof(struct rte_pktmbuf_pool_private));
+		return -ENOSPC;
+	}
+	data_room_size = rte_pktmbuf_data_room_size(mp);
+	if (data_room_size < offset + min_length) {
+		RTE_ETHDEV_LOG(ERR,
+			       "%s mbuf_data_room_size %u < %u (%u + %u)\n",
+			       mp->name, data_room_size,
+			       offset + min_length, offset, min_length);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int
+eth_dev_buffer_split_get_supported_hdrs_helper(uint16_t port_id, uint32_t **ptypes)
+{
+	int cnt;
+
+	cnt = rte_eth_buffer_split_get_supported_hdr_ptypes(port_id, NULL, 0);
+	if (cnt <= 0)
+		return cnt;
+
+	*ptypes = malloc(sizeof(uint32_t) * cnt);
+	if (*ptypes == NULL)
+		return -ENOMEM;
+
+	cnt = rte_eth_buffer_split_get_supported_hdr_ptypes(port_id, *ptypes, cnt);
+	if (cnt <= 0) {
+		free(*ptypes);
+		*ptypes = NULL;
+	}
+	return cnt;
+}
+
+static int
+rte_eth_rx_queue_check_split(uint16_t port_id,
+			const struct rte_eth_rxseg_split *rx_seg,
+			uint16_t n_seg, uint32_t *mbp_buf_size,
+			const struct rte_eth_dev_info *dev_info)
 {
 	const struct rte_eth_rxseg_capa *seg_capa = &dev_info->rx_seg_capa;
 	struct rte_mempool *mp_first;
 	uint32_t offset_mask;
 	uint16_t seg_idx;
+	int ret = 0;
+	int ptype_cnt;
+	uint32_t *ptypes;
+	uint32_t prev_proto_hdrs = RTE_PTYPE_UNKNOWN;
+	int i;
 
 	if (n_seg > seg_capa->max_nseg) {
 		RTE_ETHDEV_LOG(ERR,
@@ -1656,52 +1735,126 @@ rte_eth_rx_queue_check_split(const struct rte_eth_rxseg_split *rx_seg,
 	 */
 	mp_first = rx_seg[0].mp;
 	offset_mask = RTE_BIT32(seg_capa->offset_align_log2) - 1;
+
+	ptypes = NULL;
+	ptype_cnt = eth_dev_buffer_split_get_supported_hdrs_helper(port_id, &ptypes);
+
 	for (seg_idx = 0; seg_idx < n_seg; seg_idx++) {
 		struct rte_mempool *mpl = rx_seg[seg_idx].mp;
 		uint32_t length = rx_seg[seg_idx].length;
 		uint32_t offset = rx_seg[seg_idx].offset;
+		uint32_t proto_hdr = rx_seg[seg_idx].proto_hdr;
 
 		if (mpl == NULL) {
 			RTE_ETHDEV_LOG(ERR, "null mempool pointer\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			goto out;
 		}
 		if (seg_idx != 0 && mp_first != mpl &&
 		    seg_capa->multi_pools == 0) {
 			RTE_ETHDEV_LOG(ERR, "Receiving to multiple pools is not supported\n");
-			return -ENOTSUP;
+			ret = -ENOTSUP;
+			goto out;
 		}
 		if (offset != 0) {
 			if (seg_capa->offset_allowed == 0) {
 				RTE_ETHDEV_LOG(ERR, "Rx segmentation with offset is not supported\n");
-				return -ENOTSUP;
+				ret = -ENOTSUP;
+				goto out;
 			}
 			if (offset & offset_mask) {
 				RTE_ETHDEV_LOG(ERR, "Rx segmentation invalid offset alignment %u, %u\n",
 					       offset,
 					       seg_capa->offset_align_log2);
-				return -EINVAL;
+				ret = -EINVAL;
+				goto out;
 			}
 		}
-		if (mpl->private_data_size <
-			sizeof(struct rte_pktmbuf_pool_private)) {
-			RTE_ETHDEV_LOG(ERR,
-				       "%s private_data_size %u < %u\n",
-				       mpl->name, mpl->private_data_size,
-				       (unsigned int)sizeof
-					(struct rte_pktmbuf_pool_private));
-			return -ENOSPC;
-		}
+
 		offset += seg_idx != 0 ? 0 : RTE_PKTMBUF_HEADROOM;
 		*mbp_buf_size = rte_pktmbuf_data_room_size(mpl);
-		length = length != 0 ? length : *mbp_buf_size;
-		if (*mbp_buf_size < length + offset) {
-			RTE_ETHDEV_LOG(ERR,
-				       "%s mbuf_data_room_size %u < %u (segment length=%u + segment offset=%u)\n",
-				       mpl->name, *mbp_buf_size,
-				       length + offset, length, offset);
+		if (proto_hdr != 0) {
+			/* Split based on protocol headers. */
+			if (length != 0) {
+				RTE_ETHDEV_LOG(ERR,
+					"Do not set length split and protocol split within a segment\n"
+					);
+				ret = -EINVAL;
+				goto out;
+			}
+			if ((proto_hdr & prev_proto_hdrs) != 0) {
+				RTE_ETHDEV_LOG(ERR,
+					"Repeat with previous protocol headers or proto-split after length-based split\n"
+					);
+				ret = -EINVAL;
+				goto out;
+			}
+			if (ptype_cnt <= 0) {
+				RTE_ETHDEV_LOG(ERR,
+					"Port %u failed to get supported buffer split header protocols\n",
+					port_id);
+				ret = -ENOTSUP;
+				goto out;
+			}
+			for (i = 0; i < ptype_cnt; i++) {
+				if ((prev_proto_hdrs | proto_hdr) == ptypes[i])
+					break;
+			}
+			if (i == ptype_cnt) {
+				RTE_ETHDEV_LOG(ERR,
+					"Requested Rx split header protocols 0x%x is not supported.\n",
+					proto_hdr);
+				ret = -EINVAL;
+				goto out;
+			}
+			prev_proto_hdrs |= proto_hdr;
+		} else {
+			/* Split at fixed length. */
+			length = length != 0 ? length : *mbp_buf_size;
+			prev_proto_hdrs = RTE_PTYPE_ALL_MASK;
+		}
+
+		ret = rte_eth_check_rx_mempool(mpl, offset, length);
+		if (ret != 0)
+			goto out;
+	}
+out:
+	free(ptypes);
+	return ret;
+}
+
+static int
+rte_eth_rx_queue_check_mempools(struct rte_mempool **rx_mempools,
+			       uint16_t n_mempools, uint32_t *min_buf_size,
+			       const struct rte_eth_dev_info *dev_info)
+{
+	uint16_t pool_idx;
+	int ret;
+
+	if (n_mempools > dev_info->max_rx_mempools) {
+		RTE_ETHDEV_LOG(ERR,
+			       "Too many Rx mempools %u vs maximum %u\n",
+			       n_mempools, dev_info->max_rx_mempools);
+		return -EINVAL;
+	}
+
+	for (pool_idx = 0; pool_idx < n_mempools; pool_idx++) {
+		struct rte_mempool *mp = rx_mempools[pool_idx];
+
+		if (mp == NULL) {
+			RTE_ETHDEV_LOG(ERR, "null Rx mempool pointer\n");
 			return -EINVAL;
 		}
+
+		ret = rte_eth_check_rx_mempool(mp, RTE_PKTMBUF_HEADROOM,
+					       dev_info->min_rx_bufsize);
+		if (ret != 0)
+			return ret;
+
+		*min_buf_size = RTE_MIN(*min_buf_size,
+					rte_pktmbuf_data_room_size(mp));
 	}
+
 	return 0;
 }
 
@@ -1712,7 +1865,8 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		       struct rte_mempool *mp)
 {
 	int ret;
-	uint32_t mbp_buf_size;
+	uint64_t rx_offloads;
+	uint32_t mbp_buf_size = UINT32_MAX;
 	struct rte_eth_dev *dev;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_rxconf local_conf;
@@ -1725,60 +1879,50 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_setup, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_setup == NULL)
+		return -ENOTSUP;
 
 	ret = rte_eth_dev_info_get(port_id, &dev_info);
 	if (ret != 0)
 		return ret;
 
+	rx_offloads = dev->data->dev_conf.rxmode.offloads;
+	if (rx_conf != NULL)
+		rx_offloads |= rx_conf->offloads;
+
+	/* Ensure that we have one and only one source of Rx buffers */
+	if ((mp != NULL) +
+	    (rx_conf != NULL && rx_conf->rx_nseg > 0) +
+	    (rx_conf != NULL && rx_conf->rx_nmempool > 0) != 1) {
+		RTE_ETHDEV_LOG(ERR,
+			       "Ambiguous Rx mempools configuration\n");
+		return -EINVAL;
+	}
+
 	if (mp != NULL) {
 		/* Single pool configuration check. */
-		if (rx_conf != NULL && rx_conf->rx_nseg != 0) {
-			RTE_ETHDEV_LOG(ERR,
-				       "Ambiguous segment configuration\n");
-			return -EINVAL;
-		}
-		/*
-		 * Check the size of the mbuf data buffer, this value
-		 * must be provided in the private data of the memory pool.
-		 * First check that the memory pool(s) has a valid private data.
-		 */
-		if (mp->private_data_size <
-				sizeof(struct rte_pktmbuf_pool_private)) {
-			RTE_ETHDEV_LOG(ERR, "%s private_data_size %u < %u\n",
-				mp->name, mp->private_data_size,
-				(unsigned int)
-				sizeof(struct rte_pktmbuf_pool_private));
-			return -ENOSPC;
-		}
+		ret = rte_eth_check_rx_mempool(mp, RTE_PKTMBUF_HEADROOM,
+					       dev_info.min_rx_bufsize);
+		if (ret != 0)
+			return ret;
+
 		mbp_buf_size = rte_pktmbuf_data_room_size(mp);
-		if (mbp_buf_size < dev_info.min_rx_bufsize +
-				   RTE_PKTMBUF_HEADROOM) {
-			RTE_ETHDEV_LOG(ERR,
-				       "%s mbuf_data_room_size %u < %u (RTE_PKTMBUF_HEADROOM=%u + min_rx_bufsize(dev)=%u)\n",
-				       mp->name, mbp_buf_size,
-				       RTE_PKTMBUF_HEADROOM +
-				       dev_info.min_rx_bufsize,
-				       RTE_PKTMBUF_HEADROOM,
-				       dev_info.min_rx_bufsize);
-			return -EINVAL;
-		}
-	} else {
+	} else if (rx_conf != NULL && rx_conf->rx_nseg > 0) {
 		const struct rte_eth_rxseg_split *rx_seg;
 		uint16_t n_seg;
 
 		/* Extended multi-segment configuration check. */
-		if (rx_conf == NULL || rx_conf->rx_seg == NULL || rx_conf->rx_nseg == 0) {
+		if (rx_conf->rx_seg == NULL) {
 			RTE_ETHDEV_LOG(ERR,
-				       "Memory pool is null and no extended configuration provided\n");
+				       "Memory pool is null and no multi-segment configuration provided\n");
 			return -EINVAL;
 		}
 
 		rx_seg = (const struct rte_eth_rxseg_split *)rx_conf->rx_seg;
 		n_seg = rx_conf->rx_nseg;
 
-		if (rx_conf->offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT) {
-			ret = rte_eth_rx_queue_check_split(rx_seg, n_seg,
+		if (rx_offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT) {
+			ret = rte_eth_rx_queue_check_split(port_id, rx_seg, n_seg,
 							   &mbp_buf_size,
 							   &dev_info);
 			if (ret != 0)
@@ -1787,6 +1931,22 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 			RTE_ETHDEV_LOG(ERR, "No Rx segmentation offload configured\n");
 			return -EINVAL;
 		}
+	} else if (rx_conf != NULL && rx_conf->rx_nmempool > 0) {
+		/* Extended multi-pool configuration check. */
+		if (rx_conf->rx_mempools == NULL) {
+			RTE_ETHDEV_LOG(ERR, "Memory pools array is null\n");
+			return -EINVAL;
+		}
+
+		ret = rte_eth_rx_queue_check_mempools(rx_conf->rx_mempools,
+						     rx_conf->rx_nmempool,
+						     &mbp_buf_size,
+						     &dev_info);
+		if (ret != 0)
+			return ret;
+	} else {
+		RTE_ETHDEV_LOG(ERR, "Missing Rx mempool configuration\n");
+		return -EINVAL;
 	}
 
 	/* Use default specified by driver, if nb_rx_desc is zero */
@@ -1928,8 +2088,8 @@ rte_eth_rx_hairpin_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 	ret = rte_eth_dev_hairpin_capability_get(port_id, &cap);
 	if (ret != 0)
 		return ret;
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_hairpin_queue_setup,
-				-ENOTSUP);
+	if (*dev->dev_ops->rx_hairpin_queue_setup == NULL)
+		return -ENOTSUP;
 	/* if nb_rx_desc is zero use max number of desc from the driver. */
 	if (nb_rx_desc == 0)
 		nb_rx_desc = cap.max_nb_desc;
@@ -1943,6 +2103,28 @@ rte_eth_rx_hairpin_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 		RTE_ETHDEV_LOG(ERR,
 			"Invalid value for number of peers for Rx queue(=%u), should be: <= %hu",
 			conf->peer_count, cap.max_rx_2_tx);
+		return -EINVAL;
+	}
+	if (conf->use_locked_device_memory && !cap.rx_cap.locked_device_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to use locked device memory for Rx queue, which is not supported");
+		return -EINVAL;
+	}
+	if (conf->use_rte_memory && !cap.rx_cap.rte_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to use DPDK memory for Rx queue, which is not supported");
+		return -EINVAL;
+	}
+	if (conf->use_locked_device_memory && conf->use_rte_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to use mutually exclusive memory settings for Rx queue");
+		return -EINVAL;
+	}
+	if (conf->force_memory &&
+	    !conf->use_locked_device_memory &&
+	    !conf->use_rte_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to force Rx queue memory settings, but none is set");
 		return -EINVAL;
 	}
 	if (conf->peer_count == 0) {
@@ -1990,7 +2172,8 @@ rte_eth_tx_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_queue_setup, -ENOTSUP);
+	if (*dev->dev_ops->tx_queue_setup == NULL)
+		return -ENOTSUP;
 
 	ret = rte_eth_dev_info_get(port_id, &dev_info);
 	if (ret != 0)
@@ -2094,8 +2277,8 @@ rte_eth_tx_hairpin_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 	ret = rte_eth_dev_hairpin_capability_get(port_id, &cap);
 	if (ret != 0)
 		return ret;
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_hairpin_queue_setup,
-				-ENOTSUP);
+	if (*dev->dev_ops->tx_hairpin_queue_setup == NULL)
+		return -ENOTSUP;
 	/* if nb_rx_desc is zero use max number of desc from the driver. */
 	if (nb_tx_desc == 0)
 		nb_tx_desc = cap.max_nb_desc;
@@ -2109,6 +2292,28 @@ rte_eth_tx_hairpin_queue_setup(uint16_t port_id, uint16_t tx_queue_id,
 		RTE_ETHDEV_LOG(ERR,
 			"Invalid value for number of peers for Tx queue(=%u), should be: <= %hu",
 			conf->peer_count, cap.max_tx_2_rx);
+		return -EINVAL;
+	}
+	if (conf->use_locked_device_memory && !cap.tx_cap.locked_device_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to use locked device memory for Tx queue, which is not supported");
+		return -EINVAL;
+	}
+	if (conf->use_rte_memory && !cap.tx_cap.rte_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to use DPDK memory for Tx queue, which is not supported");
+		return -EINVAL;
+	}
+	if (conf->use_locked_device_memory && conf->use_rte_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to use mutually exclusive memory settings for Tx queue");
+		return -EINVAL;
+	}
+	if (conf->force_memory &&
+	    !conf->use_locked_device_memory &&
+	    !conf->use_rte_memory) {
+		RTE_ETHDEV_LOG(ERR,
+			"Attempt to force Tx queue memory settings, but none is set");
 		return -EINVAL;
 	}
 	if (conf->peer_count == 0) {
@@ -2152,7 +2357,8 @@ rte_eth_hairpin_bind(uint16_t tx_port, uint16_t rx_port)
 		return -EBUSY;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->hairpin_bind, -ENOTSUP);
+	if (*dev->dev_ops->hairpin_bind == NULL)
+		return -ENOTSUP;
 	ret = (*dev->dev_ops->hairpin_bind)(dev, rx_port);
 	if (ret != 0)
 		RTE_ETHDEV_LOG(ERR, "Failed to bind hairpin Tx %d"
@@ -2176,7 +2382,8 @@ rte_eth_hairpin_unbind(uint16_t tx_port, uint16_t rx_port)
 		return -EBUSY;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->hairpin_unbind, -ENOTSUP);
+	if (*dev->dev_ops->hairpin_unbind == NULL)
+		return -ENOTSUP;
 	ret = (*dev->dev_ops->hairpin_unbind)(dev, rx_port);
 	if (ret != 0)
 		RTE_ETHDEV_LOG(ERR, "Failed to unbind hairpin Tx %d"
@@ -2210,8 +2417,8 @@ rte_eth_hairpin_get_peer_ports(uint16_t port_id, uint16_t *peer_ports,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->hairpin_get_peer_ports,
-				-ENOTSUP);
+	if (*dev->dev_ops->hairpin_get_peer_ports == NULL)
+		return -ENOTSUP;
 
 	ret = (*dev->dev_ops->hairpin_get_peer_ports)(dev, peer_ports,
 						      len, direction);
@@ -2282,7 +2489,8 @@ rte_eth_tx_done_cleanup(uint16_t port_id, uint16_t queue_id, uint32_t free_cnt)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_done_cleanup, -ENOTSUP);
+	if (*dev->dev_ops->tx_done_cleanup == NULL)
+		return -ENOTSUP;
 
 	/* Call driver to free pending mbufs. */
 	ret = (*dev->dev_ops->tx_done_cleanup)(dev->data->tx_queues[queue_id],
@@ -2302,7 +2510,8 @@ rte_eth_promiscuous_enable(uint16_t port_id)
 	if (dev->data->promiscuous == 1)
 		return 0;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->promiscuous_enable, -ENOTSUP);
+	if (*dev->dev_ops->promiscuous_enable == NULL)
+		return -ENOTSUP;
 
 	diag = (*dev->dev_ops->promiscuous_enable)(dev);
 	dev->data->promiscuous = (diag == 0) ? 1 : 0;
@@ -2322,7 +2531,8 @@ rte_eth_promiscuous_disable(uint16_t port_id)
 	if (dev->data->promiscuous == 0)
 		return 0;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->promiscuous_disable, -ENOTSUP);
+	if (*dev->dev_ops->promiscuous_disable == NULL)
+		return -ENOTSUP;
 
 	dev->data->promiscuous = 0;
 	diag = (*dev->dev_ops->promiscuous_disable)(dev);
@@ -2355,7 +2565,8 @@ rte_eth_allmulticast_enable(uint16_t port_id)
 	if (dev->data->all_multicast == 1)
 		return 0;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->allmulticast_enable, -ENOTSUP);
+	if (*dev->dev_ops->allmulticast_enable == NULL)
+		return -ENOTSUP;
 	diag = (*dev->dev_ops->allmulticast_enable)(dev);
 	dev->data->all_multicast = (diag == 0) ? 1 : 0;
 
@@ -2374,7 +2585,8 @@ rte_eth_allmulticast_disable(uint16_t port_id)
 	if (dev->data->all_multicast == 0)
 		return 0;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->allmulticast_disable, -ENOTSUP);
+	if (*dev->dev_ops->allmulticast_disable == NULL)
+		return -ENOTSUP;
 	dev->data->all_multicast = 0;
 	diag = (*dev->dev_ops->allmulticast_disable)(dev);
 	if (diag != 0)
@@ -2411,7 +2623,8 @@ rte_eth_link_get(uint16_t port_id, struct rte_eth_link *eth_link)
 	if (dev->data->dev_conf.intr_conf.lsc && dev->data->dev_started)
 		rte_eth_linkstatus_get(dev, eth_link);
 	else {
-		RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->link_update, -ENOTSUP);
+		if (*dev->dev_ops->link_update == NULL)
+			return -ENOTSUP;
 		(*dev->dev_ops->link_update)(dev, 1);
 		*eth_link = dev->data->dev_link;
 	}
@@ -2436,7 +2649,8 @@ rte_eth_link_get_nowait(uint16_t port_id, struct rte_eth_link *eth_link)
 	if (dev->data->dev_conf.intr_conf.lsc && dev->data->dev_started)
 		rte_eth_linkstatus_get(dev, eth_link);
 	else {
-		RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->link_update, -ENOTSUP);
+		if (*dev->dev_ops->link_update == NULL)
+			return -ENOTSUP;
 		(*dev->dev_ops->link_update)(dev, 0);
 		*eth_link = dev->data->dev_link;
 	}
@@ -2513,7 +2727,8 @@ rte_eth_stats_get(uint16_t port_id, struct rte_eth_stats *stats)
 
 	memset(stats, 0, sizeof(*stats));
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->stats_get, -ENOTSUP);
+	if (*dev->dev_ops->stats_get == NULL)
+		return -ENOTSUP;
 	stats->rx_nombuf = dev->data->rx_mbuf_alloc_failed;
 	return eth_err(port_id, (*dev->dev_ops->stats_get)(dev, stats));
 }
@@ -2527,7 +2742,8 @@ rte_eth_stats_reset(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->stats_reset, -ENOTSUP);
+	if (*dev->dev_ops->stats_reset == NULL)
+		return -ENOTSUP;
 	ret = (*dev->dev_ops->stats_reset)(dev);
 	if (ret != 0)
 		return eth_err(port_id, ret);
@@ -3043,7 +3259,8 @@ eth_dev_set_queue_stats_mapping(uint16_t port_id, uint16_t queue_id,
 	if (stat_idx >= RTE_ETHDEV_QUEUE_STAT_CNTRS)
 		return -EINVAL;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->queue_stats_mapping_set, -ENOTSUP);
+	if (*dev->dev_ops->queue_stats_mapping_set == NULL)
+		return -ENOTSUP;
 	return (*dev->dev_ops->queue_stats_mapping_set) (dev, queue_id, stat_idx, is_rx);
 }
 
@@ -3080,7 +3297,8 @@ rte_eth_dev_fw_version_get(uint16_t port_id, char *fw_version, size_t fw_size)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fw_version_get, -ENOTSUP);
+	if (*dev->dev_ops->fw_version_get == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->fw_version_get)(dev,
 							fw_version, fw_size));
 }
@@ -3121,7 +3339,8 @@ rte_eth_dev_info_get(uint16_t port_id, struct rte_eth_dev_info *dev_info)
 		RTE_ETHER_CRC_LEN;
 	dev_info->max_mtu = UINT16_MAX;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_infos_get, -ENOTSUP);
+	if (*dev->dev_ops->dev_infos_get == NULL)
+		return -ENOTSUP;
 	diag = (*dev->dev_ops->dev_infos_get)(dev, dev_info);
 	if (diag != 0) {
 		/* Cleanup already filled in device information */
@@ -3182,7 +3401,8 @@ rte_eth_dev_get_supported_ptypes(uint16_t port_id, uint32_t ptype_mask,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_supported_ptypes_get, 0);
+	if (*dev->dev_ops->dev_supported_ptypes_get == NULL)
+		return 0;
 	all_ptypes = (*dev->dev_ops->dev_supported_ptypes_get)(dev);
 
 	if (!all_ptypes)
@@ -3360,7 +3580,8 @@ rte_eth_dev_set_mtu(uint16_t port_id, uint16_t mtu)
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->mtu_set, -ENOTSUP);
+	if (*dev->dev_ops->mtu_set == NULL)
+		return -ENOTSUP;
 
 	/*
 	 * Check if the device supports dev_infos_get, if it does not
@@ -3413,7 +3634,8 @@ rte_eth_dev_vlan_filter(uint16_t port_id, uint16_t vlan_id, int on)
 			port_id, vlan_id);
 		return -EINVAL;
 	}
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->vlan_filter_set, -ENOTSUP);
+	if (*dev->dev_ops->vlan_filter_set == NULL)
+		return -ENOTSUP;
 
 	ret = (*dev->dev_ops->vlan_filter_set)(dev, vlan_id, on);
 	if (ret == 0) {
@@ -3448,7 +3670,8 @@ rte_eth_dev_set_vlan_strip_on_queue(uint16_t port_id, uint16_t rx_queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->vlan_strip_queue_set, -ENOTSUP);
+	if (*dev->dev_ops->vlan_strip_queue_set == NULL)
+		return -ENOTSUP;
 	(*dev->dev_ops->vlan_strip_queue_set)(dev, rx_queue_id, on);
 
 	return 0;
@@ -3464,7 +3687,8 @@ rte_eth_dev_set_vlan_ether_type(uint16_t port_id,
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->vlan_tpid_set, -ENOTSUP);
+	if (*dev->dev_ops->vlan_tpid_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->vlan_tpid_set)(dev, vlan_type,
 							       tpid));
 }
@@ -3549,7 +3773,8 @@ rte_eth_dev_set_vlan_offload(uint16_t port_id, int offload_mask)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->vlan_offload_set, -ENOTSUP);
+	if (*dev->dev_ops->vlan_offload_set == NULL)
+		return -ENOTSUP;
 	dev->data->dev_conf.rxmode.offloads = dev_offloads;
 	ret = (*dev->dev_ops->vlan_offload_set)(dev, mask);
 	if (ret) {
@@ -3594,7 +3819,8 @@ rte_eth_dev_set_vlan_pvid(uint16_t port_id, uint16_t pvid, int on)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->vlan_pvid_set, -ENOTSUP);
+	if (*dev->dev_ops->vlan_pvid_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->vlan_pvid_set)(dev, pvid, on));
 }
 
@@ -3613,7 +3839,8 @@ rte_eth_dev_flow_ctrl_get(uint16_t port_id, struct rte_eth_fc_conf *fc_conf)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->flow_ctrl_get, -ENOTSUP);
+	if (*dev->dev_ops->flow_ctrl_get == NULL)
+		return -ENOTSUP;
 	memset(fc_conf, 0, sizeof(*fc_conf));
 	return eth_err(port_id, (*dev->dev_ops->flow_ctrl_get)(dev, fc_conf));
 }
@@ -3638,7 +3865,8 @@ rte_eth_dev_flow_ctrl_set(uint16_t port_id, struct rte_eth_fc_conf *fc_conf)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->flow_ctrl_set, -ENOTSUP);
+	if (*dev->dev_ops->flow_ctrl_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->flow_ctrl_set)(dev, fc_conf));
 }
 
@@ -3899,7 +4127,8 @@ rte_eth_dev_rss_reta_update(uint16_t port_id,
 		return -ENOTSUP;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->reta_update, -ENOTSUP);
+	if (*dev->dev_ops->reta_update == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->reta_update)(dev, reta_conf,
 							     reta_size));
 }
@@ -3927,7 +4156,8 @@ rte_eth_dev_rss_reta_query(uint16_t port_id,
 	if (ret < 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->reta_query, -ENOTSUP);
+	if (*dev->dev_ops->reta_query == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->reta_query)(dev, reta_conf,
 							    reta_size));
 }
@@ -3971,7 +4201,8 @@ rte_eth_dev_rss_hash_update(uint16_t port_id,
 		return -ENOTSUP;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rss_hash_update, -ENOTSUP);
+	if (*dev->dev_ops->rss_hash_update == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->rss_hash_update)(dev,
 								 rss_conf));
 }
@@ -3992,7 +4223,8 @@ rte_eth_dev_rss_hash_conf_get(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rss_hash_conf_get, -ENOTSUP);
+	if (*dev->dev_ops->rss_hash_conf_get == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->rss_hash_conf_get)(dev,
 								   rss_conf));
 }
@@ -4018,7 +4250,8 @@ rte_eth_dev_udp_tunnel_port_add(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->udp_tunnel_port_add, -ENOTSUP);
+	if (*dev->dev_ops->udp_tunnel_port_add == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->udp_tunnel_port_add)(dev,
 								udp_tunnel));
 }
@@ -4044,7 +4277,8 @@ rte_eth_dev_udp_tunnel_port_delete(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->udp_tunnel_port_del, -ENOTSUP);
+	if (*dev->dev_ops->udp_tunnel_port_del == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->udp_tunnel_port_del)(dev,
 								udp_tunnel));
 }
@@ -4057,7 +4291,8 @@ rte_eth_led_on(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_led_on, -ENOTSUP);
+	if (*dev->dev_ops->dev_led_on == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->dev_led_on)(dev));
 }
 
@@ -4069,7 +4304,8 @@ rte_eth_led_off(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_led_off, -ENOTSUP);
+	if (*dev->dev_ops->dev_led_off == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->dev_led_off)(dev));
 }
 
@@ -4091,7 +4327,8 @@ rte_eth_fec_get_capability(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fec_get_capability, -ENOTSUP);
+	if (*dev->dev_ops->fec_get_capability == NULL)
+		return -ENOTSUP;
 	ret = (*dev->dev_ops->fec_get_capability)(dev, speed_fec_capa, num);
 
 	return ret;
@@ -4112,7 +4349,8 @@ rte_eth_fec_get(uint16_t port_id, uint32_t *fec_capa)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fec_get, -ENOTSUP);
+	if (*dev->dev_ops->fec_get == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->fec_get)(dev, fec_capa));
 }
 
@@ -4124,7 +4362,8 @@ rte_eth_fec_set(uint16_t port_id, uint32_t fec_capa)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->fec_set, -ENOTSUP);
+	if (*dev->dev_ops->fec_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->fec_set)(dev, fec_capa));
 }
 
@@ -4173,7 +4412,8 @@ rte_eth_dev_mac_addr_add(uint16_t port_id, struct rte_ether_addr *addr,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->mac_addr_add, -ENOTSUP);
+	if (*dev->dev_ops->mac_addr_add == NULL)
+		return -ENOTSUP;
 
 	if (rte_is_zero_ether_addr(addr)) {
 		RTE_ETHDEV_LOG(ERR, "Port %u: Cannot add NULL MAC address\n",
@@ -4231,7 +4471,8 @@ rte_eth_dev_mac_addr_remove(uint16_t port_id, struct rte_ether_addr *addr)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->mac_addr_remove, -ENOTSUP);
+	if (*dev->dev_ops->mac_addr_remove == NULL)
+		return -ENOTSUP;
 
 	index = eth_dev_get_mac_addr_index(port_id, addr);
 	if (index == 0) {
@@ -4273,7 +4514,8 @@ rte_eth_dev_default_mac_addr_set(uint16_t port_id, struct rte_ether_addr *addr)
 	if (!rte_is_valid_assigned_ether_addr(addr))
 		return -EINVAL;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->mac_addr_set, -ENOTSUP);
+	if (*dev->dev_ops->mac_addr_set == NULL)
+		return -ENOTSUP;
 
 	ret = (*dev->dev_ops->mac_addr_set)(dev, addr);
 	if (ret < 0)
@@ -4359,7 +4601,8 @@ rte_eth_dev_uc_hash_table_set(uint16_t port_id, struct rte_ether_addr *addr,
 		}
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->uc_hash_table_set, -ENOTSUP);
+	if (*dev->dev_ops->uc_hash_table_set == NULL)
+		return -ENOTSUP;
 	ret = (*dev->dev_ops->uc_hash_table_set)(dev, addr, on);
 	if (ret == 0) {
 		/* Update address in NIC data structure */
@@ -4382,13 +4625,14 @@ rte_eth_dev_uc_all_hash_table_set(uint16_t port_id, uint8_t on)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->uc_all_hash_table_set, -ENOTSUP);
+	if (*dev->dev_ops->uc_all_hash_table_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->uc_all_hash_table_set)(dev,
 								       on));
 }
 
 int rte_eth_set_queue_rate_limit(uint16_t port_id, uint16_t queue_idx,
-					uint16_t tx_rate)
+					uint32_t tx_rate)
 {
 	struct rte_eth_dev *dev;
 	struct rte_eth_dev_info dev_info;
@@ -4418,7 +4662,8 @@ int rte_eth_set_queue_rate_limit(uint16_t port_id, uint16_t queue_idx,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->set_queue_rate_limit, -ENOTSUP);
+	if (*dev->dev_ops->set_queue_rate_limit == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->set_queue_rate_limit)(dev,
 							queue_idx, tx_rate));
 }
@@ -4444,7 +4689,8 @@ int rte_eth_rx_avail_thresh_set(uint16_t port_id, uint16_t queue_id,
 			port_id);
 		return -EINVAL;
 	}
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_avail_thresh_set, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_avail_thresh_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->rx_queue_avail_thresh_set)(dev,
 							     queue_id, avail_thresh));
 }
@@ -4462,7 +4708,8 @@ int rte_eth_rx_avail_thresh_query(uint16_t port_id, uint16_t *queue_id,
 	if (*queue_id >= dev->data->nb_rx_queues)
 		*queue_id = 0;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_avail_thresh_query, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_avail_thresh_query == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->rx_queue_avail_thresh_query)(dev,
 							     queue_id, avail_thresh));
 }
@@ -4736,7 +4983,8 @@ rte_eth_dev_rx_intr_enable(uint16_t port_id,
 	if (ret != 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_intr_enable, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_intr_enable == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->rx_queue_intr_enable)(dev, queue_id));
 }
 
@@ -4754,7 +5002,8 @@ rte_eth_dev_rx_intr_disable(uint16_t port_id,
 	if (ret != 0)
 		return ret;
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_queue_intr_disable, -ENOTSUP);
+	if (*dev->dev_ops->rx_queue_intr_disable == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->rx_queue_intr_disable)(dev, queue_id));
 }
 
@@ -5018,7 +5267,8 @@ rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rxq_info_get, -ENOTSUP);
+	if (*dev->dev_ops->rxq_info_get == NULL)
+		return -ENOTSUP;
 
 	memset(qinfo, 0, sizeof(*qinfo));
 	dev->dev_ops->rxq_info_get(dev, queue_id, qinfo);
@@ -5063,7 +5313,8 @@ rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->txq_info_get, -ENOTSUP);
+	if (*dev->dev_ops->txq_info_get == NULL)
+		return -ENOTSUP;
 
 	memset(qinfo, 0, sizeof(*qinfo));
 	dev->dev_ops->txq_info_get(dev, queue_id, qinfo);
@@ -5093,7 +5344,8 @@ rte_eth_rx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_burst_mode_get, -ENOTSUP);
+	if (*dev->dev_ops->rx_burst_mode_get == NULL)
+		return -ENOTSUP;
 	memset(mode, 0, sizeof(*mode));
 	return eth_err(port_id,
 		       dev->dev_ops->rx_burst_mode_get(dev, queue_id, mode));
@@ -5120,7 +5372,8 @@ rte_eth_tx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->tx_burst_mode_get, -ENOTSUP);
+	if (*dev->dev_ops->tx_burst_mode_get == NULL)
+		return -ENOTSUP;
 	memset(mode, 0, sizeof(*mode));
 	return eth_err(port_id,
 		       dev->dev_ops->tx_burst_mode_get(dev, queue_id, mode));
@@ -5147,7 +5400,8 @@ rte_eth_get_monitor_addr(uint16_t port_id, uint16_t queue_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_monitor_addr, -ENOTSUP);
+	if (*dev->dev_ops->get_monitor_addr == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id,
 		dev->dev_ops->get_monitor_addr(dev->data->rx_queues[queue_id], pmc));
 }
@@ -5162,7 +5416,8 @@ rte_eth_dev_set_mc_addr_list(uint16_t port_id,
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->set_mc_addr_list, -ENOTSUP);
+	if (*dev->dev_ops->set_mc_addr_list == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, dev->dev_ops->set_mc_addr_list(dev,
 						mc_addr_set, nb_mc_addr));
 }
@@ -5175,7 +5430,8 @@ rte_eth_timesync_enable(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_enable, -ENOTSUP);
+	if (*dev->dev_ops->timesync_enable == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_enable)(dev));
 }
 
@@ -5187,7 +5443,8 @@ rte_eth_timesync_disable(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_disable, -ENOTSUP);
+	if (*dev->dev_ops->timesync_disable == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_disable)(dev));
 }
 
@@ -5207,7 +5464,8 @@ rte_eth_timesync_read_rx_timestamp(uint16_t port_id, struct timespec *timestamp,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_read_rx_timestamp, -ENOTSUP);
+	if (*dev->dev_ops->timesync_read_rx_timestamp == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_read_rx_timestamp)
 				(dev, timestamp, flags));
 }
@@ -5228,7 +5486,8 @@ rte_eth_timesync_read_tx_timestamp(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_read_tx_timestamp, -ENOTSUP);
+	if (*dev->dev_ops->timesync_read_tx_timestamp == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_read_tx_timestamp)
 				(dev, timestamp));
 }
@@ -5241,7 +5500,8 @@ rte_eth_timesync_adjust_time(uint16_t port_id, int64_t delta)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_adjust_time, -ENOTSUP);
+	if (*dev->dev_ops->timesync_adjust_time == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_adjust_time)(dev, delta));
 }
 
@@ -5260,7 +5520,8 @@ rte_eth_timesync_read_time(uint16_t port_id, struct timespec *timestamp)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_read_time, -ENOTSUP);
+	if (*dev->dev_ops->timesync_read_time == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_read_time)(dev,
 								timestamp));
 }
@@ -5280,7 +5541,8 @@ rte_eth_timesync_write_time(uint16_t port_id, const struct timespec *timestamp)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->timesync_write_time, -ENOTSUP);
+	if (*dev->dev_ops->timesync_write_time == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->timesync_write_time)(dev,
 								timestamp));
 }
@@ -5299,7 +5561,8 @@ rte_eth_read_clock(uint16_t port_id, uint64_t *clock)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->read_clock, -ENOTSUP);
+	if (*dev->dev_ops->read_clock == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->read_clock)(dev, clock));
 }
 
@@ -5318,7 +5581,8 @@ rte_eth_dev_get_reg_info(uint16_t port_id, struct rte_dev_reg_info *info)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_reg, -ENOTSUP);
+	if (*dev->dev_ops->get_reg == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->get_reg)(dev, info));
 }
 
@@ -5330,7 +5594,8 @@ rte_eth_dev_get_eeprom_length(uint16_t port_id)
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_eeprom_length, -ENOTSUP);
+	if (*dev->dev_ops->get_eeprom_length == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->get_eeprom_length)(dev));
 }
 
@@ -5349,7 +5614,8 @@ rte_eth_dev_get_eeprom(uint16_t port_id, struct rte_dev_eeprom_info *info)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_eeprom, -ENOTSUP);
+	if (*dev->dev_ops->get_eeprom == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->get_eeprom)(dev, info));
 }
 
@@ -5368,7 +5634,8 @@ rte_eth_dev_set_eeprom(uint16_t port_id, struct rte_dev_eeprom_info *info)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->set_eeprom, -ENOTSUP);
+	if (*dev->dev_ops->set_eeprom == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->set_eeprom)(dev, info));
 }
 
@@ -5388,7 +5655,8 @@ rte_eth_dev_get_module_info(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_module_info, -ENOTSUP);
+	if (*dev->dev_ops->get_module_info == NULL)
+		return -ENOTSUP;
 	return (*dev->dev_ops->get_module_info)(dev, modinfo);
 }
 
@@ -5422,7 +5690,8 @@ rte_eth_dev_get_module_eeprom(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_module_eeprom, -ENOTSUP);
+	if (*dev->dev_ops->get_module_eeprom == NULL)
+		return -ENOTSUP;
 	return (*dev->dev_ops->get_module_eeprom)(dev, info);
 }
 
@@ -5444,7 +5713,8 @@ rte_eth_dev_get_dcb_info(uint16_t port_id,
 
 	memset(dcb_info, 0, sizeof(struct rte_eth_dcb_info));
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->get_dcb_info, -ENOTSUP);
+	if (*dev->dev_ops->get_dcb_info == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->get_dcb_info)(dev, dcb_info));
 }
 
@@ -5500,7 +5770,8 @@ rte_eth_dev_hairpin_capability_get(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->hairpin_cap_get, -ENOTSUP);
+	if (*dev->dev_ops->hairpin_cap_get == NULL)
+		return -ENOTSUP;
 	memset(cap, 0, sizeof(*cap));
 	return eth_err(port_id, (*dev->dev_ops->hairpin_cap_get)(dev, cap));
 }
@@ -5644,6 +5915,48 @@ eth_dev_handle_port_xstats(const char *cmd __rte_unused,
 	return 0;
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+static int
+eth_dev_handle_port_dump_priv(const char *cmd __rte_unused,
+			const char *params,
+			struct rte_tel_data *d)
+{
+	char *buf, *end_param;
+	int port_id, ret;
+	FILE *f;
+
+	if (params == NULL || strlen(params) == 0 || !isdigit(*params))
+		return -EINVAL;
+
+	port_id = strtoul(params, &end_param, 0);
+	if (*end_param != '\0')
+		RTE_ETHDEV_LOG(NOTICE,
+			"Extra parameters passed to ethdev telemetry command, ignoring");
+	if (!rte_eth_dev_is_valid_port(port_id))
+		return -EINVAL;
+
+	buf = calloc(sizeof(char), RTE_TEL_MAX_SINGLE_STRING_LEN);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	f = fmemopen(buf, RTE_TEL_MAX_SINGLE_STRING_LEN - 1, "w+");
+	if (f == NULL) {
+		free(buf);
+		return -EINVAL;
+	}
+
+	ret = rte_eth_dev_priv_dump(port_id, f);
+	fclose(f);
+	if (ret == 0) {
+		rte_tel_data_start_dict(d);
+		rte_tel_data_string(d, buf);
+	}
+
+	free(buf);
+	return 0;
+}
+#endif /* !RTE_EXEC_ENV_WINDOWS */
+
 static int
 eth_dev_handle_port_link_status(const char *cmd __rte_unused,
 		const char *params,
@@ -5775,7 +6088,8 @@ rte_eth_representor_info_get(uint16_t port_id,
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->representor_info_get, -ENOTSUP);
+	if (*dev->dev_ops->representor_info_get == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->representor_info_get)(dev, info));
 }
 
@@ -5799,7 +6113,8 @@ rte_eth_rx_metadata_negotiate(uint16_t port_id, uint64_t *features)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->rx_metadata_negotiate, -ENOTSUP);
+	if (*dev->dev_ops->rx_metadata_negotiate == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id,
 		       (*dev->dev_ops->rx_metadata_negotiate)(dev, features));
 }
@@ -5826,8 +6141,8 @@ rte_eth_ip_reassembly_capability_get(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->ip_reassembly_capability_get,
-				-ENOTSUP);
+	if (*dev->dev_ops->ip_reassembly_capability_get == NULL)
+		return -ENOTSUP;
 	memset(reassembly_capa, 0, sizeof(struct rte_eth_ip_reassembly_params));
 
 	return eth_err(port_id, (*dev->dev_ops->ip_reassembly_capability_get)
@@ -5856,8 +6171,8 @@ rte_eth_ip_reassembly_conf_get(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->ip_reassembly_conf_get,
-				-ENOTSUP);
+	if (*dev->dev_ops->ip_reassembly_conf_get == NULL)
+		return -ENOTSUP;
 	memset(conf, 0, sizeof(struct rte_eth_ip_reassembly_params));
 	return eth_err(port_id,
 		       (*dev->dev_ops->ip_reassembly_conf_get)(dev, conf));
@@ -5894,8 +6209,8 @@ rte_eth_ip_reassembly_conf_set(uint16_t port_id,
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->ip_reassembly_conf_set,
-				-ENOTSUP);
+	if (*dev->dev_ops->ip_reassembly_conf_set == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id,
 		       (*dev->dev_ops->ip_reassembly_conf_set)(dev, conf));
 }
@@ -5913,8 +6228,94 @@ rte_eth_dev_priv_dump(uint16_t port_id, FILE *file)
 		return -EINVAL;
 	}
 
-	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->eth_dev_priv_dump, -ENOTSUP);
+	if (*dev->dev_ops->eth_dev_priv_dump == NULL)
+		return -ENOTSUP;
 	return eth_err(port_id, (*dev->dev_ops->eth_dev_priv_dump)(dev, file));
+}
+
+int
+rte_eth_rx_descriptor_dump(uint16_t port_id, uint16_t queue_id,
+			   uint16_t offset, uint16_t num, FILE *file)
+{
+	struct rte_eth_dev *dev;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+
+	if (queue_id >= dev->data->nb_rx_queues) {
+		RTE_ETHDEV_LOG(ERR, "Invalid Rx queue_id=%u\n", queue_id);
+		return -EINVAL;
+	}
+
+	if (file == NULL) {
+		RTE_ETHDEV_LOG(ERR, "Invalid file (NULL)\n");
+		return -EINVAL;
+	}
+
+	if (*dev->dev_ops->eth_rx_descriptor_dump == NULL)
+		return -ENOTSUP;
+
+	return eth_err(port_id, (*dev->dev_ops->eth_rx_descriptor_dump)(dev,
+						queue_id, offset, num, file));
+}
+
+int
+rte_eth_tx_descriptor_dump(uint16_t port_id, uint16_t queue_id,
+			   uint16_t offset, uint16_t num, FILE *file)
+{
+	struct rte_eth_dev *dev;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+
+	if (queue_id >= dev->data->nb_tx_queues) {
+		RTE_ETHDEV_LOG(ERR, "Invalid Tx queue_id=%u\n", queue_id);
+		return -EINVAL;
+	}
+
+	if (file == NULL) {
+		RTE_ETHDEV_LOG(ERR, "Invalid file (NULL)\n");
+		return -EINVAL;
+	}
+
+	if (*dev->dev_ops->eth_tx_descriptor_dump == NULL)
+		return -ENOTSUP;
+
+	return eth_err(port_id, (*dev->dev_ops->eth_tx_descriptor_dump)(dev,
+						queue_id, offset, num, file));
+}
+
+int
+rte_eth_buffer_split_get_supported_hdr_ptypes(uint16_t port_id, uint32_t *ptypes, int num)
+{
+	int i, j;
+	struct rte_eth_dev *dev;
+	const uint32_t *all_types;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	dev = &rte_eth_devices[port_id];
+
+	if (ptypes == NULL && num > 0) {
+		RTE_ETHDEV_LOG(ERR,
+			"Cannot get ethdev port %u supported header protocol types to NULL when array size is non zero\n",
+			port_id);
+		return -EINVAL;
+	}
+
+	if (*dev->dev_ops->buffer_split_supported_hdr_ptypes_get == NULL)
+		return -ENOTSUP;
+	all_types = (*dev->dev_ops->buffer_split_supported_hdr_ptypes_get)(dev);
+
+	if (all_types == NULL)
+		return 0;
+
+	for (i = 0, j = 0; all_types[i] != RTE_PTYPE_UNKNOWN; ++i) {
+		if (j < num)
+			ptypes[j] = all_types[i];
+		j++;
+	}
+
+	return j;
 }
 
 RTE_LOG_REGISTER_DEFAULT(rte_eth_dev_logtype, INFO);
@@ -5927,6 +6328,10 @@ RTE_INIT(ethdev_init_telemetry)
 			"Returns the common stats for a port. Parameters: int port_id");
 	rte_telemetry_register_cmd("/ethdev/xstats", eth_dev_handle_port_xstats,
 			"Returns the extended stats for a port. Parameters: int port_id");
+#ifndef RTE_EXEC_ENV_WINDOWS
+	rte_telemetry_register_cmd("/ethdev/dump_priv", eth_dev_handle_port_dump_priv,
+			"Returns dump private information for a port. Parameters: int port_id");
+#endif
 	rte_telemetry_register_cmd("/ethdev/link_status",
 			eth_dev_handle_port_link_status,
 			"Returns the link status for a port. Parameters: int port_id");

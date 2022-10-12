@@ -261,8 +261,23 @@ roc_cpt_inline_ipsec_cfg(struct dev *cpt_dev, uint8_t lf_id,
 }
 
 int
+roc_cpt_inline_ipsec_inb_cfg_read(struct roc_cpt *roc_cpt,
+				  struct nix_inline_ipsec_cfg *inb_cfg)
+{
+	struct cpt *cpt = roc_cpt_to_cpt_priv(roc_cpt);
+	struct dev *dev = &cpt->dev;
+	struct msg_req *req;
+
+	req = mbox_alloc_msg_nix_read_inline_ipsec_cfg(dev->mbox);
+	if (req == NULL)
+		return -EIO;
+
+	return mbox_process_msg(dev->mbox, (void *)&inb_cfg);
+}
+
+int
 roc_cpt_inline_ipsec_inb_cfg(struct roc_cpt *roc_cpt, uint16_t param1,
-			     uint16_t param2)
+			     uint16_t param2, uint16_t opcode)
 {
 	struct cpt *cpt = roc_cpt_to_cpt_priv(roc_cpt);
 	struct cpt_rx_inline_lf_cfg_msg *req;
@@ -277,6 +292,7 @@ roc_cpt_inline_ipsec_inb_cfg(struct roc_cpt *roc_cpt, uint16_t param1,
 	req->sso_pf_func = idev_sso_pffunc_get();
 	req->param1 = param1;
 	req->param2 = param2;
+	req->opcode = opcode;
 
 	return mbox_process(mbox);
 }
@@ -983,7 +999,7 @@ roc_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa_dptr, void *sa_cptr,
 }
 
 int
-roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa, uint8_t opcode,
+roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, uint64_t sa, bool inb,
 		     uint16_t ctx_len, uint8_t egrp)
 {
 	union cpt_res_s res, *hw_res;
@@ -999,14 +1015,16 @@ roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa, uint8_t opcode,
 
 	hw_res->cn9k.compcode = CPT_COMP_NOT_DONE;
 
-	inst.w4.s.opcode_major = opcode;
+	inst.w4.s.opcode_major = ROC_IE_ON_MAJOR_OP_WRITE_IPSEC_OUTBOUND;
+	if (inb)
+		inst.w4.s.opcode_major = ROC_IE_ON_MAJOR_OP_WRITE_IPSEC_INBOUND;
 	inst.w4.s.opcode_minor = ctx_len >> 3;
 	inst.w4.s.param1 = 0;
 	inst.w4.s.param2 = 0;
 	inst.w4.s.dlen = ctx_len;
-	inst.dptr = rte_mempool_virt2iova(sa);
+	inst.dptr = sa;
 	inst.rptr = 0;
-	inst.w7.s.cptr = rte_mempool_virt2iova(sa);
+	inst.w7.s.cptr = sa;
 	inst.w7.s.egrp = egrp;
 
 	inst.w0.u64 = 0;
@@ -1014,7 +1032,7 @@ roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa, uint8_t opcode,
 	inst.w3.u64 = 0;
 	inst.res_addr = (uintptr_t)hw_res;
 
-	rte_io_wmb();
+	plt_io_wmb();
 
 	do {
 		/* Copy CPT command to LMTLINE */

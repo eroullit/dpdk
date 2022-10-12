@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <getopt.h>
 #include <dirent.h>
+#include <stdlib.h>
 
 #include <rte_cryptodev.h>
 #include <rte_malloc.h>
@@ -54,13 +55,12 @@ struct cryptodev_fips_validate_env {
 	uint16_t mbuf_data_room;
 	struct rte_mempool *mpool;
 	struct rte_mempool *sess_mpool;
-	struct rte_mempool *sess_priv_mpool;
 	struct rte_mempool *op_pool;
 	struct rte_mbuf *mbuf;
 	uint8_t *digest;
 	uint16_t digest_len;
 	struct rte_crypto_op *op;
-	struct rte_cryptodev_sym_session *sess;
+	void *sess;
 	uint16_t self_test;
 	struct fips_dev_broken_test_config *broken_test_config;
 } env;
@@ -69,7 +69,7 @@ static int
 cryptodev_fips_validate_app_int(void)
 {
 	struct rte_cryptodev_config conf = {rte_socket_id(), 1, 0};
-	struct rte_cryptodev_qp_conf qp_conf = {128, NULL, NULL};
+	struct rte_cryptodev_qp_conf qp_conf = {128, NULL};
 	struct rte_cryptodev_info dev_info;
 	uint32_t sess_sz = rte_cryptodev_sym_get_private_session_size(
 			env.dev_id);
@@ -109,14 +109,9 @@ cryptodev_fips_validate_app_int(void)
 	ret = -ENOMEM;
 
 	env.sess_mpool = rte_cryptodev_sym_session_pool_create(
-			"FIPS_SESS_MEMPOOL", 16, 0, 0, 0, rte_socket_id());
+			"FIPS_SESS_MEMPOOL", 16, sess_sz, 0, 0,
+			rte_socket_id());
 	if (!env.sess_mpool)
-		goto error_exit;
-
-	env.sess_priv_mpool = rte_mempool_create("FIPS_SESS_PRIV_MEMPOOL",
-			16, sess_sz, 0, 0, NULL, NULL, NULL,
-			NULL, rte_socket_id(), 0);
-	if (!env.sess_priv_mpool)
 		goto error_exit;
 
 	env.op_pool = rte_crypto_op_pool_create(
@@ -133,7 +128,6 @@ cryptodev_fips_validate_app_int(void)
 		goto error_exit;
 
 	qp_conf.mp_session = env.sess_mpool;
-	qp_conf.mp_session_private = env.sess_priv_mpool;
 
 	ret = rte_cryptodev_queue_pair_setup(env.dev_id, 0, &qp_conf,
 			rte_socket_id());
@@ -150,7 +144,6 @@ error_exit:
 
 	rte_mempool_free(env.mpool);
 	rte_mempool_free(env.sess_mpool);
-	rte_mempool_free(env.sess_priv_mpool);
 	rte_mempool_free(env.op_pool);
 
 	return ret;
@@ -161,11 +154,9 @@ cryptodev_fips_validate_app_uninit(void)
 {
 	rte_pktmbuf_free(env.mbuf);
 	rte_crypto_op_free(env.op);
-	rte_cryptodev_sym_session_clear(env.dev_id, env.sess);
-	rte_cryptodev_sym_session_free(env.sess);
+	rte_cryptodev_sym_session_free(env.dev_id, env.sess);
 	rte_mempool_free(env.mpool);
 	rte_mempool_free(env.sess_mpool);
-	rte_mempool_free(env.sess_priv_mpool);
 	rte_mempool_free(env.op_pool);
 }
 
@@ -1201,13 +1192,9 @@ fips_run_test(void)
 	if (ret < 0)
 		return ret;
 
-	env.sess = rte_cryptodev_sym_session_create(env.sess_mpool);
-	if (!env.sess)
-		return -ENOMEM;
-
-	ret = rte_cryptodev_sym_session_init(env.dev_id,
-			env.sess, &xform, env.sess_priv_mpool);
-	if (ret < 0) {
+	env.sess = rte_cryptodev_sym_session_create(env.dev_id, &xform,
+			env.sess_mpool);
+	if (!env.sess) {
 		RTE_LOG(ERR, USER1, "Error %i: Init session\n",
 				ret);
 		goto exit;
@@ -1236,9 +1223,10 @@ fips_run_test(void)
 	vec.status = env.op->status;
 
 exit:
-	rte_cryptodev_sym_session_clear(env.dev_id, env.sess);
-	rte_cryptodev_sym_session_free(env.sess);
-	env.sess = NULL;
+	if (env.sess) {
+		rte_cryptodev_sym_session_free(env.dev_id, env.sess);
+		env.sess = NULL;
+	}
 
 	return ret;
 }
@@ -1303,7 +1291,7 @@ fips_mct_tdes_test(void)
 #define TDES_BLOCK_SIZE		8
 #define TDES_EXTERN_ITER	400
 #define TDES_INTERN_ITER	10000
-	struct fips_val val = {NULL, 0}, val_key;
+	struct fips_val val[3] = {{NULL, 0},}, val_key, pt, ct, iv;
 	uint8_t prev_out[TDES_BLOCK_SIZE] = {0};
 	uint8_t prev_prev_out[TDES_BLOCK_SIZE] = {0};
 	uint8_t prev_in[TDES_BLOCK_SIZE] = {0};
@@ -1311,16 +1299,25 @@ fips_mct_tdes_test(void)
 	int ret;
 	int test_mode = info.interim_info.tdes_data.test_mode;
 
+	pt.len = vec.pt.len;
+	pt.val = calloc(1, pt.len);
+	ct.len = vec.ct.len;
+	ct.val = calloc(1, ct.len);
+	iv.len = vec.iv.len;
+	iv.val = calloc(1, iv.len);
+
 	for (i = 0; i < TDES_EXTERN_ITER; i++) {
-		if ((i == 0) && (info.version == 21.4f)) {
-			if (!(strstr(info.vec[0], "COUNT")))
-				fprintf(info.fp_wr, "%s%u\n", "COUNT = ", 0);
+		if (info.file_type != FIPS_TYPE_JSON) {
+			if ((i == 0) && (info.version == 21.4f)) {
+				if (!(strstr(info.vec[0], "COUNT")))
+					fprintf(info.fp_wr, "%s%u\n", "COUNT = ", 0);
+			}
+
+			if (i != 0)
+				update_info_vec(i);
+
+			fips_test_write_one_case();
 		}
-
-		if (i != 0)
-			update_info_vec(i);
-
-		fips_test_write_one_case();
 
 		for (j = 0; j < TDES_INTERN_ITER; j++) {
 			ret = fips_run_test();
@@ -1335,7 +1332,7 @@ fips_mct_tdes_test(void)
 				return ret;
 			}
 
-			ret = get_writeback_data(&val);
+			ret = get_writeback_data(&val[0]);
 			if (ret < 0)
 				return ret;
 
@@ -1343,51 +1340,61 @@ fips_mct_tdes_test(void)
 				memcpy(prev_in, vec.ct.val, TDES_BLOCK_SIZE);
 
 			if (j == 0) {
-				memcpy(prev_out, val.val, TDES_BLOCK_SIZE);
+				memcpy(prev_out, val[0].val, TDES_BLOCK_SIZE);
+				memcpy(pt.val, vec.pt.val, pt.len);
+				memcpy(ct.val, vec.ct.val, ct.len);
+				memcpy(iv.val, vec.iv.val, iv.len);
 
 				if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
 					if (test_mode == TDES_MODE_ECB) {
-						memcpy(vec.pt.val, val.val,
+						memcpy(vec.pt.val, val[0].val,
 							   TDES_BLOCK_SIZE);
 					} else {
 						memcpy(vec.pt.val, vec.iv.val,
 							   TDES_BLOCK_SIZE);
-						memcpy(vec.iv.val, val.val,
+						memcpy(vec.iv.val, val[0].val,
 							   TDES_BLOCK_SIZE);
 					}
-
+					val[1].val = pt.val;
+					val[1].len = pt.len;
+					val[2].val = iv.val;
+					val[2].len = iv.len;
 				} else {
 					if (test_mode == TDES_MODE_ECB) {
-						memcpy(vec.ct.val, val.val,
+						memcpy(vec.ct.val, val[0].val,
 							   TDES_BLOCK_SIZE);
 					} else {
 						memcpy(vec.iv.val, vec.ct.val,
 							   TDES_BLOCK_SIZE);
-						memcpy(vec.ct.val, val.val,
+						memcpy(vec.ct.val, val[0].val,
 							   TDES_BLOCK_SIZE);
 					}
+					val[1].val = ct.val;
+					val[1].len = ct.len;
+					val[2].val = iv.val;
+					val[2].len = iv.len;
 				}
 				continue;
 			}
 
 			if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
 				if (test_mode == TDES_MODE_ECB) {
-					memcpy(vec.pt.val, val.val,
+					memcpy(vec.pt.val, val[0].val,
 						   TDES_BLOCK_SIZE);
 				} else {
-					memcpy(vec.iv.val, val.val,
+					memcpy(vec.iv.val, val[0].val,
 						   TDES_BLOCK_SIZE);
 					memcpy(vec.pt.val, prev_out,
 						   TDES_BLOCK_SIZE);
 				}
 			} else {
 				if (test_mode == TDES_MODE_ECB) {
-					memcpy(vec.ct.val, val.val,
+					memcpy(vec.ct.val, val[0].val,
 						   TDES_BLOCK_SIZE);
 				} else {
 					memcpy(vec.iv.val, vec.ct.val,
 						   TDES_BLOCK_SIZE);
-					memcpy(vec.ct.val, val.val,
+					memcpy(vec.ct.val, val[0].val,
 						   TDES_BLOCK_SIZE);
 				}
 			}
@@ -1395,14 +1402,15 @@ fips_mct_tdes_test(void)
 			if (j == TDES_INTERN_ITER - 1)
 				continue;
 
-			memcpy(prev_out, val.val, TDES_BLOCK_SIZE);
+			memcpy(prev_out, val[0].val, TDES_BLOCK_SIZE);
 
 			if (j == TDES_INTERN_ITER - 3)
-				memcpy(prev_prev_out, val.val, TDES_BLOCK_SIZE);
+				memcpy(prev_prev_out, val[0].val, TDES_BLOCK_SIZE);
 		}
 
-		info.parse_writeback(&val);
-		fprintf(info.fp_wr, "\n");
+		info.parse_writeback(val);
+		if (info.file_type != FIPS_TYPE_JSON)
+			fprintf(info.fp_wr, "\n");
 
 		if (i == TDES_EXTERN_ITER - 1)
 			continue;
@@ -1424,19 +1432,19 @@ fips_mct_tdes_test(void)
 
 			switch (info.interim_info.tdes_data.nb_keys) {
 			case 3:
-				val_key.val[k] ^= val.val[k];
+				val_key.val[k] ^= val[0].val[k];
 				val_key.val[k + 8] ^= prev_out[k];
 				val_key.val[k + 16] ^= prev_prev_out[k];
 				break;
 			case 2:
-				val_key.val[k] ^= val.val[k];
+				val_key.val[k] ^= val[0].val[k];
 				val_key.val[k + 8] ^= prev_out[k];
-				val_key.val[k + 16] ^= val.val[k];
+				val_key.val[k + 16] ^= val[0].val[k];
 				break;
 			default: /* case 1 */
-				val_key.val[k] ^= val.val[k];
-				val_key.val[k + 8] ^= val.val[k];
-				val_key.val[k + 16] ^= val.val[k];
+				val_key.val[k] ^= val[0].val[k];
+				val_key.val[k + 8] ^= val[0].val[k];
+				val_key.val[k + 16] ^= val[0].val[k];
 				break;
 			}
 
@@ -1449,22 +1457,25 @@ fips_mct_tdes_test(void)
 
 		if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
 			if (test_mode == TDES_MODE_ECB) {
-				memcpy(vec.pt.val, val.val, TDES_BLOCK_SIZE);
+				memcpy(vec.pt.val, val[0].val, TDES_BLOCK_SIZE);
 			} else {
-				memcpy(vec.iv.val, val.val, TDES_BLOCK_SIZE);
+				memcpy(vec.iv.val, val[0].val, TDES_BLOCK_SIZE);
 				memcpy(vec.pt.val, prev_out, TDES_BLOCK_SIZE);
 			}
 		} else {
 			if (test_mode == TDES_MODE_ECB) {
-				memcpy(vec.ct.val, val.val, TDES_BLOCK_SIZE);
+				memcpy(vec.ct.val, val[0].val, TDES_BLOCK_SIZE);
 			} else {
 				memcpy(vec.iv.val, prev_out, TDES_BLOCK_SIZE);
-				memcpy(vec.ct.val, val.val, TDES_BLOCK_SIZE);
+				memcpy(vec.ct.val, val[0].val, TDES_BLOCK_SIZE);
 			}
 		}
 	}
 
-	free(val.val);
+	free(val[0].val);
+	free(pt.val);
+	free(ct.val);
+	free(iv.val);
 
 	return 0;
 }
@@ -1565,9 +1576,12 @@ fips_mct_aes_test(void)
 	if (info.interim_info.aes_data.cipher_algo == RTE_CRYPTO_CIPHER_AES_ECB)
 		return fips_mct_aes_ecb_test();
 
-	memset(&pt, 0, sizeof(struct fips_val));
-	memset(&ct, 0, sizeof(struct fips_val));
-	memset(&iv, 0, sizeof(struct fips_val));
+	pt.len = vec.pt.len;
+	pt.val = calloc(1, pt.len);
+	ct.len = vec.ct.len;
+	ct.val = calloc(1, ct.len);
+	iv.len = vec.iv.len;
+	iv.val = calloc(1, iv.len);
 	for (i = 0; i < AES_EXTERN_ITER; i++) {
 		if (info.file_type != FIPS_TYPE_JSON) {
 			if (i != 0)
@@ -1599,16 +1613,8 @@ fips_mct_aes_test(void)
 
 			if (j == 0) {
 				memcpy(prev_out, val[0].val, AES_BLOCK_SIZE);
-				pt.len = vec.pt.len;
-				pt.val = calloc(1, pt.len);
 				memcpy(pt.val, vec.pt.val, pt.len);
-
-				ct.len = vec.ct.len;
-				ct.val = calloc(1, ct.len);
 				memcpy(ct.val, vec.ct.val, ct.len);
-
-				iv.len = vec.iv.len;
-				iv.val = calloc(1, iv.len);
 				memcpy(iv.val, vec.iv.val, iv.len);
 
 				if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
@@ -1647,12 +1653,8 @@ fips_mct_aes_test(void)
 		if (info.file_type != FIPS_TYPE_JSON)
 			fprintf(info.fp_wr, "\n");
 
-		if (i == AES_EXTERN_ITER - 1) {
-			free(pt.val);
-			free(ct.val);
-			free(iv.val);
+		if (i == AES_EXTERN_ITER - 1)
 			continue;
-		}
 
 		/** update key */
 		memcpy(&val_key, &vec.cipher_auth.key, sizeof(val_key));
@@ -1683,6 +1685,9 @@ fips_mct_aes_test(void)
 	}
 
 	free(val[0].val);
+	free(pt.val);
+	free(ct.val);
+	free(iv.val);
 
 	return 0;
 }
@@ -1696,13 +1701,14 @@ fips_mct_sha_test(void)
 	/* val[0] is op result and other value is for parse_writeback callback */
 	struct fips_val val[2] = {{NULL, 0},};
 	struct fips_val  md[SHA_MD_BLOCK], msg;
-	char temp[MAX_DIGEST_SIZE*2];
 	int ret;
 	uint32_t i, j;
 
 	msg.len = SHA_MD_BLOCK * vec.cipher_auth.digest.len;
 	msg.val = calloc(1, msg.len);
-	memcpy(vec.cipher_auth.digest.val, vec.pt.val, vec.cipher_auth.digest.len);
+	if (vec.pt.val)
+		memcpy(vec.cipher_auth.digest.val, vec.pt.val, vec.cipher_auth.digest.len);
+
 	for (i = 0; i < SHA_MD_BLOCK; i++)
 		md[i].val = rte_malloc(NULL, (MAX_DIGEST_SIZE*2), 0);
 
@@ -1769,14 +1775,15 @@ fips_mct_sha_test(void)
 		memcpy(vec.cipher_auth.digest.val, md[2].val, md[2].len);
 		vec.cipher_auth.digest.len = md[2].len;
 
-		if (info.file_type != FIPS_TYPE_JSON) {
+		if (info.file_type != FIPS_TYPE_JSON)
 			fprintf(info.fp_wr, "COUNT = %u\n", j);
-			writeback_hex_str("", temp, &vec.cipher_auth.digest);
-			fprintf(info.fp_wr, "MD = %s\n\n", temp);
-		}
+
 		val[1].val = msg.val;
 		val[1].len = msg.len;
 		info.parse_writeback(val);
+
+		if (info.file_type != FIPS_TYPE_JSON)
+			fprintf(info.fp_wr, "\n");
 	}
 
 	for (i = 0; i < (SHA_MD_BLOCK); i++)
@@ -2012,6 +2019,9 @@ fips_test_one_test_group(void)
 		break;
 	case FIPS_TEST_ALGO_SHA:
 		ret = parse_test_sha_json_init();
+		break;
+	case FIPS_TEST_ALGO_TDES:
+		ret = parse_test_tdes_json_init();
 		break;
 	default:
 		return -EINVAL;

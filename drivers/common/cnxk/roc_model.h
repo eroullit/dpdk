@@ -21,10 +21,12 @@ struct roc_model {
 #define ROC_MODEL_CNF95xxN_A1  BIT_ULL(14)
 #define ROC_MODEL_CNF95xxN_B0  BIT_ULL(15)
 #define ROC_MODEL_CN98xx_A0    BIT_ULL(16)
+#define ROC_MODEL_CN98xx_A1    BIT_ULL(17)
 #define ROC_MODEL_CN106xx_A0   BIT_ULL(20)
 #define ROC_MODEL_CNF105xx_A0  BIT_ULL(21)
 #define ROC_MODEL_CNF105xxN_A0 BIT_ULL(22)
 #define ROC_MODEL_CN103xx_A0   BIT_ULL(23)
+#define ROC_MODEL_CN106xx_A1   BIT_ULL(24)
 /* Following flags describe platform code is running on */
 #define ROC_ENV_HW   BIT_ULL(61)
 #define ROC_ENV_EMUL BIT_ULL(62)
@@ -37,10 +39,11 @@ struct roc_model {
 } __plt_cache_aligned;
 
 #define ROC_MODEL_CN96xx_Ax (ROC_MODEL_CN96xx_A0 | ROC_MODEL_CN96xx_B0)
+#define ROC_MODEL_CN98xx_Ax (ROC_MODEL_CN98xx_A0 | ROC_MODEL_CN98xx_A1)
 #define ROC_MODEL_CN9K                                                         \
 	(ROC_MODEL_CN96xx_Ax | ROC_MODEL_CN96xx_C0 | ROC_MODEL_CNF95xx_A0 |    \
 	 ROC_MODEL_CNF95xx_B0 | ROC_MODEL_CNF95xxMM_A0 |                       \
-	 ROC_MODEL_CNF95xxO_A0 | ROC_MODEL_CNF95xxN_A0 | ROC_MODEL_CN98xx_A0 | \
+	 ROC_MODEL_CNF95xxO_A0 | ROC_MODEL_CNF95xxN_A0 | ROC_MODEL_CN98xx_Ax | \
 	 ROC_MODEL_CNF95xxN_A1 | ROC_MODEL_CNF95xxN_B0)
 #define ROC_MODEL_CNF9K                                                        \
 	(ROC_MODEL_CNF95xx_A0 | ROC_MODEL_CNF95xx_B0 |                         \
@@ -48,7 +51,7 @@ struct roc_model {
 	 ROC_MODEL_CNF95xxN_A0 | ROC_MODEL_CNF95xxN_A1 |                       \
 	 ROC_MODEL_CNF95xxN_B0)
 
-#define ROC_MODEL_CN106xx   (ROC_MODEL_CN106xx_A0)
+#define ROC_MODEL_CN106xx   (ROC_MODEL_CN106xx_A0 | ROC_MODEL_CN106xx_A1)
 #define ROC_MODEL_CNF105xx  (ROC_MODEL_CNF105xx_A0)
 #define ROC_MODEL_CNF105xxN (ROC_MODEL_CNF105xxN_A0)
 #define ROC_MODEL_CN103xx   (ROC_MODEL_CN103xx_A0)
@@ -110,7 +113,19 @@ roc_model_is_cn10k(void)
 static inline uint64_t
 roc_model_is_cn98xx(void)
 {
+	return (roc_model->flag & ROC_MODEL_CN98xx_Ax);
+}
+
+static inline uint64_t
+roc_model_is_cn98xx_a0(void)
+{
 	return (roc_model->flag & ROC_MODEL_CN98xx_A0);
+}
+
+static inline uint64_t
+roc_model_is_cn98xx_a1(void)
+{
+	return (roc_model->flag & ROC_MODEL_CN98xx_A1);
 }
 
 static inline uint64_t
@@ -189,6 +204,12 @@ static inline uint64_t
 roc_model_is_cn10ka_a0(void)
 {
 	return roc_model->flag & ROC_MODEL_CN106xx_A0;
+}
+
+static inline uint64_t
+roc_model_is_cn10ka_a1(void)
+{
+	return roc_model->flag & ROC_MODEL_CN106xx_A1;
 }
 
 static inline uint64_t

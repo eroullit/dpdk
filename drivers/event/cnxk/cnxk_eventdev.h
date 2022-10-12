@@ -10,6 +10,7 @@
 #include <cryptodev_pmd.h>
 #include <rte_devargs.h>
 #include <rte_ethdev.h>
+#include <rte_event_crypto_adapter.h>
 #include <rte_event_eth_rx_adapter.h>
 #include <rte_event_eth_tx_adapter.h>
 #include <rte_kvargs.h>
@@ -38,6 +39,7 @@
 #define CNXK_SSO_XAQ_CACHE_CNT (0x7)
 #define CNXK_SSO_XAQ_SLACK     (8)
 #define CNXK_SSO_WQE_SG_PTR    (9)
+#define CNXK_SSO_WQE_LAYR_PTR  (5)
 #define CNXK_SSO_PRIORITY_CNT  (0x8)
 #define CNXK_SSO_WEIGHT_MAX    (0x3f)
 #define CNXK_SSO_WEIGHT_MIN    (0x3)
@@ -83,14 +85,8 @@ typedef int (*cnxk_sso_hws_flush_t)(void *ws, uint8_t queue_id, uintptr_t base,
 
 struct cnxk_sso_qos {
 	uint16_t queue;
-	uint16_t xaq_prcnt;
 	uint16_t taq_prcnt;
 	uint16_t iaq_prcnt;
-};
-
-struct cnxk_sso_mlt_prio {
-	uint8_t weight;
-	uint8_t affinity;
 };
 
 struct cnxk_sso_evdev {
@@ -123,7 +119,7 @@ struct cnxk_sso_evdev {
 	uint64_t *timer_adptr_sz;
 	uint16_t vec_pool_cnt;
 	uint64_t *vec_pools;
-	struct cnxk_sso_mlt_prio mlt_prio[RTE_EVENT_MAX_QUEUES_PER_DEV];
+	struct cnxk_timesync_info *tstamp[RTE_MAX_ETHPORTS];
 	/* Dev args */
 	uint32_t xae_cnt;
 	uint8_t qos_queue_cnt;
@@ -140,12 +136,13 @@ struct cnxk_sso_evdev {
 struct cn10k_sso_hws {
 	uint64_t base;
 	uint64_t gw_rdata;
-	/* PTP timestamp */
-	struct cnxk_timesync_info *tstamp;
 	void *lookup_mem;
 	uint32_t gw_wdata;
 	uint8_t swtag_req;
 	uint8_t hws_id;
+	/* PTP timestamp */
+	struct cnxk_timesync_info **tstamp;
+	uint64_t meta_aura;
 	/* Add Work Fastpath data */
 	uint64_t xaq_lmt __rte_cache_aligned;
 	uint64_t *fc_mem;
@@ -160,11 +157,11 @@ struct cn10k_sso_hws {
 struct cn9k_sso_hws {
 	uint64_t base;
 	uint64_t gw_wdata;
-	/* PTP timestamp */
-	struct cnxk_timesync_info *tstamp;
 	void *lookup_mem;
 	uint8_t swtag_req;
 	uint8_t hws_id;
+	/* PTP timestamp */
+	struct cnxk_timesync_info **tstamp;
 	/* Add Work Fastpath data */
 	uint64_t xaq_lmt __rte_cache_aligned;
 	uint64_t *fc_mem;
@@ -177,12 +174,12 @@ struct cn9k_sso_hws {
 struct cn9k_sso_hws_dual {
 	uint64_t base[2]; /* Ping and Pong */
 	uint64_t gw_wdata;
-	/* PTP timestamp */
-	struct cnxk_timesync_info *tstamp;
 	void *lookup_mem;
 	uint8_t swtag_req;
 	uint8_t vws; /* Ping pong bit */
 	uint8_t hws_id;
+	/* PTP timestamp */
+	struct cnxk_timesync_info **tstamp;
 	/* Add Work Fastpath data */
 	uint64_t xaq_lmt __rte_cache_aligned;
 	uint64_t *fc_mem;
@@ -250,9 +247,6 @@ void cnxk_sso_queue_def_conf(struct rte_eventdev *event_dev, uint8_t queue_id,
 int cnxk_sso_queue_setup(struct rte_eventdev *event_dev, uint8_t queue_id,
 			 const struct rte_event_queue_conf *queue_conf);
 void cnxk_sso_queue_release(struct rte_eventdev *event_dev, uint8_t queue_id);
-int cnxk_sso_queue_attribute_get(struct rte_eventdev *event_dev,
-				 uint8_t queue_id, uint32_t attr_id,
-				 uint32_t *attr_value);
 int cnxk_sso_queue_attribute_set(struct rte_eventdev *event_dev,
 				 uint8_t queue_id, uint32_t attr_id,
 				 uint64_t attr_value);
@@ -287,13 +281,6 @@ int cnxk_sso_xstats_reset(struct rte_eventdev *event_dev,
 			  int16_t queue_port_id, const uint32_t ids[],
 			  uint32_t n);
 
-/* Crypto adapter APIs. */
-int cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
-			       const struct rte_cryptodev *cdev,
-			       int32_t queue_pair_id);
-int cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev,
-			       int32_t queue_pair_id);
-
 /* CN9K */
 void cn9k_sso_set_rsrc(void *arg);
 
@@ -318,5 +305,9 @@ int cnxk_sso_tx_adapter_queue_del(const struct rte_eventdev *event_dev,
 int cnxk_sso_tx_adapter_start(uint8_t id, const struct rte_eventdev *event_dev);
 int cnxk_sso_tx_adapter_stop(uint8_t id, const struct rte_eventdev *event_dev);
 int cnxk_sso_tx_adapter_free(uint8_t id, const struct rte_eventdev *event_dev);
+int cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
+			       const struct rte_cryptodev *cdev, int32_t queue_pair_id,
+			       const struct rte_event_crypto_adapter_queue_conf *conf);
+int cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev, int32_t queue_pair_id);
 
 #endif /* __CNXK_EVENTDEV_H__ */

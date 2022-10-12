@@ -2,6 +2,7 @@
  * Copyright(c) 2010-2017 Intel Corporation
  */
 
+#include <ctype.h>
 #include <arpa/inet.h>
 #include <getopt.h>
 #include <linux/if_ether.h>
@@ -10,6 +11,7 @@
 #include <linux/virtio_ring.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/eventfd.h>
 #include <sys/param.h>
 #include <unistd.h>
@@ -55,8 +57,8 @@
 #define DEVICE_SAFE_REMOVE	2
 
 /* Configurable number of RX/TX ring descriptors */
-#define RTE_TEST_RX_DESC_DEFAULT 1024
-#define RTE_TEST_TX_DESC_DEFAULT 512
+#define RX_DESC_DEFAULT 1024
+#define TX_DESC_DEFAULT 512
 
 #define INVALID_PORT_ID 0xFF
 #define INVALID_DMA_ID -1
@@ -125,7 +127,6 @@ static struct vhost_queue_ops vdev_queue_ops[RTE_MAX_VHOST_DEVICE];
 static struct rte_eth_conf vmdq_conf_default = {
 	.rxmode = {
 		.mq_mode        = RTE_ETH_MQ_RX_VMDQ_ONLY,
-		.split_hdr_size = 0,
 		/*
 		 * VLAN strip is necessary for 1G NIC such as I350,
 		 * this fixes bug of ipv4 forwarding in guest can't
@@ -443,8 +444,8 @@ port_init(uint16_t port)
 	/*configure the number of supported virtio devices based on VMDQ limits */
 	num_devices = dev_info.max_vmdq_pools;
 
-	rx_ring_size = RTE_TEST_RX_DESC_DEFAULT;
-	tx_ring_size = RTE_TEST_TX_DESC_DEFAULT;
+	rx_ring_size = RX_DESC_DEFAULT;
+	tx_ring_size = TX_DESC_DEFAULT;
 
 	tx_rings = (uint16_t)rte_lcore_count();
 
@@ -491,7 +492,7 @@ port_init(uint16_t port)
 			"for port %u: %s.\n", port, strerror(-retval));
 		return retval;
 	}
-	if (rx_ring_size > RTE_TEST_RX_DESC_DEFAULT) {
+	if (rx_ring_size > RX_DESC_DEFAULT) {
 		RTE_LOG(ERR, VHOST_PORT, "Mbuf pool has an insufficient size "
 			"for Rx queues on port %u.\n", port);
 		return -1;
@@ -1073,8 +1074,13 @@ drain_vhost(struct vhost_dev *vdev)
 				__ATOMIC_SEQ_CST);
 	}
 
-	if (!dma_bind[vid2socketid[vdev->vid]].dmas[VIRTIO_RXQ].async_enabled)
+	if (!dma_bind[vid2socketid[vdev->vid]].dmas[VIRTIO_RXQ].async_enabled) {
 		free_pkts(m, nr_xmit);
+	} else {
+		uint16_t enqueue_fail = nr_xmit - ret;
+		if (enqueue_fail > 0)
+			free_pkts(&m[ret], enqueue_fail);
+	}
 }
 
 static __rte_always_inline void
@@ -1350,16 +1356,11 @@ async_enqueue_pkts(struct vhost_dev *dev, uint16_t queue_id,
 		struct rte_mbuf **pkts, uint32_t rx_count)
 {
 	uint16_t enqueue_count;
-	uint16_t enqueue_fail = 0;
 	uint16_t dma_id = dma_bind[vid2socketid[dev->vid]].dmas[VIRTIO_RXQ].dev_id;
 
 	complete_async_pkts(dev);
 	enqueue_count = rte_vhost_submit_enqueue_burst(dev->vid, queue_id,
 					pkts, rx_count, dma_id, 0);
-
-	enqueue_fail = rx_count - enqueue_count;
-	if (enqueue_fail)
-		free_pkts(&pkts[enqueue_count], enqueue_fail);
 
 	return enqueue_count;
 }
@@ -1405,8 +1406,13 @@ drain_eth_rx(struct vhost_dev *vdev)
 				__ATOMIC_SEQ_CST);
 	}
 
-	if (!dma_bind[vid2socketid[vdev->vid]].dmas[VIRTIO_RXQ].async_enabled)
+	if (!dma_bind[vid2socketid[vdev->vid]].dmas[VIRTIO_RXQ].async_enabled) {
 		free_pkts(pkts, rx_count);
+	} else {
+		uint16_t enqueue_fail = rx_count - enqueue_count;
+		if (enqueue_fail > 0)
+			free_pkts(&pkts[enqueue_count], enqueue_fail);
+	}
 }
 
 uint16_t async_dequeue_pkts(struct vhost_dev *dev, uint16_t queue_id,

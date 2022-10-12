@@ -394,7 +394,7 @@ nix_inl_nix_setup(struct nix_inl_dev *inl_dev)
 
 	/* CN9K SA is different */
 	if (roc_model_is_cn9k())
-		inb_sa_sz = ROC_NIX_INL_ONF_IPSEC_INB_SA_SZ;
+		inb_sa_sz = ROC_NIX_INL_ON_IPSEC_INB_SA_SZ;
 	else
 		inb_sa_sz = ROC_NIX_INL_OT_IPSEC_INB_SA_SZ;
 
@@ -841,6 +841,8 @@ roc_nix_inl_dev_init(struct roc_nix_inl_dev *roc_inl_dev)
 	inl_dev->lpb_drop_pc = NIX_AURA_DROP_PC_DFLT;
 	inl_dev->set_soft_exp_poll = roc_inl_dev->set_soft_exp_poll;
 	inl_dev->nb_rqs = inl_dev->is_multi_channel ? 1 : PLT_MAX_ETHPORTS;
+	inl_dev->nb_meta_bufs = roc_inl_dev->nb_meta_bufs;
+	inl_dev->meta_buf_sz = roc_inl_dev->meta_buf_sz;
 
 	if (roc_inl_dev->spb_drop_pc)
 		inl_dev->spb_drop_pc = roc_inl_dev->spb_drop_pc;

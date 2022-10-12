@@ -10,12 +10,13 @@
 
 #include "cnxk_ae.h"
 #include "cnxk_cryptodev.h"
-#include "cnxk_cryptodev_ops.h"
 #include "cnxk_cryptodev_capabilities.h"
+#include "cnxk_cryptodev_ops.h"
 #include "cnxk_se.h"
 
-#define CNXK_CPT_MAX_ASYM_OP_NUM_PARAMS 5
-#define CNXK_CPT_MAX_ASYM_OP_MOD_LEN	1024
+#define CNXK_CPT_MAX_ASYM_OP_NUM_PARAMS	 5
+#define CNXK_CPT_MAX_ASYM_OP_MOD_LEN	 1024
+#define CNXK_CPT_META_BUF_MAX_CACHE_SIZE 128
 
 static int
 cnxk_cpt_get_mlen(void)
@@ -200,7 +201,7 @@ cnxk_cpt_metabuf_mempool_create(const struct rte_cryptodev *dev,
 	}
 
 	mb_pool_sz = nb_elements;
-	cache_sz = RTE_MIN(RTE_MEMPOOL_CACHE_MAX_SIZE, nb_elements / 1.5);
+	cache_sz = RTE_MIN(CNXK_CPT_META_BUF_MAX_CACHE_SIZE, nb_elements / 1.5);
 
 	/* For poll mode, core that enqueues and core that dequeues can be
 	 * different. For event mode, all cores are allowed to use same crypto
@@ -405,7 +406,6 @@ cnxk_cpt_queue_pair_setup(struct rte_cryptodev *dev, uint16_t qp_id,
 	}
 
 	qp->sess_mp = conf->mp_session;
-	qp->sess_mp_priv = conf->mp_session_private;
 	dev->data->queue_pairs[qp_id] = qp;
 
 	return 0;
@@ -610,7 +610,7 @@ cnxk_cpt_inst_w7_get(struct cnxk_se_sess *sess, struct roc_cpt *roc_cpt)
 	inst_w7.s.cptr = (uint64_t)&sess->roc_se_ctx.se_ctx;
 
 	/* Set the engine group */
-	if (sess->zsk_flag || sess->chacha_poly || sess->aes_ctr_eea2)
+	if (sess->zsk_flag || sess->aes_ctr_eea2)
 		inst_w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_SE];
 	else
 		inst_w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_IE];
@@ -619,27 +619,46 @@ cnxk_cpt_inst_w7_get(struct cnxk_se_sess *sess, struct roc_cpt *roc_cpt)
 }
 
 int
-sym_session_configure(struct roc_cpt *roc_cpt, int driver_id,
+sym_session_configure(struct roc_cpt *roc_cpt,
 		      struct rte_crypto_sym_xform *xform,
-		      struct rte_cryptodev_sym_session *sess,
-		      struct rte_mempool *pool)
+		      struct rte_cryptodev_sym_session *sess)
 {
-	struct cnxk_se_sess *sess_priv;
-	void *priv;
+	enum cpt_dp_thread_type thr_type;
+	struct cnxk_se_sess *sess_priv = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 	int ret;
 
-	if (unlikely(rte_mempool_get(pool, &priv))) {
-		plt_dp_err("Could not allocate session private data");
-		return -ENOMEM;
-	}
-
-	memset(priv, 0, sizeof(struct cnxk_se_sess));
-
-	sess_priv = priv;
-
+	memset(sess_priv, 0, sizeof(struct cnxk_se_sess));
 	ret = cnxk_sess_fill(roc_cpt, xform, sess_priv);
 	if (ret)
 		goto priv_put;
+
+	if (sess_priv->cpt_op & ROC_SE_OP_CIPHER_MASK) {
+		switch (sess_priv->roc_se_ctx.fc_type) {
+		case ROC_SE_FC_GEN:
+			if (sess_priv->aes_gcm || sess_priv->chacha_poly)
+				thr_type = CPT_DP_THREAD_TYPE_FC_AEAD;
+			else
+				thr_type = CPT_DP_THREAD_TYPE_FC_CHAIN;
+			break;
+		case ROC_SE_PDCP:
+			thr_type = CPT_DP_THREAD_TYPE_PDCP;
+			break;
+		case ROC_SE_KASUMI:
+			thr_type = CPT_DP_THREAD_TYPE_KASUMI;
+			break;
+		case ROC_SE_PDCP_CHAIN:
+			thr_type = CPT_DP_THREAD_TYPE_PDCP_CHAIN;
+			break;
+		default:
+			plt_err("Invalid op type");
+			ret = -ENOTSUP;
+			goto priv_put;
+		}
+	} else {
+		thr_type = CPT_DP_THREAD_AUTH_ONLY;
+	}
+
+	sess_priv->dp_thr_type = thr_type;
 
 	if ((sess_priv->roc_se_ctx.fc_type == ROC_SE_HASH_HMAC) &&
 	    cpt_mac_len_verify(&xform->auth)) {
@@ -654,61 +673,39 @@ sym_session_configure(struct roc_cpt *roc_cpt, int driver_id,
 	}
 
 	sess_priv->cpt_inst_w7 = cnxk_cpt_inst_w7_get(sess_priv, roc_cpt);
-
-	set_sym_session_private_data(sess, driver_id, sess_priv);
-
 	return 0;
 
 priv_put:
-	rte_mempool_put(pool, priv);
-
 	return ret;
 }
 
 int
 cnxk_cpt_sym_session_configure(struct rte_cryptodev *dev,
 			       struct rte_crypto_sym_xform *xform,
-			       struct rte_cryptodev_sym_session *sess,
-			       struct rte_mempool *pool)
+			       struct rte_cryptodev_sym_session *sess)
 {
 	struct cnxk_cpt_vf *vf = dev->data->dev_private;
 	struct roc_cpt *roc_cpt = &vf->cpt;
-	uint8_t driver_id;
 
-	driver_id = dev->driver_id;
-
-	return sym_session_configure(roc_cpt, driver_id, xform, sess, pool);
+	return sym_session_configure(roc_cpt, xform, sess);
 }
 
 void
-sym_session_clear(int driver_id, struct rte_cryptodev_sym_session *sess)
+sym_session_clear(struct rte_cryptodev_sym_session *sess)
 {
-	void *priv = get_sym_session_private_data(sess, driver_id);
-	struct cnxk_se_sess *sess_priv;
-	struct rte_mempool *pool;
-
-	if (priv == NULL)
-		return;
-
-	sess_priv = priv;
+	struct cnxk_se_sess *sess_priv = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 
 	if (sess_priv->roc_se_ctx.auth_key != NULL)
 		plt_free(sess_priv->roc_se_ctx.auth_key);
 
-	memset(priv, 0, cnxk_cpt_sym_session_get_size(NULL));
-
-	pool = rte_mempool_from_obj(priv);
-
-	set_sym_session_private_data(sess, driver_id, NULL);
-
-	rte_mempool_put(pool, priv);
+	memset(sess_priv, 0, cnxk_cpt_sym_session_get_size(NULL));
 }
 
 void
-cnxk_cpt_sym_session_clear(struct rte_cryptodev *dev,
+cnxk_cpt_sym_session_clear(struct rte_cryptodev *dev __rte_unused,
 			   struct rte_cryptodev_sym_session *sess)
 {
-	return sym_session_clear(dev->driver_id, sess);
+	return sym_session_clear(sess);
 }
 
 unsigned int

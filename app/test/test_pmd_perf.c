@@ -18,8 +18,8 @@
 #define NB_SOCKETS                      (2)
 #define MEMPOOL_CACHE_SIZE 250
 #define MAX_PKT_BURST                   (32)
-#define RTE_TEST_RX_DESC_DEFAULT        (1024)
-#define RTE_TEST_TX_DESC_DEFAULT        (1024)
+#define RX_DESC_DEFAULT        (1024)
+#define TX_DESC_DEFAULT        (1024)
 #define RTE_PORT_ALL            (~(uint16_t)0x0)
 
 /* how long test would take at full line rate */
@@ -62,7 +62,6 @@ static struct rte_ether_addr ports_eth_addr[RTE_MAX_ETHPORTS];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode = RTE_ETH_MQ_RX_NONE,
-		.split_hdr_size = 0,
 	},
 	.txmode = {
 		.mq_mode = RTE_ETH_MQ_TX_NONE,
@@ -703,8 +702,8 @@ test_pmd_perf(void)
 	init_mbufpool(NB_MBUF);
 
 	if (sc_flag == SC_CONTINUOUS) {
-		nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
-		nb_txd = RTE_TEST_TX_DESC_DEFAULT;
+		nb_rxd = RX_DESC_DEFAULT;
+		nb_txd = TX_DESC_DEFAULT;
 	}
 	printf("CONFIG RXD=%d TXD=%d\n", nb_rxd, nb_txd);
 

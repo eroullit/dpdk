@@ -15,7 +15,7 @@
 #include <desc/algo.h>
 #include <desc/ipsec.h>
 
-#include <rte_dpaa_bus.h>
+#include <bus_dpaa_driver.h>
 #include <dpaa_sec.h>
 #include <dpaa_sec_log.h>
 
@@ -1014,11 +1014,10 @@ dpaa_sec_configure_raw_dp_ctx(struct rte_cryptodev *dev, uint16_t qp_id,
 	}
 
 	if (sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
-		sess = (dpaa_sec_session *)get_sec_session_private_data(
-				session_ctx.sec_sess);
+		sess = SECURITY_GET_SESS_PRIV(session_ctx.sec_sess);
 	else if (sess_type == RTE_CRYPTO_OP_WITH_SESSION)
-		sess = (dpaa_sec_session *)get_sym_session_private_data(
-			session_ctx.crypto_sess, dpaa_cryptodev_driver_id);
+		sess = (dpaa_sec_session *)
+			CRYPTODEV_GET_SYM_SESS_PRIV(session_ctx.crypto_sess);
 	else
 		return -ENOTSUP;
 	raw_dp_ctx->dequeue_burst = dpaa_sec_raw_dequeue_burst;

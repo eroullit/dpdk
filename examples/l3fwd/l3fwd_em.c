@@ -247,6 +247,14 @@ em_mask_key(void *key, xmm_t mask)
 
 	return vect_and(data, mask);
 }
+#elif defined(RTE_ARCH_LOONGARCH)
+static inline xmm_t
+em_mask_key(void *key, xmm_t mask)
+{
+	xmm_t data = vect_load_128(key);
+
+	return vect_and(data, mask);
+}
 #else
 #error No vector engine (SSE, NEON, ALTIVEC) available, check your toolchain
 #endif
@@ -403,7 +411,7 @@ populate_ipv4_flow_into_table(const struct rte_hash *h)
 			   em_route_base_v4[i].v4_key.port_dst,
 			   em_route_base_v4[i].v4_key.port_src,
 			   em_route_base_v4[i].v4_key.proto,
-		       em_route_base_v4[i].if_out, dev_info.device->name);
+		       em_route_base_v4[i].if_out, rte_dev_name(dev_info.device));
 	}
 	printf("Hash: Adding 0x%" PRIx64 " keys\n",
 		(uint64_t)route_num_v4);
@@ -455,7 +463,7 @@ populate_ipv6_flow_into_table(const struct rte_hash *h)
 			   em_route_base_v6[i].v6_key.port_dst,
 			   em_route_base_v6[i].v6_key.port_src,
 			   em_route_base_v6[i].v6_key.proto,
-		       em_route_base_v6[i].if_out, dev_info.device->name);
+		       em_route_base_v6[i].if_out, rte_dev_name(dev_info.device));
 	}
 	printf("Hash: Adding 0x%" PRIx64 "keys\n",
 		(uint64_t)route_num_v6);

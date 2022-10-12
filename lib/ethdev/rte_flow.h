@@ -35,6 +35,7 @@
 #include <rte_l2tpv2.h>
 #include <rte_ppp.h>
 #include <rte_gre.h>
+#include <rte_macsec.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -88,28 +89,10 @@ struct rte_flow_attr {
 	uint32_t priority; /**< Rule priority level within group. */
 	/**
 	 * The rule in question applies to ingress traffic (non-"transfer").
-	 *
-	 * @deprecated
-	 * It has been possible to combine this attribute with "transfer".
-	 * Doing so has been assumed to restrict the scope of matching
-	 * to traffic going from within the embedded switch toward the
-	 * ethdev the flow rule being created through. This behaviour
-	 * is deprecated. During the transition period, one may still
-	 * rely on it, but PMDs and applications are encouraged to
-	 * gradually move away from this approach.
 	 */
 	uint32_t ingress:1;
 	/**
 	 * The rule in question applies to egress traffic (non-"transfer").
-	 *
-	 * @deprecated
-	 * It has been possible to combine this attribute with "transfer".
-	 * Doing so has been assumed to restrict the scope of matching
-	 * to traffic sent by the application by virtue of the ethdev
-	 * the flow rule being created through. This behaviour is now
-	 * deprecated. During the transition period, one may still
-	 * rely on it, but PMDs and applications are encouraged to
-	 * gradually move away from this approach.
 	 */
 	uint32_t egress:1;
 	/**
@@ -187,48 +170,6 @@ enum rte_flow_item_type {
 	 * See struct rte_flow_item_any.
 	 */
 	RTE_FLOW_ITEM_TYPE_ANY,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR
-	 * @see RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT
-	 *
-	 * [META]
-	 *
-	 * Matches traffic originating from (ingress) or going to (egress)
-	 * the physical function of the current device.
-	 *
-	 * No associated specification structure.
-	 */
-	RTE_FLOW_ITEM_TYPE_PF,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR
-	 * @see RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT
-	 *
-	 * [META]
-	 *
-	 * Matches traffic originating from (ingress) or going to (egress) a
-	 * given virtual function of the current device.
-	 *
-	 * See struct rte_flow_item_vf.
-	 */
-	RTE_FLOW_ITEM_TYPE_VF,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR
-	 * @see RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT
-	 *
-	 * [META]
-	 *
-	 * Matches traffic originating from (ingress) or going to (egress) a
-	 * physical port of the underlying device.
-	 *
-	 * See struct rte_flow_item_phy_port.
-	 */
-	RTE_FLOW_ITEM_TYPE_PHY_PORT,
 
 	/**
 	 * @deprecated
@@ -668,6 +609,20 @@ enum rte_flow_item_type {
 	 * See struct rte_flow_item_gre_opt.
 	 */
 	RTE_FLOW_ITEM_TYPE_GRE_OPTION,
+
+	/**
+	 * Matches MACsec Ethernet Header.
+	 *
+	 * See struct rte_flow_item_macsec.
+	 */
+	RTE_FLOW_ITEM_TYPE_MACSEC,
+
+	/**
+	 * Matches Meter Color Marker.
+	 *
+	 * See struct rte_flow_item_meter_color.
+	 */
+	RTE_FLOW_ITEM_TYPE_METER_COLOR,
 };
 
 /**
@@ -719,74 +674,6 @@ static const struct rte_flow_item_any rte_flow_item_any_mask = {
  * @see RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR
  * @see RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT
  *
- * RTE_FLOW_ITEM_TYPE_VF
- *
- * Matches traffic originating from (ingress) or going to (egress) a given
- * virtual function of the current device.
- *
- * If supported, should work even if the virtual function is not managed by
- * the application and thus not associated with a DPDK port ID.
- *
- * Note this pattern item does not match VF representors traffic which, as
- * separate entities, should be addressed through their own DPDK port IDs.
- *
- * - Can be specified multiple times to match traffic addressed to several
- *   VF IDs.
- * - Can be combined with a PF item to match both PF and VF traffic.
- *
- * A zeroed mask can be used to match any VF ID.
- */
-struct rte_flow_item_vf {
-	uint32_t id; /**< VF ID. */
-};
-
-/** Default mask for RTE_FLOW_ITEM_TYPE_VF. */
-#ifndef __cplusplus
-static const struct rte_flow_item_vf rte_flow_item_vf_mask = {
-	.id = 0x00000000,
-};
-#endif
-
-/**
- * @deprecated
- * @see RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR
- * @see RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT
- *
- * RTE_FLOW_ITEM_TYPE_PHY_PORT
- *
- * Matches traffic originating from (ingress) or going to (egress) a
- * physical port of the underlying device.
- *
- * The first PHY_PORT item overrides the physical port normally associated
- * with the specified DPDK input port (port_id). This item can be provided
- * several times to match additional physical ports.
- *
- * Note that physical ports are not necessarily tied to DPDK input ports
- * (port_id) when those are not under DPDK control. Possible values are
- * specific to each device, they are not necessarily indexed from zero and
- * may not be contiguous.
- *
- * As a device property, the list of allowed values as well as the value
- * associated with a port_id should be retrieved by other means.
- *
- * A zeroed mask can be used to match any port index.
- */
-struct rte_flow_item_phy_port {
-	uint32_t index; /**< Physical port index. */
-};
-
-/** Default mask for RTE_FLOW_ITEM_TYPE_PHY_PORT. */
-#ifndef __cplusplus
-static const struct rte_flow_item_phy_port rte_flow_item_phy_port_mask = {
-	.index = 0x00000000,
-};
-#endif
-
-/**
- * @deprecated
- * @see RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR
- * @see RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT
- *
  * RTE_FLOW_ITEM_TYPE_PORT_ID
  *
  * Matches traffic originating from (ingress) or going to (egress) a given
@@ -795,11 +682,6 @@ static const struct rte_flow_item_phy_port rte_flow_item_phy_port_mask = {
  * Normally only supported if the port ID in question is known by the
  * underlying PMD and related to the device the flow rule is created
  * against.
- *
- * This must not be confused with @p PHY_PORT which refers to the physical
- * port of a device, whereas @p PORT_ID refers to a struct rte_eth_dev
- * object on the application side (also known as "port representor"
- * depending on the kind of underlying device).
  */
 struct rte_flow_item_port_id {
 	uint32_t id; /**< DPDK port ID. */
@@ -1212,6 +1094,15 @@ struct rte_flow_item_gre_opt {
 	struct rte_gre_hdr_opt_checksum_rsvd checksum_rsvd;
 	struct rte_gre_hdr_opt_key key;
 	struct rte_gre_hdr_opt_sequence sequence;
+};
+
+/**
+ * RTE_FLOW_ITEM_TYPE_MACSEC.
+ *
+ * Matches MACsec header.
+ */
+struct rte_flow_item_macsec {
+	struct rte_macsec_hdr macsec_hdr;
 };
 
 /**
@@ -1918,9 +1809,6 @@ static const struct rte_flow_item_conntrack rte_flow_item_conntrack_mask = {
 #endif
 
 /**
- * @warning
- * @b EXPERIMENTAL: this structure may change without prior notice
- *
  * Provides an ethdev port ID for use with the following items:
  * RTE_FLOW_ITEM_TYPE_PORT_REPRESENTOR,
  * RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT.
@@ -2199,6 +2087,22 @@ struct rte_flow_item_flex_conf {
 };
 
 /**
+ * RTE_FLOW_ITEM_TYPE_METER_COLOR.
+ *
+ * Matches Color Marker set by a Meter.
+ */
+struct rte_flow_item_meter_color {
+	enum rte_color color; /**< Meter color marker. */
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_METER_COLOR. */
+#ifndef __cplusplus
+static const struct rte_flow_item_meter_color rte_flow_item_meter_color_mask = {
+	.color = RTE_COLORS,
+};
+#endif
+
+/**
  * Action types.
  *
  * Each possible action is represented by a type.
@@ -2347,18 +2251,6 @@ enum rte_flow_action_type {
 	 * @see RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR
 	 * @see RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT
 	 *
-	 * Directs packets to a given physical port index of the underlying
-	 * device.
-	 *
-	 * See struct rte_flow_action_phy_port.
-	 */
-	RTE_FLOW_ACTION_TYPE_PHY_PORT,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR
-	 * @see RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT
-	 *
 	 * Directs matching traffic to a given DPDK port ID.
 	 *
 	 * See struct rte_flow_action_port_id.
@@ -2382,39 +2274,6 @@ enum rte_flow_action_type {
 	RTE_FLOW_ACTION_TYPE_SECURITY,
 
 	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
-	 *
-	 * Implements OFPAT_SET_MPLS_TTL ("MPLS TTL") as defined by the
-	 * OpenFlow Switch Specification.
-	 *
-	 * See struct rte_flow_action_of_set_mpls_ttl.
-	 */
-	RTE_FLOW_ACTION_TYPE_OF_SET_MPLS_TTL,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
-	 *
-	 * Implements OFPAT_DEC_MPLS_TTL ("decrement MPLS TTL") as defined
-	 * by the OpenFlow Switch Specification.
-	 *
-	 * No associated configuration structure.
-	 */
-	RTE_FLOW_ACTION_TYPE_OF_DEC_MPLS_TTL,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
-	 *
-	 * Implements OFPAT_SET_NW_TTL ("IP TTL") as defined by the OpenFlow
-	 * Switch Specification.
-	 *
-	 * See struct rte_flow_action_of_set_nw_ttl.
-	 */
-	RTE_FLOW_ACTION_TYPE_OF_SET_NW_TTL,
-
-	/**
 	 * @warning This is a legacy action.
 	 * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
 	 *
@@ -2424,30 +2283,6 @@ enum rte_flow_action_type {
 	 * No associated configuration structure.
 	 */
 	RTE_FLOW_ACTION_TYPE_OF_DEC_NW_TTL,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
-	 *
-	 * Implements OFPAT_COPY_TTL_OUT ("copy TTL "outwards" -- from
-	 * next-to-outermost to outermost") as defined by the OpenFlow
-	 * Switch Specification.
-	 *
-	 * No associated configuration structure.
-	 */
-	RTE_FLOW_ACTION_TYPE_OF_COPY_TTL_OUT,
-
-	/**
-	 * @deprecated
-	 * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
-	 *
-	 * Implements OFPAT_COPY_TTL_IN ("copy TTL "inwards" -- from
-	 * outermost to next-to-outermost") as defined by the OpenFlow
-	 * Switch Specification.
-	 *
-	 * No associated configuration structure.
-	 */
-	RTE_FLOW_ACTION_TYPE_OF_COPY_TTL_IN,
 
 	/**
 	 * Implements OFPAT_POP_VLAN ("pop the outer VLAN tag") as defined
@@ -2879,6 +2714,25 @@ enum rte_flow_action_type {
 	 * @see struct rte_flow_action_ethdev
 	 */
 	RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT,
+
+	/**
+	 * Traffic metering and marking (MTR).
+	 *
+	 * @see struct rte_flow_action_meter_mark
+	 * See file rte_mtr.h for MTR profile object configuration.
+	 */
+	RTE_FLOW_ACTION_TYPE_METER_MARK,
+
+	/**
+	 * Send packets to the kernel, without going to userspace at all.
+	 * The packets will be received by the kernel driver sharing
+	 * the same device as the DPDK port on which this action is configured.
+	 * This action mostly suits bifurcated driver model.
+	 * This is an ingress non-transfer action only.
+	 *
+	 * No associated configuration structure.
+	 */
+	RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL,
 };
 
 /**
@@ -3083,24 +2937,6 @@ struct rte_flow_action_vf {
  * @see RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR
  * @see RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT
  *
- * RTE_FLOW_ACTION_TYPE_PHY_PORT
- *
- * Directs packets to a given physical port index of the underlying
- * device.
- *
- * @see RTE_FLOW_ITEM_TYPE_PHY_PORT
- */
-struct rte_flow_action_phy_port {
-	uint32_t original:1; /**< Use original port index if possible. */
-	uint32_t reserved:31; /**< Reserved, must be zero. */
-	uint32_t index; /**< Physical port index. */
-};
-
-/**
- * @deprecated
- * @see RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR
- * @see RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT
- *
  * RTE_FLOW_ACTION_TYPE_PORT_ID
  *
  * Directs matching traffic to a given DPDK port ID.
@@ -3157,32 +2993,6 @@ struct rte_flow_action_meter {
  */
 struct rte_flow_action_security {
 	void *security_session; /**< Pointer to security session structure. */
-};
-
-/**
- * @deprecated
- * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
- *
- * RTE_FLOW_ACTION_TYPE_OF_SET_MPLS_TTL
- *
- * Implements OFPAT_SET_MPLS_TTL ("MPLS TTL") as defined by the OpenFlow
- * Switch Specification.
- */
-struct rte_flow_action_of_set_mpls_ttl {
-	uint8_t mpls_ttl; /**< MPLS TTL. */
-};
-
-/**
- * @deprecated
- * @see RTE_FLOW_ACTION_TYPE_MODIFY_FIELD
- *
- * RTE_FLOW_ACTION_TYPE_OF_SET_NW_TTL
- *
- * Implements OFPAT_SET_NW_TTL ("IP TTL") as defined by the OpenFlow Switch
- * Specification.
- */
-struct rte_flow_action_of_set_nw_ttl {
-	uint8_t nw_ttl; /**< IP TTL. */
 };
 
 /**
@@ -3643,9 +3453,6 @@ struct rte_flow_action_meter_color {
 };
 
 /**
- * @warning
- * @b EXPERIMENTAL: this structure may change without prior notice
- *
  * Provides an ethdev port ID for use with the following actions:
  * RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR,
  * RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT.
@@ -3689,6 +3496,8 @@ enum rte_flow_field_id {
 	RTE_FLOW_FIELD_VALUE,		/**< Immediate value. */
 	RTE_FLOW_FIELD_IPV4_ECN,	/**< IPv4 ECN. */
 	RTE_FLOW_FIELD_IPV6_ECN,	/**< IPv6 ECN. */
+	RTE_FLOW_FIELD_GTP_PSC_QFI,	/**< GTP QFI. */
+	RTE_FLOW_FIELD_METER_COLOR,	/**< Meter color marker. */
 };
 
 /**
@@ -3749,6 +3558,54 @@ struct rte_flow_action_modify_field {
 	uint32_t width; /**< Number of bits to use from a source field. */
 };
 
+/**
+ * RTE_FLOW_ACTION_TYPE_METER_MARK
+ *
+ * Traffic metering and marking (MTR).
+ *
+ * Meters a packet stream and marks its packets either
+ * green, yellow, or red according to the specified profile.
+ * The policy is optional and may be specified for defining
+ * subsequent actions based on a color assigned by MTR.
+ * Alternatively, the METER_COLOR item may be used for this.
+ */
+struct rte_flow_action_meter_mark {
+
+	/**< Profile config retrieved with rte_mtr_profile_get(). */
+	struct rte_flow_meter_profile *profile;
+	/**< Policy config retrieved with rte_mtr_policy_get(). */
+	struct rte_flow_meter_policy *policy;
+	/** Metering mode: 0 - Color-Blind, 1 - Color-Aware. */
+	int color_mode;
+	/** Initial Color applied to packets in Color-Aware mode. */
+	enum rte_color init_color;
+	/** Metering state: 0 - Disabled, 1 - Enabled. */
+	int state;
+};
+
+/**
+ * RTE_FLOW_ACTION_TYPE_METER_MARK
+ *
+ * Wrapper structure for the context update interface.
+ *
+ */
+struct rte_flow_update_meter_mark {
+	/** New meter_mark parameters to be updated. */
+	struct rte_flow_action_meter_mark meter_mark;
+	/** The profile will be updated. */
+	uint32_t profile_valid:1;
+	/** The policy will be updated. */
+	uint32_t policy_valid:1;
+	/** The color mode will be updated. */
+	uint32_t color_mode_valid:1;
+	/** The initial color will be updated. */
+	uint32_t init_color_valid:1;
+	/** The meter state will be updated. */
+	uint32_t state_valid:1;
+	/** Reserved bits for the future usage. */
+	uint32_t reserved:27;
+};
+
 /* Mbuf dynamic field offset for metadata. */
 extern int32_t rte_flow_dynf_metadata_offs;
 
@@ -3761,11 +3618,7 @@ extern uint64_t rte_flow_dynf_metadata_mask;
 
 /* Mbuf dynamic flags for metadata. */
 #define RTE_MBUF_DYNFLAG_RX_METADATA (rte_flow_dynf_metadata_mask)
-#define PKT_RX_DYNF_METADATA RTE_DEPRECATED(PKT_RX_DYNF_METADATA) \
-		RTE_MBUF_DYNFLAG_RX_METADATA
 #define RTE_MBUF_DYNFLAG_TX_METADATA (rte_flow_dynf_metadata_mask)
-#define PKT_TX_DYNF_METADATA RTE_DEPRECATED(PKT_TX_DYNF_METADATA) \
-		RTE_MBUF_DYNFLAG_TX_METADATA
 
 __rte_experimental
 static inline uint32_t
@@ -3800,6 +3653,20 @@ struct rte_flow_action {
  * destroy it or retrieve counters).
  */
 struct rte_flow;
+
+/**
+ * Opaque type for Meter profile object returned by MTR API.
+ *
+ * This handle can be used to create Meter actions instead of profile ID.
+ */
+struct rte_flow_meter_profile;
+
+/**
+ * Opaque type for Meter policy object returned by MTR API.
+ *
+ * This handle can be used to create Meter actions instead of policy ID.
+ */
+struct rte_flow_meter_policy;
 
 /**
  * @warning
@@ -4254,6 +4121,10 @@ rte_flow_query(uint16_t port_id,
  *
  * Isolated mode guarantees that all ingress traffic comes from defined flow
  * rules only (current and future).
+ * When enabled with a bifurcated driver,
+ * non-matched packets are routed to the kernel driver interface.
+ * When disabled (the default),
+ * there may be some default rules routing traffic to the DPDK port.
  *
  * Besides making ingress more deterministic, it allows PMDs to safely reuse
  * resources otherwise assigned to handle the remaining traffic, such as
@@ -4798,9 +4669,6 @@ rte_flow_tunnel_item_release(uint16_t port_id,
 			     struct rte_flow_error *error);
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice.
- *
  * Get a proxy port to manage "transfer" flows.
  *
  * Managing "transfer" flows requires that the user communicate them
@@ -4825,7 +4693,6 @@ rte_flow_tunnel_item_release(uint16_t port_id,
  * @return
  *   0 on success, a negative error code otherwise
  */
-__rte_experimental
 int
 rte_flow_pick_transfer_proxy(uint16_t port_id, uint16_t *proxy_port_id,
 			     struct rte_flow_error *error);
@@ -4902,6 +4769,11 @@ struct rte_flow_port_info {
 	 * @see RTE_FLOW_ACTION_TYPE_METER
 	 */
 	uint32_t max_nb_meters;
+	/**
+	 * Maximum number connection trackings.
+	 * @see RTE_FLOW_ACTION_TYPE_CONNTRACK
+	 */
+	uint32_t max_nb_conn_tracks;
 };
 
 /**
@@ -4971,6 +4843,11 @@ struct rte_flow_port_attr {
 	 * @see RTE_FLOW_ACTION_TYPE_METER
 	 */
 	uint32_t nb_meters;
+	/**
+	 * Number of connection trackings to configure.
+	 * @see RTE_FLOW_ACTION_TYPE_CONNTRACK
+	 */
+	uint32_t nb_conn_tracks;
 };
 
 /**
@@ -5612,6 +5489,51 @@ rte_flow_async_action_handle_update(uint16_t port_id,
 		const void *update,
 		void *user_data,
 		struct rte_flow_error *error);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Enqueue indirect action query operation.
+ *
+ * Retrieve action-specific data such as counters.
+ * Data is gathered by special action which may be present/referenced in
+ * more than one flow rule definition.
+ * Data will be available only when completion event returns.
+ *
+ * @see rte_flow_async_action_handle_query
+ *
+ * @param port_id
+ *   Port identifier of Ethernet device.
+ * @param[in] queue_id
+ *   Flow queue which is used to query the action.
+ * @param[in] op_attr
+ *   Indirect action update operation attributes.
+ * @param[in] action_handle
+ *   Handle for the action object to query.
+ * @param[in, out] data
+ *   Pointer to storage for the associated query data type.
+ *   The out data will be available only when completion event returns
+ *   from rte_flow_pull.
+ * @param[in] user_data
+ *   The user data that will be returned on the completion events.
+ * @param[out] error
+ *   Perform verbose error reporting if not NULL. PMDs initialize this
+ *   structure in case of error only.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+__rte_experimental
+int
+rte_flow_async_action_handle_query(uint16_t port_id,
+		uint32_t queue_id,
+		const struct rte_flow_op_attr *op_attr,
+		const struct rte_flow_action_handle *action_handle,
+		void *data,
+		void *user_data,
+		struct rte_flow_error *error);
+
 #ifdef __cplusplus
 }
 #endif

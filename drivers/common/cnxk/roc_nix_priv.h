@@ -13,7 +13,6 @@
 #define NIX_DEF_SQB	     ((uint16_t)16)
 #define NIX_MIN_SQB	     ((uint16_t)8)
 #define NIX_SQB_LIST_SPACE   ((uint16_t)2)
-#define NIX_SQB_LOWER_THRESH ((uint16_t)70)
 
 /* Apply BP/DROP when CQ is 95% full */
 #define NIX_CQ_THRESH_LEVEL	(5 * 256 / 100)
@@ -203,6 +202,7 @@ struct nix {
 	uint16_t nb_cpt_lf;
 	uint16_t outb_se_ring_cnt;
 	uint16_t outb_se_ring_base;
+	bool need_meta_aura;
 	/* Mode provided by driver */
 	bool inb_inl_dev;
 
@@ -455,7 +455,7 @@ struct nix_tm_shaper_profile *nix_tm_shaper_profile_alloc(void);
 void nix_tm_shaper_profile_free(struct nix_tm_shaper_profile *profile);
 
 uint64_t nix_get_blkaddr(struct dev *dev);
-void nix_lf_rq_dump(__io struct nix_cn10k_rq_ctx_s *ctx);
+void nix_lf_rq_dump(__io struct nix_cn10k_rq_ctx_s *ctx, FILE *file);
 int nix_lf_gen_reg_dump(uintptr_t nix_lf_base, uint64_t *data);
 int nix_lf_stat_reg_dump(uintptr_t nix_lf_base, uint64_t *data,
 			 uint8_t lf_tx_stats, uint8_t lf_rx_stats);

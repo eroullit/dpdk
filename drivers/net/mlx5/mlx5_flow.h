@@ -21,6 +21,9 @@
 /* E-Switch Manager port, used for rte_flow_item_port_id. */
 #define MLX5_PORT_ESW_MGR UINT32_MAX
 
+/* E-Switch Manager port, used for rte_flow_item_ethdev. */
+#define MLX5_REPRESENTED_PORT_ESW_MGR UINT16_MAX
+
 /* Private rte flow items. */
 enum mlx5_rte_flow_item_type {
 	MLX5_RTE_FLOW_ITEM_TYPE_END = INT_MIN,
@@ -2084,6 +2087,7 @@ int16_t mlx5_flow_get_esw_manager_vport_id(struct rte_eth_dev *dev);
 int mlx5_flow_get_item_vport_id(struct rte_eth_dev *dev,
 				const struct rte_flow_item *item,
 				uint16_t *vport_id,
+				bool *all_ports,
 				struct rte_flow_error *error);
 
 #endif /* RTE_PMD_MLX5_FLOW_H_ */

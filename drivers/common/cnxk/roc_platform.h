@@ -7,7 +7,7 @@
 
 #include <rte_alarm.h>
 #include <rte_bitmap.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_byteorder.h>
 #include <rte_common.h>
 #include <rte_cycles.h>
@@ -23,6 +23,8 @@
 #include <rte_string_fns.h>
 #include <rte_tailq.h>
 #include <rte_telemetry.h>
+
+#include "eal_filesystem.h"
 
 #include "roc_bits.h"
 
@@ -94,6 +96,7 @@
 #define plt_pci_device		    rte_pci_device
 #define plt_pci_read_config	    rte_pci_read_config
 #define plt_pci_find_ext_capability rte_pci_find_ext_capability
+#define plt_sysfs_value_parse	    eal_parse_sysfs_value
 
 #define plt_log2_u32	 rte_log2_u32
 #define plt_cpu_to_be_16 rte_cpu_to_be_16
@@ -269,6 +272,8 @@ extern int cnxk_logtype_ree;
 	RTE_LOG_DP(ERR, PMD, "%s():%u " fmt "\n", __func__, __LINE__, ##args)
 #define plt_dp_info(fmt, args...)                                              \
 	RTE_LOG_DP(INFO, PMD, "%s():%u " fmt "\n", __func__, __LINE__, ##args)
+#define plt_dp_dbg(fmt, args...)                                              \
+	RTE_LOG_DP(DEBUG, PMD, "%s():%u " fmt "\n", __func__, __LINE__, ##args)
 
 #ifdef __cplusplus
 #define CNXK_PCI_ID(subsystem_dev, dev)                                        \

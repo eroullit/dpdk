@@ -17,7 +17,7 @@
 #endif
 
 struct port_drv_mode_data {
-	struct rte_security_session *sess;
+	void *sess;
 	struct rte_security_ctx *ctx;
 };
 
@@ -53,11 +53,8 @@ process_ipsec_get_pkt_type(struct rte_mbuf *pkt, uint8_t **nlp)
 }
 
 static inline void
-update_mac_addrs(struct rte_mbuf *pkt, uint16_t portid)
+update_mac_addrs(struct rte_ether_hdr *ethhdr, uint16_t portid)
 {
-	struct rte_ether_hdr *ethhdr;
-
-	ethhdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
 	memcpy(&ethhdr->src_addr, &ethaddr_tbl[portid].src, RTE_ETHER_ADDR_LEN);
 	memcpy(&ethhdr->dst_addr, &ethaddr_tbl[portid].dst, RTE_ETHER_ADDR_LEN);
 }
@@ -374,7 +371,7 @@ route_and_send_pkt:
 	/* else, we have a matching route */
 
 	/* Update mac addresses */
-	update_mac_addrs(pkt, port_id);
+	update_mac_addrs(rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *), port_id);
 
 	/* Update the event with the dest port */
 	ipsec_event_pre_forward(pkt, port_id);
@@ -392,6 +389,7 @@ process_ipsec_ev_outbound(struct ipsec_ctx *ctx, struct route_table *rt,
 		struct rte_event *ev)
 {
 	struct rte_ipsec_session *sess;
+	struct rte_ether_hdr *ethhdr;
 	struct sa_ctx *sa_ctx;
 	struct rte_mbuf *pkt;
 	uint16_t port_id = 0;
@@ -430,6 +428,7 @@ process_ipsec_ev_outbound(struct ipsec_ctx *ctx, struct route_table *rt,
 		goto drop_pkt_and_exit;
 	}
 
+	ethhdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
 	/* Check if the packet has to be bypassed */
 	if (sa_idx == BYPASS) {
 		port_id = get_route(pkt, rt, type);
@@ -467,6 +466,9 @@ process_ipsec_ev_outbound(struct ipsec_ctx *ctx, struct route_table *rt,
 
 	/* Mark the packet for Tx security offload */
 	pkt->ol_flags |= RTE_MBUF_F_TX_SEC_OFFLOAD;
+	/* Update ether type */
+	ethhdr->ether_type = (IS_IP4(sa->flags) ? rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4) :
+			      rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6));
 
 	/* Get the port to which this pkt need to be submitted */
 	port_id = sa->portid;
@@ -476,7 +478,7 @@ send_pkt:
 	pkt->l2_len = RTE_ETHER_HDR_LEN;
 
 	/* Update mac addresses */
-	update_mac_addrs(pkt, port_id);
+	update_mac_addrs(ethhdr, port_id);
 
 	/* Update the event with the dest port */
 	ipsec_event_pre_forward(pkt, port_id);
@@ -494,6 +496,7 @@ ipsec_ev_route_pkts(struct rte_event_vector *vec, struct route_table *rt,
 		    struct ipsec_traffic *t, struct sa_ctx *sa_ctx)
 {
 	struct rte_ipsec_session *sess;
+	struct rte_ether_hdr *ethhdr;
 	uint32_t sa_idx, i, j = 0;
 	uint16_t port_id = 0;
 	struct rte_mbuf *pkt;
@@ -505,7 +508,8 @@ ipsec_ev_route_pkts(struct rte_event_vector *vec, struct route_table *rt,
 		port_id = route4_pkt(pkt, rt->rt4_ctx);
 		if (port_id != RTE_MAX_ETHPORTS) {
 			/* Update mac addresses */
-			update_mac_addrs(pkt, port_id);
+			ethhdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
+			update_mac_addrs(ethhdr, port_id);
 			/* Update the event with the dest port */
 			ipsec_event_pre_forward(pkt, port_id);
 			ev_vector_attr_update(vec, pkt);
@@ -520,7 +524,8 @@ ipsec_ev_route_pkts(struct rte_event_vector *vec, struct route_table *rt,
 		port_id = route6_pkt(pkt, rt->rt6_ctx);
 		if (port_id != RTE_MAX_ETHPORTS) {
 			/* Update mac addresses */
-			update_mac_addrs(pkt, port_id);
+			ethhdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
+			update_mac_addrs(ethhdr, port_id);
 			/* Update the event with the dest port */
 			ipsec_event_pre_forward(pkt, port_id);
 			ev_vector_attr_update(vec, pkt);
@@ -553,7 +558,14 @@ ipsec_ev_route_pkts(struct rte_event_vector *vec, struct route_table *rt,
 
 			pkt->ol_flags |= RTE_MBUF_F_TX_SEC_OFFLOAD;
 			port_id = sa->portid;
-			update_mac_addrs(pkt, port_id);
+
+			/* Fetch outer ip type and update */
+			ethhdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
+			ethhdr->ether_type = (IS_IP4(sa->flags) ?
+					      rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4) :
+					      rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV6));
+			update_mac_addrs(ethhdr, port_id);
+
 			ipsec_event_pre_forward(pkt, port_id);
 			ev_vector_attr_update(vec, pkt);
 			vec->mbufs[j++] = pkt;
@@ -687,6 +699,14 @@ process_ipsec_ev_drv_mode_outbound_vector(struct rte_event_vector *vec,
 	return j;
 }
 
+static void
+ipsec_event_vector_free(struct rte_event *ev)
+{
+	struct rte_event_vector *vec = ev->vec;
+	rte_pktmbuf_free_bulk(vec->mbufs + vec->elem_offset, vec->nb_elem);
+	rte_mempool_put(rte_mempool_from_obj(vec), vec);
+}
+
 static inline void
 ipsec_ev_vector_process(struct lcore_conf_ev_tx_int_port_wrkr *lconf,
 			struct eh_event_link_info *links,
@@ -708,9 +728,10 @@ ipsec_ev_vector_process(struct lcore_conf_ev_tx_int_port_wrkr *lconf,
 
 	if (likely(ret > 0)) {
 		vec->nb_elem = ret;
-		rte_event_eth_tx_adapter_enqueue(links[0].eventdev_id,
-						 links[0].event_port_id,
-						 ev, 1, 0);
+		ret = rte_event_eth_tx_adapter_enqueue(links[0].eventdev_id,
+						       links[0].event_port_id, ev, 1, 0);
+		if (unlikely(ret == 0))
+			ipsec_event_vector_free(ev);
 	} else {
 		rte_mempool_put(rte_mempool_from_obj(vec), vec);
 	}
@@ -723,17 +744,21 @@ ipsec_ev_vector_drv_mode_process(struct eh_event_link_info *links,
 {
 	struct rte_event_vector *vec = ev->vec;
 	struct rte_mbuf *pkt;
+	uint16_t ret;
 
 	pkt = vec->mbufs[0];
+	vec->attr_valid = 1;
+	vec->port = pkt->port;
 
 	if (!is_unprotected_port(pkt->port))
 		vec->nb_elem = process_ipsec_ev_drv_mode_outbound_vector(vec,
 									 data);
-	if (vec->nb_elem > 0)
-		rte_event_eth_tx_adapter_enqueue(links[0].eventdev_id,
-						 links[0].event_port_id,
-						 ev, 1, 0);
-	else
+	if (likely(vec->nb_elem > 0)) {
+		ret = rte_event_eth_tx_adapter_enqueue(links[0].eventdev_id,
+						       links[0].event_port_id, ev, 1, 0);
+		if (unlikely(ret == 0))
+			ipsec_event_vector_free(ev);
+	} else
 		rte_mempool_put(rte_mempool_from_obj(vec), vec);
 }
 
@@ -747,7 +772,10 @@ static void
 ipsec_event_port_flush(uint8_t eventdev_id __rte_unused, struct rte_event ev,
 		       void *args __rte_unused)
 {
-	rte_pktmbuf_free(ev.mbuf);
+	if (ev.event_type & RTE_EVENT_TYPE_VECTOR)
+		ipsec_event_vector_free(&ev);
+	else
+		rte_pktmbuf_free(ev.mbuf);
 }
 
 /* Workers registered */

@@ -3,6 +3,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <inttypes.h>
 #include <math.h>
 
@@ -1001,7 +1002,7 @@ init_op_data_objs(struct rte_bbdev_op_data *bufs,
 					seg->length);
 				memcpy(data, seg->addr, seg->length);
 				m_head->buf_addr = data;
-				m_head->buf_iova = rte_malloc_virt2iova(data);
+				rte_mbuf_iova_set(m_head, rte_malloc_virt2iova(data));
 				m_head->data_off = 0;
 				m_head->data_len = seg->length;
 			} else {
@@ -2428,13 +2429,13 @@ run_test_case_on_device(test_case_function *test_case_func, uint8_t dev_id,
 
 	/* Find capabilities */
 	const struct rte_bbdev_op_cap *cap = info.drv.capabilities;
-	for (i = 0; i < RTE_BBDEV_OP_TYPE_COUNT; i++) {
+	do {
 		if (cap->type == test_vector.op_type) {
 			capabilities = cap;
 			break;
 		}
 		cap++;
-	}
+	} while (cap->type != RTE_BBDEV_OP_NONE);
 	TEST_ASSERT_NOT_NULL(capabilities,
 			"Couldn't find capabilities");
 
@@ -4360,6 +4361,8 @@ get_bbdev_queue_stats(uint16_t dev_id, uint16_t queue_id,
 	stats->dequeued_count = q_stats->dequeued_count;
 	stats->enqueue_err_count = q_stats->enqueue_err_count;
 	stats->dequeue_err_count = q_stats->dequeue_err_count;
+	stats->enqueue_warning_count = q_stats->enqueue_warning_count;
+	stats->dequeue_warning_count = q_stats->dequeue_warning_count;
 	stats->acc_offload_cycles = q_stats->acc_offload_cycles;
 
 	return 0;

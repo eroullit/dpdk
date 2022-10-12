@@ -5,7 +5,7 @@
 #ifndef _CNXK_CRYPTODEV_OPS_H_
 #define _CNXK_CRYPTODEV_OPS_H_
 
-#include <rte_cryptodev.h>
+#include <cryptodev_pmd.h>
 #include <rte_event_crypto_adapter.h>
 
 #include "roc_api.h"
@@ -37,7 +37,10 @@ struct cpt_qp_meta_info {
 
 struct cpt_inflight_req {
 	union cpt_res_s res;
-	struct rte_crypto_op *cop;
+	union {
+		struct rte_crypto_op *cop;
+		struct rte_event_vector *vec;
+	};
 	void *mdata;
 	uint8_t op_flags;
 	void *qp;
@@ -63,6 +66,10 @@ struct crypto_adpter_info {
 	/**< Set if queue pair is added to crypto adapter */
 	struct rte_mempool *req_mp;
 	/**< CPT inflight request mempool */
+	uint16_t vector_sz;
+	/** Maximum number of cops to combine into single vector */
+	struct rte_mempool *vector_mp;
+	/** Pool for allocating rte_event_vector */
 };
 
 struct cnxk_cpt_qp {
@@ -78,8 +85,6 @@ struct cnxk_cpt_qp {
 	/**< Crypto adapter related info */
 	struct rte_mempool *sess_mp;
 	/**< Session mempool */
-	struct rte_mempool *sess_mp_priv;
-	/**< Session private data mempool */
 };
 
 int cnxk_cpt_dev_config(struct rte_cryptodev *dev,
@@ -104,18 +109,16 @@ unsigned int cnxk_cpt_sym_session_get_size(struct rte_cryptodev *dev);
 
 int cnxk_cpt_sym_session_configure(struct rte_cryptodev *dev,
 				   struct rte_crypto_sym_xform *xform,
-				   struct rte_cryptodev_sym_session *sess,
-				   struct rte_mempool *pool);
+				   struct rte_cryptodev_sym_session *sess);
 
-int sym_session_configure(struct roc_cpt *roc_cpt, int driver_id,
+int sym_session_configure(struct roc_cpt *roc_cpt,
 			  struct rte_crypto_sym_xform *xform,
-			  struct rte_cryptodev_sym_session *sess,
-			  struct rte_mempool *pool);
+			  struct rte_cryptodev_sym_session *sess);
 
 void cnxk_cpt_sym_session_clear(struct rte_cryptodev *dev,
-				struct rte_cryptodev_sym_session *sess);
+		struct rte_cryptodev_sym_session *sess);
 
-void sym_session_clear(int driver_id, struct rte_cryptodev_sym_session *sess);
+void sym_session_clear(struct rte_cryptodev_sym_session *sess);
 
 unsigned int cnxk_ae_session_size_get(struct rte_cryptodev *dev __rte_unused);
 

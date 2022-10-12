@@ -2,6 +2,8 @@
  * Copyright(c) 2016-2017 Intel Corporation
  */
 
+#include <stdlib.h>
+
 #include <rte_malloc.h>
 #include <rte_cycles.h>
 #include <rte_crypto.h>
@@ -18,7 +20,7 @@ struct cperf_verify_ctx {
 
 	struct rte_mempool *pool;
 
-	struct rte_cryptodev_sym_session *sess;
+	void *sess;
 
 	cperf_populate_ops_t populate_ops;
 
@@ -37,10 +39,8 @@ static void
 cperf_verify_test_free(struct cperf_verify_ctx *ctx)
 {
 	if (ctx) {
-		if (ctx->sess) {
-			rte_cryptodev_sym_session_clear(ctx->dev_id, ctx->sess);
-			rte_cryptodev_sym_session_free(ctx->sess);
-		}
+		if (ctx->sess)
+			rte_cryptodev_sym_session_free(ctx->dev_id, ctx->sess);
 
 		rte_mempool_free(ctx->pool);
 
@@ -50,7 +50,6 @@ cperf_verify_test_free(struct cperf_verify_ctx *ctx)
 
 void *
 cperf_verify_test_constructor(struct rte_mempool *sess_mp,
-		struct rte_mempool *sess_priv_mp,
 		uint8_t dev_id, uint16_t qp_id,
 		const struct cperf_options *options,
 		const struct cperf_test_vector *test_vector,
@@ -73,7 +72,7 @@ cperf_verify_test_constructor(struct rte_mempool *sess_mp,
 	uint16_t iv_offset = sizeof(struct rte_crypto_op) +
 		sizeof(struct rte_crypto_sym_op);
 
-	ctx->sess = op_fns->sess_create(sess_mp, sess_priv_mp, dev_id, options,
+	ctx->sess = op_fns->sess_create(sess_mp, dev_id, options,
 			test_vector, iv_offset);
 	if (ctx->sess == NULL)
 		goto err;

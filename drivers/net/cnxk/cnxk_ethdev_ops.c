@@ -69,6 +69,9 @@ cnxk_nix_info_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *devinfo)
 	devinfo->dev_capa = RTE_ETH_DEV_CAPA_RUNTIME_RX_QUEUE_SETUP |
 			    RTE_ETH_DEV_CAPA_RUNTIME_TX_QUEUE_SETUP |
 			    RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP;
+
+	devinfo->max_rx_mempools = CNXK_NIX_NUM_POOLS_MAX;
+
 	return 0;
 }
 
@@ -90,7 +93,6 @@ cnxk_nix_rx_burst_mode_get(struct rte_eth_dev *eth_dev, uint16_t queue_id,
 		{RTE_ETH_RX_OFFLOAD_QINQ_STRIP, " QinQ VLAN Strip,"},
 		{RTE_ETH_RX_OFFLOAD_OUTER_IPV4_CKSUM, " Outer IPv4 Checksum,"},
 		{RTE_ETH_RX_OFFLOAD_MACSEC_STRIP, " MACsec Strip,"},
-		{RTE_ETH_RX_OFFLOAD_HEADER_SPLIT, " Header Split,"},
 		{RTE_ETH_RX_OFFLOAD_VLAN_FILTER, " VLAN Filter,"},
 		{RTE_ETH_RX_OFFLOAD_VLAN_EXTEND, " VLAN Extend,"},
 		{RTE_ETH_RX_OFFLOAD_SCATTER, " Scattered,"},
@@ -356,8 +358,8 @@ cnxk_nix_priority_flow_ctrl_queue_config(struct rte_eth_dev *eth_dev,
 		return -ENOTSUP;
 	}
 
-	if (roc_nix_is_sdp(nix)) {
-		plt_err("Prio flow ctrl config is not allowed on SDP");
+	if (roc_nix_is_sdp(nix) || roc_nix_is_lbk(nix)) {
+		plt_nix_dbg("Prio flow ctrl config is not allowed on SDP/LBK");
 		return -ENOTSUP;
 	}
 
@@ -932,6 +934,35 @@ fail:
 }
 
 int
+cnxk_nix_eth_dev_priv_dump(struct rte_eth_dev *eth_dev, FILE *file)
+{
+	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
+	struct roc_nix *roc_nix = &dev->nix;
+	int i;
+
+	roc_nix_dump(roc_nix, file);
+
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++)
+		roc_nix_rq_dump(&dev->rqs[i], file);
+
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++)
+		roc_nix_cq_dump(&dev->cqs[i], file);
+
+	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
+		roc_nix_sq_dump(&dev->sqs[i], file);
+
+	roc_nix_queues_ctx_dump(roc_nix, file);
+
+	roc_nix_tm_dump(roc_nix, file);
+
+	roc_nix_inl_dev_dump(NULL, file);
+
+	roc_nix_inl_outb_cpt_lfs_dump(roc_nix, file);
+
+	return 0;
+}
+
+int
 cnxk_nix_rss_hash_update(struct rte_eth_dev *eth_dev,
 			 struct rte_eth_rss_conf *rss_conf)
 {
@@ -1142,8 +1173,10 @@ nix_priority_flow_ctrl_sq_conf(struct rte_eth_dev *eth_dev, uint16_t qid,
 	if (qid >= eth_dev->data->nb_tx_queues)
 		return -ENOTSUP;
 
-	/* Check if RX pause frame is enabled or not */
-	if (!pfc->rx_pause_en) {
+	/* Check if RX pause frame is enabled or not and
+	 * confirm user requested for PFC.
+	 */
+	if (!pfc->rx_pause_en && rx_pause) {
 		if ((roc_nix_tm_tree_type_get(nix) == ROC_NIX_TM_DEFAULT) &&
 		    eth_dev->data->nb_tx_queues > 1) {
 			/*

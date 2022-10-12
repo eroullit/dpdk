@@ -19,7 +19,7 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_pci.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_branch_prediction.h>
 #include <rte_memory.h>
 #include <rte_kvargs.h>
@@ -30,7 +30,7 @@
 #include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_random.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <rte_hash_crc.h>
 #ifdef RTE_LIB_SECURITY
 #include <rte_security_driver.h>
@@ -2475,7 +2475,7 @@ ixgbe_dev_phy_intr_setup(struct rte_eth_dev *dev)
 
 int
 ixgbe_set_vf_rate_limit(struct rte_eth_dev *dev, uint16_t vf,
-			uint16_t tx_rate, uint64_t q_msk)
+			uint32_t tx_rate, uint64_t q_msk)
 {
 	struct ixgbe_hw *hw;
 	struct ixgbe_vf_info *vfinfo;
@@ -2690,7 +2690,7 @@ ixgbe_dev_start(struct rte_eth_dev *dev)
 	/* Configure DCB hw */
 	ixgbe_configure_dcb(dev);
 
-	if (dev->data->dev_conf.fdir_conf.mode != RTE_FDIR_MODE_NONE) {
+	if (IXGBE_DEV_FDIR_CONF(dev)->mode != RTE_FDIR_MODE_NONE) {
 		err = ixgbe_fdir_configure(dev);
 		if (err)
 			goto error;
@@ -6090,7 +6090,7 @@ ixgbe_configure_msix(struct rte_eth_dev *dev)
 
 int
 ixgbe_set_queue_rate_limit(struct rte_eth_dev *dev,
-			   uint16_t queue_idx, uint16_t tx_rate)
+			   uint16_t queue_idx, uint32_t tx_rate)
 {
 	struct ixgbe_hw *hw = IXGBE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t rf_dec, rf_int;

@@ -594,7 +594,7 @@ roc_nix_tm_sq_flush_spin(struct roc_nix_sq *sq)
 
 		/* SQ reached quiescent state */
 		if (sqb_cnt <= 1 && head_off == tail_off &&
-		    (*(volatile uint64_t *)sq->fc == sq->nb_sqb_bufs)) {
+		    (*(volatile uint64_t *)sq->fc == sq->aura_sqb_bufs)) {
 			break;
 		}
 
@@ -606,8 +606,8 @@ roc_nix_tm_sq_flush_spin(struct roc_nix_sq *sq)
 
 	return 0;
 exit:
-	roc_nix_tm_dump(sq->roc_nix);
-	roc_nix_queues_ctx_dump(sq->roc_nix);
+	roc_nix_tm_dump(sq->roc_nix, NULL);
+	roc_nix_queues_ctx_dump(sq->roc_nix, NULL);
 	return -EFAULT;
 }
 

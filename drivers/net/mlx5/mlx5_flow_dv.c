@@ -15,7 +15,7 @@
 #include <rte_flow_driver.h>
 #include <rte_malloc.h>
 #include <rte_cycles.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <rte_ip.h>
 #include <rte_gre.h>
 #include <rte_vxlan.h>
@@ -121,6 +121,13 @@ flow_dv_attr_init(const struct rte_flow_item *item, union flow_dv_attr *attr,
 	 * have the user defined items as the flow is split.
 	 */
 	if (layers) {
+		if (tunnel_decap) {
+			/*
+			 * If decap action before modify, it means the driver
+			 * should take the inner as outer for the modify actions.
+			 */
+			layers = ((layers >> 6) & MLX5_FLOW_LAYER_OUTER);
+		}
 		if (layers & MLX5_FLOW_LAYER_OUTER_L3_IPV4)
 			attr->ipv4 = 1;
 		else if (layers & MLX5_FLOW_LAYER_OUTER_L3_IPV6)
@@ -5238,6 +5245,8 @@ mlx5_flow_validate_action_meter(struct rte_eth_dev *dev,
 	struct mlx5_flow_meter_info *fm;
 	struct mlx5_flow_meter_policy *mtr_policy;
 	struct mlx5_flow_mtr_mng *mtrmng = priv->sh->mtrmng;
+	uint16_t flow_src_port = priv->representor_id;
+	bool all_ports = false;
 
 	if (!am)
 		return rte_flow_error_set(error, EINVAL,
@@ -5300,27 +5309,34 @@ mlx5_flow_validate_action_meter(struct rte_eth_dev *dev,
 					  "Flow attributes domain "
 					  "have a conflict with current "
 					  "meter domain attributes");
-		if (attr->transfer && mtr_policy->dev) {
-			/**
-			 * When policy has fate action of port_id,
-			 * the flow should have the same src port as policy.
-			 */
-			struct mlx5_priv *policy_port_priv =
-					mtr_policy->dev->data->dev_private;
-			uint16_t flow_src_port = priv->representor_id;
+		if (port_id_item) {
+			if (mlx5_flow_get_item_vport_id(dev, port_id_item, &flow_src_port,
+							&all_ports, error))
+				return -rte_errno;
+		}
+		if (attr->transfer) {
+			if (mtr_policy->dev) {
+				/**
+				 * When policy has fate action of port_id,
+				 * the flow should have the same src port as policy.
+				 */
+				struct mlx5_priv *policy_port_priv =
+						mtr_policy->dev->data->dev_private;
 
-			if (port_id_item) {
-				if (mlx5_flow_get_item_vport_id(dev, port_id_item,
-								&flow_src_port, error))
-					return -rte_errno;
+				if (all_ports || flow_src_port != policy_port_priv->representor_id)
+					return rte_flow_error_set(error,
+							rte_errno,
+							RTE_FLOW_ERROR_TYPE_ITEM_SPEC,
+							NULL,
+							"Flow and meter policy "
+							"have different src port.");
 			}
-			if (flow_src_port != policy_port_priv->representor_id)
-				return rte_flow_error_set(error,
-						rte_errno,
-						RTE_FLOW_ERROR_TYPE_ITEM_SPEC,
-						NULL,
-						"Flow and meter policy "
-						"have different src port.");
+			/* When flow matching all src ports, meter should not have drop count. */
+			if (all_ports && (fm->drop_cnt || mtr_policy->hierarchy_drop_cnt))
+				return rte_flow_error_set(error, EINVAL,
+							  RTE_FLOW_ERROR_TYPE_ITEM_SPEC, NULL,
+							  "Meter drop count not supported "
+							  "when matching all ports.");
 		} else if (mtr_policy->is_rss) {
 			struct mlx5_flow_meter_policy *fp;
 			struct mlx5_meter_policy_action_container *acg;
@@ -7048,6 +7064,7 @@ flow_dv_validate(struct rte_eth_dev *dev, const struct rte_flow_attr *attr,
 			if (ret < 0)
 				return ret;
 			last_item = MLX5_FLOW_ITEM_REPRESENTED_PORT;
+			port_id_item = items;
 			break;
 		case RTE_FLOW_ITEM_TYPE_ETH:
 			ret = mlx5_flow_validate_item_eth(items, item_flags,
@@ -13756,6 +13773,7 @@ flow_dv_translate(struct rte_eth_dev *dev,
 		case RTE_FLOW_ITEM_TYPE_ESP:
 			flow_dv_translate_item_esp(match_mask, match_value,
 						   items, tunnel);
+			matcher.priority = MLX5_PRIORITY_MAP_L4;
 			last_item = MLX5_FLOW_ITEM_ESP;
 			break;
 		case RTE_FLOW_ITEM_TYPE_PORT_ID:
@@ -16242,6 +16260,8 @@ __flow_dv_create_domain_policy_acts(struct rte_eth_dev *dev,
 				mtr_policy->dev = next_policy->dev;
 				if (next_policy->mark)
 					mtr_policy->mark = 1;
+				if (next_fm->drop_cnt || next_policy->hierarchy_drop_cnt)
+					mtr_policy->hierarchy_drop_cnt = 1;
 				action_flags |=
 				MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY;
 				break;
@@ -16634,8 +16654,13 @@ __flow_dv_create_policy_flow(struct rte_eth_dev *dev,
 	uint8_t misc_mask;
 
 	if (match_src_port && priv->sh->esw_mode) {
-		if (flow_dv_translate_item_port_id(dev, matcher.buf,
-						   value.buf, item, attr)) {
+		if (item && item->type == RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT)
+			ret = flow_dv_translate_item_represented_port(dev, matcher.buf, value.buf,
+								      item, attr);
+		else
+			ret = flow_dv_translate_item_port_id(dev, matcher.buf, value.buf,
+							     item, attr);
+		if (ret) {
 			DRV_LOG(ERR, "Failed to create meter policy%d flow's"
 				" value with port.", color);
 			return -1;
@@ -16684,10 +16709,16 @@ __flow_dv_create_policy_matcher(struct rte_eth_dev *dev,
 	struct mlx5_flow_tbl_data_entry *tbl_data;
 	struct mlx5_priv *priv = dev->data->dev_private;
 	const uint32_t color_mask = (UINT32_C(1) << MLX5_MTR_COLOR_BITS) - 1;
+	int ret;
 
 	if (match_src_port && priv->sh->esw_mode) {
-		if (flow_dv_translate_item_port_id(dev, matcher.mask.buf,
-						   value.buf, item, attr)) {
+		if (item && item->type == RTE_FLOW_ITEM_TYPE_REPRESENTED_PORT)
+			ret = flow_dv_translate_item_represented_port(dev, matcher.mask.buf,
+								      value.buf, item, attr);
+		else
+			ret = flow_dv_translate_item_port_id(dev, matcher.mask.buf, value.buf,
+							     item, attr);
+		if (ret) {
 			DRV_LOG(ERR, "Failed to register meter policy%d matcher"
 				" with port.", priority);
 			return -1;

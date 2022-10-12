@@ -151,8 +151,7 @@ create_lookaside_session(struct ipsec_ctx *ipsec_ctx_lcore[],
 			set_ipsec_conf(sa, &(sess_conf.ipsec));
 
 			ips->security.ses = rte_security_session_create(ctx,
-					&sess_conf, skt_ctx->session_pool,
-					skt_ctx->session_priv_pool);
+					&sess_conf, skt_ctx->session_pool);
 			if (ips->security.ses == NULL) {
 				RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -174,11 +173,8 @@ create_lookaside_session(struct ipsec_ctx *ipsec_ctx_lcore[],
 
 		}
 		ips->crypto.dev_id = cdev_id;
-		ips->crypto.ses = rte_cryptodev_sym_session_create(
-				skt_ctx->session_pool);
-		rte_cryptodev_sym_session_init(cdev_id,
-				ips->crypto.ses, sa->xforms,
-				skt_ctx->session_priv_pool);
+		ips->crypto.ses = rte_cryptodev_sym_session_create(cdev_id,
+				sa->xforms, skt_ctx->session_pool);
 
 		rte_cryptodev_info_get(cdev_id, &cdev_info);
 	}
@@ -281,8 +277,7 @@ create_inline_session(struct socket_ctx *skt_ctx, struct ipsec_sa *sa,
 		}
 
 		ips->security.ses = rte_security_session_create(sec_ctx,
-				&sess_conf, skt_ctx->session_pool,
-				skt_ctx->session_priv_pool);
+				&sess_conf, skt_ctx->session_pool);
 		if (ips->security.ses == NULL) {
 			RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);
@@ -481,8 +476,7 @@ flow_create_failure:
 		sess_conf.userdata = (void *) sa;
 
 		ips->security.ses = rte_security_session_create(sec_ctx,
-					&sess_conf, skt_ctx->session_pool,
-					skt_ctx->session_priv_pool);
+					&sess_conf, skt_ctx->session_pool);
 		if (ips->security.ses == NULL) {
 			RTE_LOG(ERR, IPSEC,
 				"SEC Session init failed: err: %d\n", ret);

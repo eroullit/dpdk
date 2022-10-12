@@ -109,6 +109,11 @@ config () # <dir> <builddir> <meson options>
 		return
 	fi
 	options=
+	# deprecated libs may be disabled by default, so for complete builds ensure
+	# no libs are disabled
+	if ! echo $* | grep -q -- 'disable_libs' ; then
+		options="$options -Ddisable_libs="
+	fi
 	if echo $* | grep -qw -- '--default-library=shared' ; then
 		options="$options -Dexamples=all"
 	else
@@ -259,6 +264,10 @@ build build-x86-mingw $f skipABI -Dexamples=helloworld
 # generic armv8
 f=$srcdir/config/arm/arm64_armv8_linux_gcc
 build build-arm64-generic-gcc $f ABI $use_shared
+
+# generic LoongArch
+f=$srcdir/config/loongarch/loongarch_loongarch64_linux_gcc
+build build-loongarch64-generic-gcc $f ABI $use_shared
 
 # IBM POWER
 f=$srcdir/config/ppc/ppc64le-power8-linux-gcc

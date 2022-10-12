@@ -5,6 +5,7 @@
 #ifndef EAL_THREAD_H
 #define EAL_THREAD_H
 
+#include <rte_common.h>
 #include <rte_lcore.h>
 
 /**
@@ -66,8 +67,10 @@ eal_thread_dump_current_affinity(char *str, unsigned int size);
  *
  * @param worker_id
  *   The lcore_id of a worker thread.
+ * @return
+ *   0 on success, negative errno on error
  */
-void
+int
 eal_thread_wake_worker(unsigned int worker_id);
 
 /**

@@ -67,9 +67,9 @@ nix_tx_offload_flags(struct rte_eth_dev *eth_dev)
 	RTE_BUILD_BUG_ON(RTE_MBUF_OUTL2_LEN_BITS != 7);
 	RTE_BUILD_BUG_ON(RTE_MBUF_OUTL3_LEN_BITS != 9);
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, data_off) !=
-			 offsetof(struct rte_mbuf, buf_iova) + 8);
+			 offsetof(struct rte_mbuf, buf_addr) + 16);
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, ol_flags) !=
-			 offsetof(struct rte_mbuf, buf_iova) + 16);
+			 offsetof(struct rte_mbuf, buf_addr) + 24);
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, pkt_len) !=
 			 offsetof(struct rte_mbuf, ol_flags) + 12);
 	RTE_BUILD_BUG_ON(offsetof(struct rte_mbuf, tx_offload) !=
@@ -282,9 +282,13 @@ cn10k_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
 		rxq->lmt_base = dev->nix.lmt_base;
 		rxq->sa_base = roc_nix_inl_inb_sa_base_get(&dev->nix,
 							   dev->inb.inl_dev);
+		rxq->meta_aura = rq->meta_aura_handle;
+		rxq_sp = cnxk_eth_rxq_to_sp(rxq);
+		/* Assume meta packet from normal aura if meta aura is not setup
+		 */
+		if (!rxq->meta_aura)
+			rxq->meta_aura = rxq_sp->qconf.mp->pool_id;
 	}
-	rxq_sp = cnxk_eth_rxq_to_sp(rxq);
-	rxq->aura_handle = rxq_sp->qconf.mp->pool_id;
 
 	/* Lookup mem */
 	rxq->lookup_mem = cnxk_nix_fastpath_lookup_mem_get();

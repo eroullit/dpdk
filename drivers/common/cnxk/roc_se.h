@@ -10,6 +10,7 @@
 #define ROC_SE_FC_MINOR_OP_ENCRYPT    0x0
 #define ROC_SE_FC_MINOR_OP_DECRYPT    0x1
 #define ROC_SE_FC_MINOR_OP_HMAC_FIRST 0x10
+#define ROC_SE_FC_MINOR_OP_DOCSIS     0x40
 
 #define ROC_SE_MAJOR_OP_HASH	   0x34
 #define ROC_SE_MAJOR_OP_HMAC	   0x35
@@ -17,10 +18,10 @@
 #define ROC_SE_MAJOR_OP_KASUMI	   0x38
 #define ROC_SE_MAJOR_OP_PDCP_CHAIN 0x3C
 
-#define ROC_SE_MAJOR_OP_MISC		 0x01
-#define ROC_SE_MISC_MINOR_OP_PASSTHROUGH 0x03
-#define ROC_SE_MISC_MINOR_OP_DUMMY	 0x04
-#define ROC_SE_MISC_MINOR_OP_HW_SUPPORT	 0x08
+#define ROC_SE_MAJOR_OP_MISC		 0x01ULL
+#define ROC_SE_MISC_MINOR_OP_PASSTHROUGH 0x03ULL
+#define ROC_SE_MISC_MINOR_OP_DUMMY	 0x04ULL
+#define ROC_SE_MISC_MINOR_OP_HW_SUPPORT	 0x08ULL
 
 #define ROC_SE_MAX_AAD_SIZE 64
 #define ROC_SE_MAX_MAC_LEN  64
@@ -125,6 +126,8 @@ typedef enum {
 	ROC_SE_AES_CTR_EEA2 = 0x92,
 	ROC_SE_KASUMI_F8_CBC = 0x93,
 	ROC_SE_KASUMI_F8_ECB = 0x94,
+	ROC_SE_AES_DOCSISBPI = 0x95,
+	ROC_SE_DES_DOCSISBPI = 0x96,
 } roc_se_cipher_type;
 
 typedef enum {
@@ -287,32 +290,6 @@ struct roc_se_iov_ptr {
 	struct roc_se_buf_ptr bufs[];
 };
 
-struct roc_se_fc_params {
-	/* 0th cache line */
-	union {
-		struct roc_se_buf_ptr bufs[1];
-		struct {
-			struct roc_se_iov_ptr *src_iov;
-			struct roc_se_iov_ptr *dst_iov;
-		};
-	};
-	void *iv_buf;
-	void *auth_iv_buf;
-	struct roc_se_buf_ptr meta_buf;
-	struct roc_se_buf_ptr ctx_buf;
-	uint32_t rsvd2;
-	uint8_t rsvd3;
-	uint8_t iv_ovr;
-	uint8_t cipher_iv_len;
-	uint8_t auth_iv_len;
-
-	/* 1st cache line */
-	struct roc_se_buf_ptr aad_buf __plt_cache_aligned;
-	struct roc_se_buf_ptr mac_buf;
-};
-
-PLT_STATIC_ASSERT((offsetof(struct roc_se_fc_params, aad_buf) % 128) == 0);
-
 #define ROC_SE_PDCP_ALG_TYPE_ZUC	  0
 #define ROC_SE_PDCP_ALG_TYPE_SNOW3G	  1
 #define ROC_SE_PDCP_ALG_TYPE_AES_CTR	  2
@@ -347,6 +324,25 @@ struct roc_se_ctx {
 		struct roc_se_kasumi_ctx k_ctx;
 	} se_ctx;
 	uint8_t *auth_key;
+};
+
+struct roc_se_fc_params {
+	union {
+		struct roc_se_buf_ptr bufs[1];
+		struct {
+			struct roc_se_iov_ptr *src_iov;
+			struct roc_se_iov_ptr *dst_iov;
+		};
+	};
+	void *iv_buf;
+	void *auth_iv_buf;
+	struct roc_se_ctx *ctx;
+	struct roc_se_buf_ptr meta_buf;
+	uint8_t cipher_iv_len;
+	uint8_t auth_iv_len;
+
+	struct roc_se_buf_ptr aad_buf;
+	struct roc_se_buf_ptr mac_buf;
 };
 
 static inline void

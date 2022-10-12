@@ -43,12 +43,13 @@
 	 ROC_CN10K_CPT_INST_DW_M1 << (19 + 3 * 14))
 
 /* CPT helper macros */
-#define ROC_CPT_AH_HDR_LEN	 12
-#define ROC_CPT_AES_GCM_IV_LEN	 8
-#define ROC_CPT_AES_GCM_MAC_LEN	 16
-#define ROC_CPT_AES_CBC_IV_LEN	 16
-#define ROC_CPT_SHA1_HMAC_LEN	 12
-#define ROC_CPT_SHA2_HMAC_LEN	 16
+#define ROC_CPT_AH_HDR_LEN	12
+#define ROC_CPT_AES_GCM_IV_LEN	8
+#define ROC_CPT_AES_GCM_MAC_LEN 16
+#define ROC_CPT_AES_CCM_CTR_LEN 4
+#define ROC_CPT_AES_CBC_IV_LEN	16
+#define ROC_CPT_SHA1_HMAC_LEN	12
+#define ROC_CPT_SHA2_HMAC_LEN	16
 
 #define ROC_CPT_DES3_KEY_LEN	    24
 #define ROC_CPT_AES128_KEY_LEN	    16
@@ -158,8 +159,11 @@ int __roc_api roc_cpt_lf_ctx_flush(struct roc_cpt_lf *lf, void *cptr,
 int __roc_api roc_cpt_lf_ctx_reload(struct roc_cpt_lf *lf, void *cptr);
 int __roc_api roc_cpt_inline_ipsec_cfg(struct dev *dev, uint8_t slot,
 				       struct roc_nix *nix);
+int __roc_api roc_cpt_inline_ipsec_inb_cfg_read(
+	struct roc_cpt *roc_cpt, struct nix_inline_ipsec_cfg *inb_cfg);
 int __roc_api roc_cpt_inline_ipsec_inb_cfg(struct roc_cpt *roc_cpt,
-					   uint16_t param1, uint16_t param2);
+					   uint16_t param1, uint16_t param2,
+					   uint16_t opcode);
 int __roc_api roc_cpt_afs_print(struct roc_cpt *roc_cpt);
 int __roc_api roc_cpt_lfs_print(struct roc_cpt *roc_cpt);
 void __roc_api roc_cpt_iq_disable(struct roc_cpt_lf *lf);
@@ -171,7 +175,6 @@ void __roc_api roc_cpt_parse_hdr_dump(const struct cpt_parse_hdr_s *cpth);
 int __roc_api roc_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa_dptr,
 				void *sa_cptr, uint16_t sa_len);
 
-int __roc_api roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa,
-				   uint8_t opcode, uint16_t ctx_len,
-				   uint8_t egrp);
+int __roc_api roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, uint64_t sa, bool inb,
+				   uint16_t ctx_len, uint8_t egrp);
 #endif /* _ROC_CPT_H_ */

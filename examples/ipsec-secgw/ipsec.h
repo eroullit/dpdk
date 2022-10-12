@@ -43,6 +43,8 @@
 	(((t) & RTE_IPSEC_SATP_IPV_MASK) == RTE_IPSEC_SATP_IPV4)) || \
 	((t) & RTE_IPSEC_SATP_MODE_MASK) == RTE_IPSEC_SATP_MODE_TUNLV4)
 
+#define BAD_PORT	((uint16_t)-1)
+
 struct rte_crypto_xform;
 struct ipsec_xform;
 struct rte_mbuf;
@@ -256,7 +258,6 @@ struct socket_ctx {
 	struct rte_mempool *mbuf_pool[RTE_MAX_ETHPORTS];
 	struct rte_mempool *mbuf_pool_indir;
 	struct rte_mempool *session_pool;
-	struct rte_mempool *session_priv_pool;
 };
 
 struct cnt_blk {

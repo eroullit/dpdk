@@ -10,7 +10,11 @@
 #include <openssl/evp.h>	/* Needed for bpi runt block processing */
 
 #ifdef RTE_QAT_LIBIPSECMB
+#if defined(RTE_ARCH_ARM)
+#include <ipsec-mb.h>
+#else
 #include <intel-ipsec-mb.h>
+#endif
 #endif
 
 #include <rte_memcpy.h>
@@ -21,7 +25,7 @@
 #include <rte_malloc.h>
 #include <rte_crypto_sym.h>
 #ifdef RTE_LIB_SECURITY
-#include <rte_security.h>
+#include <rte_security_driver.h>
 #endif
 
 #include "qat_logs.h"
@@ -30,6 +34,35 @@
 
 #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
 #include <openssl/provider.h>
+
+static OSSL_PROVIDER * legacy_lib;
+static OSSL_PROVIDER *default_lib;
+
+/* Some cryptographic algorithms such as MD and DES are now considered legacy
+ * and not enabled by default in OpenSSL 3.0. Load up lagacy provider as MD5
+ * DES are needed in QAT pre-computes and secure session creation.
+ */
+static int ossl_legacy_provider_load(void)
+{
+	/* Load Multiple providers into the default (NULL) library context */
+	legacy_lib = OSSL_PROVIDER_load(NULL, "legacy");
+	if (legacy_lib == NULL)
+		return -EINVAL;
+
+	default_lib = OSSL_PROVIDER_load(NULL, "default");
+	if (default_lib == NULL) {
+		OSSL_PROVIDER_unload(legacy_lib);
+		return  -EINVAL;
+	}
+
+	return 0;
+}
+
+static void ossl_legacy_provider_unload(void)
+{
+	OSSL_PROVIDER_unload(legacy_lib);
+	OSSL_PROVIDER_unload(default_lib);
+}
 #endif
 
 extern int qat_ipsec_mb_lib;
@@ -68,6 +101,13 @@ static const uint8_t sha512InitialState[] = {
 	0x0e, 0x52, 0x7f, 0xad, 0xe6, 0x82, 0xd1, 0x9b, 0x05, 0x68, 0x8c,
 	0x2b, 0x3e, 0x6c, 0x1f, 0x1f, 0x83, 0xd9, 0xab, 0xfb, 0x41, 0xbd,
 	0x6b, 0x5b, 0xe0, 0xcd, 0x19, 0x13, 0x7e, 0x21, 0x79};
+
+static uint8_t sm3InitialState[] = {
+	0x73, 0x80, 0x16, 0x6f, 0x49, 0x14, 0xb2, 0xb9,
+	0x17, 0x24, 0x42, 0xd7, 0xda, 0x8a, 0x06, 0x00,
+	0xa9, 0x6f, 0x30, 0xbc, 0x16, 0x31, 0x38, 0xaa,
+	0xe3, 0x8d, 0xee, 0x4d, 0xb0, 0xfb, 0x0e, 0x4e
+};
 
 static int
 qat_sym_cd_cipher_set(struct qat_sym_session *cd,
@@ -186,22 +226,13 @@ qat_is_auth_alg_supported(enum rte_crypto_auth_algorithm algo,
 }
 
 void
-qat_sym_session_clear(struct rte_cryptodev *dev,
+qat_sym_session_clear(struct rte_cryptodev *dev __rte_unused,
 		struct rte_cryptodev_sym_session *sess)
 {
-	uint8_t index = dev->driver_id;
-	void *sess_priv = get_sym_session_private_data(sess, index);
-	struct qat_sym_session *s = (struct qat_sym_session *)sess_priv;
+	struct qat_sym_session *s = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 
-	if (sess_priv) {
-		if (s->bpi_ctx)
-			bpi_cipher_ctx_free(s->bpi_ctx);
-		memset(s, 0, qat_sym_session_get_private_size(dev));
-		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-
-		set_sym_session_private_data(sess, index, NULL);
-		rte_mempool_put(sess_mp, sess_priv);
-	}
+	if (s->bpi_ctx)
+		bpi_cipher_ctx_free(s->bpi_ctx);
 }
 
 static int
@@ -432,6 +463,18 @@ qat_sym_session_configure_cipher(struct rte_cryptodev *dev,
 		}
 		session->qat_mode = ICP_QAT_HW_CIPHER_XTS_MODE;
 		break;
+	case RTE_CRYPTO_CIPHER_SM4_ECB:
+		session->qat_cipher_alg = ICP_QAT_HW_CIPHER_ALGO_SM4;
+		session->qat_mode = ICP_QAT_HW_CIPHER_ECB_MODE;
+		break;
+	case RTE_CRYPTO_CIPHER_SM4_CBC:
+		session->qat_cipher_alg = ICP_QAT_HW_CIPHER_ALGO_SM4;
+		session->qat_mode = ICP_QAT_HW_CIPHER_CBC_MODE;
+		break;
+	case RTE_CRYPTO_CIPHER_SM4_CTR:
+		session->qat_cipher_alg = ICP_QAT_HW_CIPHER_ALGO_SM4;
+		session->qat_mode = ICP_QAT_HW_CIPHER_CTR_MODE;
+		break;
 	case RTE_CRYPTO_CIPHER_3DES_ECB:
 	case RTE_CRYPTO_CIPHER_AES_ECB:
 	case RTE_CRYPTO_CIPHER_AES_F8:
@@ -472,56 +515,34 @@ error_out:
 int
 qat_sym_session_configure(struct rte_cryptodev *dev,
 		struct rte_crypto_sym_xform *xform,
-		struct rte_cryptodev_sym_session *sess,
-		struct rte_mempool *mempool)
+		struct rte_cryptodev_sym_session *sess)
 {
-	void *sess_private_data;
 	int ret;
 
-	if (rte_mempool_get(mempool, &sess_private_data)) {
-		CDEV_LOG_ERR(
-			"Couldn't get object from session mempool");
-		return -ENOMEM;
-	}
-
 #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
-	OSSL_PROVIDER *legacy;
-	OSSL_PROVIDER *deflt;
-
-	/* Load Multiple providers into the default (NULL) library context */
-	legacy = OSSL_PROVIDER_load(NULL, "legacy");
-	if (legacy == NULL)
+	if (ossl_legacy_provider_load())
 		return -EINVAL;
-
-	deflt = OSSL_PROVIDER_load(NULL, "default");
-	if (deflt == NULL) {
-		OSSL_PROVIDER_unload(legacy);
-		return  -EINVAL;
-	}
 #endif
-	ret = qat_sym_session_set_parameters(dev, xform, sess_private_data);
+	ret = qat_sym_session_set_parameters(dev, xform,
+			CRYPTODEV_GET_SYM_SESS_PRIV(sess),
+			CRYPTODEV_GET_SYM_SESS_PRIV_IOVA(sess));
 	if (ret != 0) {
 		QAT_LOG(ERR,
 		    "Crypto QAT PMD: failed to configure session parameters");
 
-		/* Return session to mempool */
-		rte_mempool_put(mempool, sess_private_data);
 		return ret;
 	}
 
-	set_sym_session_private_data(sess, dev->driver_id,
-		sess_private_data);
-
 # if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
-	OSSL_PROVIDER_unload(legacy);
-	OSSL_PROVIDER_unload(deflt);
+	ossl_legacy_provider_unload();
 # endif
 	return 0;
 }
 
 int
 qat_sym_session_set_parameters(struct rte_cryptodev *dev,
-		struct rte_crypto_sym_xform *xform, void *session_private)
+		struct rte_crypto_sym_xform *xform, void *session_private,
+		rte_iova_t session_paddr)
 {
 	struct qat_sym_session *session = session_private;
 	struct qat_cryptodev_private *internals = dev->data->dev_private;
@@ -530,7 +551,6 @@ qat_sym_session_set_parameters(struct rte_cryptodev *dev,
 	int qat_cmd_id;
 
 	/* Verify the session physical address is known */
-	rte_iova_t session_paddr = rte_mempool_virt2iova(session);
 	if (session_paddr == 0 || session_paddr == RTE_BAD_IOVA) {
 		QAT_LOG(ERR,
 			"Session physical address unknown. Bad memory pool.");
@@ -675,6 +695,10 @@ qat_sym_session_configure_auth(struct rte_cryptodev *dev,
 	session->digest_length = auth_xform->digest_length;
 
 	switch (auth_xform->algo) {
+	case RTE_CRYPTO_AUTH_SM3:
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SM3;
+		session->auth_mode = ICP_QAT_HW_AUTH_MODE2;
+		break;
 	case RTE_CRYPTO_AUTH_SHA1:
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA1;
 		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
@@ -1017,6 +1041,9 @@ static int qat_hash_get_state1_size(enum icp_qat_hw_auth_algo qat_hash_alg)
 						QAT_HW_DEFAULT_ALIGNMENT);
 	case ICP_QAT_HW_AUTH_ALGO_AES_CBC_MAC:
 		return QAT_HW_ROUND_UP(ICP_QAT_HW_AES_CBC_MAC_STATE1_SZ,
+						QAT_HW_DEFAULT_ALIGNMENT);
+	case ICP_QAT_HW_AUTH_ALGO_SM3:
+		return QAT_HW_ROUND_UP(ICP_QAT_HW_SM3_STATE1_SZ,
 						QAT_HW_DEFAULT_ALIGNMENT);
 	case ICP_QAT_HW_AUTH_ALGO_NULL:
 		return QAT_HW_ROUND_UP(ICP_QAT_HW_NULL_STATE1_SZ,
@@ -1630,6 +1657,10 @@ static int qat_sym_do_precomputes(enum icp_qat_hw_auth_algo hash_alg,
 		QAT_LOG(ERR, "invalid keylen %u", auth_keylen);
 		return -EFAULT;
 	}
+
+	RTE_VERIFY(auth_keylen <= sizeof(ipad));
+	RTE_VERIFY(auth_keylen <= sizeof(opad));
+
 	rte_memcpy(ipad, auth_key, auth_keylen);
 	rte_memcpy(opad, auth_key, auth_keylen);
 
@@ -2032,11 +2063,14 @@ int qat_sym_cd_auth_set(struct qat_sym_session *cdesc,
 	}
 
 	cdesc->cd_cur_ptr += sizeof(struct icp_qat_hw_auth_setup);
-
-	/*
-	 * cd_cur_ptr now points at the state1 information.
-	 */
 	switch (cdesc->qat_hash_alg) {
+	case ICP_QAT_HW_AUTH_ALGO_SM3:
+		rte_memcpy(cdesc->cd_cur_ptr, sm3InitialState,
+				sizeof(sm3InitialState));
+		state1_size = qat_hash_get_state1_size(
+				cdesc->qat_hash_alg);
+		state2_size = ICP_QAT_HW_SM3_STATE2_SZ;
+		break;
 	case ICP_QAT_HW_AUTH_ALGO_SHA1:
 		if (cdesc->auth_mode == ICP_QAT_HW_AUTH_MODE0) {
 			/* Plain SHA-1 */
@@ -2536,7 +2570,8 @@ qat_sec_session_check_docsis(struct rte_security_session_conf *conf)
 
 static int
 qat_sec_session_set_docsis_parameters(struct rte_cryptodev *dev,
-		struct rte_security_session_conf *conf, void *session_private)
+		struct rte_security_session_conf *conf, void *session_private,
+		rte_iova_t session_paddr)
 {
 	int ret;
 	int qat_cmd_id;
@@ -2555,7 +2590,6 @@ qat_sec_session_set_docsis_parameters(struct rte_cryptodev *dev,
 	xform = conf->crypto_xform;
 
 	/* Verify the session physical address is known */
-	rte_iova_t session_paddr = rte_mempool_virt2iova(session);
 	if (session_paddr == 0 || session_paddr == RTE_BAD_IOVA) {
 		QAT_LOG(ERR,
 			"Session physical address unknown. Bad memory pool.");
@@ -2585,10 +2619,9 @@ qat_sec_session_set_docsis_parameters(struct rte_cryptodev *dev,
 int
 qat_security_session_create(void *dev,
 				struct rte_security_session_conf *conf,
-				struct rte_security_session *sess,
-				struct rte_mempool *mempool)
+				struct rte_security_session *sess)
 {
-	void *sess_private_data;
+	void *sess_private_data = SECURITY_GET_SESS_PRIV(sess);
 	struct rte_cryptodev *cdev = (struct rte_cryptodev *)dev;
 	struct qat_cryptodev_private *internals = cdev->data->dev_private;
 	enum qat_device_gen qat_dev_gen = internals->qat_dev->qat_dev_gen;
@@ -2601,21 +2634,17 @@ qat_security_session_create(void *dev,
 		return -EINVAL;
 	}
 
-	if (rte_mempool_get(mempool, &sess_private_data)) {
-		QAT_LOG(ERR, "Couldn't get object from session mempool");
-		return -ENOMEM;
-	}
-
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+	if (ossl_legacy_provider_load())
+		return -EINVAL;
+#endif
 	ret = qat_sec_session_set_docsis_parameters(cdev, conf,
-			sess_private_data);
+			sess_private_data, SECURITY_GET_SESS_PRIV_IOVA(sess));
 	if (ret != 0) {
 		QAT_LOG(ERR, "Failed to configure session parameters");
-		/* Return session to mempool */
-		rte_mempool_put(mempool, sess_private_data);
 		return ret;
 	}
 
-	set_sec_session_private_data(sess, sess_private_data);
 	sym_session = (struct qat_sym_session *)sess_private_data;
 	sym_session->dev_id = internals->dev_id;
 
@@ -2627,18 +2656,24 @@ int
 qat_security_session_destroy(void *dev __rte_unused,
 				 struct rte_security_session *sess)
 {
-	void *sess_priv = get_sec_session_private_data(sess);
+	void *sess_priv = SECURITY_GET_SESS_PRIV(sess);
 	struct qat_sym_session *s = (struct qat_sym_session *)sess_priv;
 
 	if (sess_priv) {
 		if (s->bpi_ctx)
 			bpi_cipher_ctx_free(s->bpi_ctx);
 		memset(s, 0, qat_sym_session_get_private_size(dev));
-		struct rte_mempool *sess_mp = rte_mempool_from_obj(sess_priv);
-
-		set_sec_session_private_data(sess, NULL);
-		rte_mempool_put(sess_mp, sess_priv);
 	}
+
+# if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+	ossl_legacy_provider_unload();
+# endif
 	return 0;
+}
+
+unsigned int
+qat_security_session_get_size(void *device __rte_unused)
+{
+	return sizeof(struct qat_sym_session);
 }
 #endif

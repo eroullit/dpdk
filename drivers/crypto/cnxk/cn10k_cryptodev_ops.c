@@ -9,36 +9,55 @@
 
 #include "cn10k_cryptodev.h"
 #include "cn10k_cryptodev_ops.h"
-#include "cn10k_ipsec_la_ops.h"
 #include "cn10k_ipsec.h"
+#include "cn10k_ipsec_la_ops.h"
 #include "cnxk_ae.h"
 #include "cnxk_cryptodev.h"
 #include "cnxk_cryptodev_ops.h"
+#include "cnxk_eventdev.h"
 #include "cnxk_se.h"
 
 #include "roc_api.h"
 
+#define PKTS_PER_LOOP	32
+#define PKTS_PER_STEORL 16
+
+/* Holds information required to send crypto operations in one burst */
+struct ops_burst {
+	struct rte_crypto_op *op[PKTS_PER_LOOP];
+	uint64_t w2[PKTS_PER_LOOP];
+	struct cn10k_sso_hws *ws;
+	struct cnxk_cpt_qp *qp;
+	uint16_t nb_ops;
+};
+
+/* Holds information required to send vector of operations */
+struct vec_request {
+	struct cpt_inflight_req *req;
+	struct rte_event_vector *vec;
+	uint64_t w2;
+};
+
 static inline struct cnxk_se_sess *
 cn10k_cpt_sym_temp_sess_create(struct cnxk_cpt_qp *qp, struct rte_crypto_op *op)
 {
-	const int driver_id = cn10k_cryptodev_driver_id;
 	struct rte_crypto_sym_op *sym_op = op->sym;
 	struct rte_cryptodev_sym_session *sess;
 	struct cnxk_se_sess *priv;
 	int ret;
 
 	/* Create temporary session */
-	sess = rte_cryptodev_sym_session_create(qp->sess_mp);
-	if (sess == NULL)
+	if (rte_mempool_get(qp->sess_mp, (void **)&sess) < 0)
 		return NULL;
 
-	ret = sym_session_configure(qp->lf.roc_cpt, driver_id, sym_op->xform,
-				    sess, qp->sess_mp_priv);
-	if (ret)
+	ret = sym_session_configure(qp->lf.roc_cpt, sym_op->xform,
+				    sess);
+	if (ret) {
+		rte_mempool_put(qp->sess_mp, (void *)sess);
 		goto sess_put;
+	}
 
-	priv = get_sym_session_private_data(sess, driver_id);
-
+	priv = (void *)sess->driver_priv_data;
 	sym_op->session = sess;
 
 	return priv;
@@ -76,25 +95,6 @@ cpt_sec_inst_fill(struct cnxk_cpt_qp *qp, struct rte_crypto_op *op,
 	return ret;
 }
 
-static __rte_always_inline int __rte_hot
-cpt_sym_inst_fill(struct cnxk_cpt_qp *qp, struct rte_crypto_op *op,
-		  struct cnxk_se_sess *sess, struct cpt_inflight_req *infl_req,
-		  struct cpt_inst_s *inst)
-{
-	uint64_t cpt_op;
-	int ret;
-
-	cpt_op = sess->cpt_op;
-
-	if (cpt_op & ROC_SE_OP_CIPHER_MASK)
-		ret = fill_fc_params(op, sess, &qp->meta_info, infl_req, inst);
-	else
-		ret = fill_digest_params(op, sess, &qp->meta_info, infl_req,
-					 inst);
-
-	return ret;
-}
-
 static inline int
 cn10k_cpt_fill_inst(struct cnxk_cpt_qp *qp, struct rte_crypto_op *ops[],
 		    struct cpt_inst_s inst[], struct cpt_inflight_req *infl_req)
@@ -122,15 +122,13 @@ cn10k_cpt_fill_inst(struct cnxk_cpt_qp *qp, struct rte_crypto_op *ops[],
 
 	if (op->type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) {
 		if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
-			sec_sess = get_sec_session_private_data(
-				sym_op->sec_session);
+			sec_sess = SECURITY_GET_SESS_PRIV(sym_op->session);
 			ret = cpt_sec_inst_fill(qp, op, sec_sess, &inst[0]);
 			if (unlikely(ret))
 				return 0;
 			w7 = sec_sess->sa.inst.w7;
 		} else if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
-			sess = get_sym_session_private_data(
-				sym_op->session, cn10k_cryptodev_driver_id);
+			sess = CRYPTODEV_GET_SYM_SESS_PRIV(sym_op->session);
 			ret = cpt_sym_inst_fill(qp, op, sess, infl_req,
 						&inst[0]);
 			if (unlikely(ret))
@@ -146,8 +144,7 @@ cn10k_cpt_fill_inst(struct cnxk_cpt_qp *qp, struct rte_crypto_op *ops[],
 			ret = cpt_sym_inst_fill(qp, op, sess, infl_req,
 						&inst[0]);
 			if (unlikely(ret)) {
-				sym_session_clear(cn10k_cryptodev_driver_id,
-						  op->sym->session);
+				sym_session_clear(op->sym->session);
 				rte_mempool_put(qp->sess_mp, op->sym->session);
 				return 0;
 			}
@@ -181,9 +178,6 @@ cn10k_cpt_fill_inst(struct cnxk_cpt_qp *qp, struct rte_crypto_op *ops[],
 
 	return 1;
 }
-
-#define PKTS_PER_LOOP	32
-#define PKTS_PER_STEORL 16
 
 static uint16_t
 cn10k_cpt_enqueue_burst(void *qptr, struct rte_crypto_op **ops, uint16_t nb_ops)
@@ -285,9 +279,9 @@ cn10k_cpt_crypto_adapter_ev_mdata_set(struct rte_cryptodev *dev __rte_unused,
 	union rte_event_crypto_metadata *ec_mdata = mdata;
 	struct rte_event *rsp_info;
 	struct cnxk_cpt_qp *qp;
+	uint64_t w2, tag_type;
 	uint8_t cdev_id;
 	int16_t qp_id;
-	uint64_t w2;
 
 	/* Get queue pair */
 	cdev_id = ec_mdata->request_info.cdev_id;
@@ -295,9 +289,9 @@ cn10k_cpt_crypto_adapter_ev_mdata_set(struct rte_cryptodev *dev __rte_unused,
 	qp = rte_cryptodevs[cdev_id].data->queue_pairs[qp_id];
 
 	/* Prepare w2 */
+	tag_type = qp->ca.vector_sz ? RTE_EVENT_TYPE_CRYPTODEV_VECTOR : RTE_EVENT_TYPE_CRYPTODEV;
 	rsp_info = &ec_mdata->response_info;
-	w2 = CNXK_CPT_INST_W2((RTE_EVENT_TYPE_CRYPTODEV << 28) |
-				      (rsp_info->sub_event_type << 20) |
+	w2 = CNXK_CPT_INST_W2((tag_type << 28) | (rsp_info->sub_event_type << 20) |
 				      rsp_info->flow_id,
 			      rsp_info->sched_type, rsp_info->queue_id, 0);
 
@@ -307,15 +301,14 @@ cn10k_cpt_crypto_adapter_ev_mdata_set(struct rte_cryptodev *dev __rte_unused,
 			struct cn10k_sec_session *priv;
 			struct cn10k_ipsec_sa *sa;
 
-			priv = get_sec_session_private_data(sess);
+			priv = SECURITY_GET_SESS_PRIV(sess);
 			sa = &priv->sa;
 			sa->qp = qp;
 			sa->inst.w2 = w2;
 		} else if (sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 			struct cnxk_se_sess *priv;
 
-			priv = get_sym_session_private_data(
-				sess, cn10k_cryptodev_driver_id);
+			priv = CRYPTODEV_GET_SYM_SESS_PRIV(sess);
 			priv->qp = qp;
 			priv->cpt_inst_w2 = w2;
 		} else
@@ -345,15 +338,14 @@ cn10k_ca_meta_info_extract(struct rte_crypto_op *op,
 			struct cn10k_sec_session *priv;
 			struct cn10k_ipsec_sa *sa;
 
-			priv = get_sec_session_private_data(op->sym->sec_session);
+			priv = SECURITY_GET_SESS_PRIV(op->sym->session);
 			sa = &priv->sa;
 			*qp = sa->qp;
 			*w2 = sa->inst.w2;
 		} else if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 			struct cnxk_se_sess *priv;
 
-			priv = get_sym_session_private_data(
-				op->sym->session, cn10k_cryptodev_driver_id);
+			priv = CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
 			*qp = priv->qp;
 			*w2 = priv->cpt_inst_w2;
 		} else {
@@ -391,79 +383,394 @@ cn10k_ca_meta_info_extract(struct rte_crypto_op *op,
 	return 0;
 }
 
-uint16_t
-cn10k_cpt_crypto_adapter_enqueue(uintptr_t base, struct rte_crypto_op *op)
+static inline void
+cn10k_cpt_vec_inst_fill(struct vec_request *vec_req, struct cpt_inst_s *inst,
+			struct cnxk_cpt_qp *qp)
 {
-	struct cpt_inflight_req *infl_req;
-	uint64_t lmt_base, lmt_arg, w2;
+	const union cpt_res_s res = {.cn10k.compcode = CPT_COMP_NOT_DONE};
+	struct cpt_inflight_req *infl_req = vec_req->req;
+
+	const union cpt_inst_w4 w4 = {
+		.s.opcode_major = ROC_SE_MAJOR_OP_MISC,
+		.s.opcode_minor = ROC_SE_MISC_MINOR_OP_PASSTHROUGH,
+		.s.param1 = 1,
+		.s.param2 = 1,
+		.s.dlen = 0,
+	};
+
+	infl_req->vec = vec_req->vec;
+	infl_req->qp = qp;
+
+	inst->res_addr = (uint64_t)&infl_req->res;
+	__atomic_store_n(&infl_req->res.u64[0], res.u64[0], __ATOMIC_RELAXED);
+
+	inst->w0.u64 = 0;
+	inst->w2.u64 = vec_req->w2;
+	inst->w3.u64 = CNXK_CPT_INST_W3(1, infl_req);
+	inst->w4.u64 = w4.u64;
+	inst->w7.u64 = ROC_CPT_DFLT_ENG_GRP_SE << 61;
+}
+
+static void
+cn10k_cpt_vec_pkt_submission_timeout_handle(void)
+{
+	plt_dp_err("Vector packet submission timedout");
+	abort();
+}
+
+static inline void
+cn10k_cpt_vec_submit(struct vec_request vec_tbl[], uint16_t vec_tbl_len, struct cnxk_cpt_qp *qp)
+{
+	uint64_t lmt_base, lmt_arg, lmt_id, io_addr;
+	union cpt_fc_write_s fc;
 	struct cpt_inst_s *inst;
+	uint16_t burst_size;
+	uint64_t *fc_addr;
+	int i;
+
+	if (vec_tbl_len == 0)
+		return;
+
+	const uint32_t fc_thresh = qp->lmtline.fc_thresh;
+	/*
+	 * Use 10 mins timeout for the poll. It is not possible to recover from partial submission
+	 * of vector packet. Actual packets for processing are submitted to CPT prior to this
+	 * routine. Hence, any failure for submission of vector packet would indicate an
+	 * unrecoverable error for the application.
+	 */
+	const uint64_t timeout = rte_get_timer_cycles() + 10 * 60 * rte_get_timer_hz();
+
+	lmt_base = qp->lmtline.lmt_base;
+	io_addr = qp->lmtline.io_addr;
+	fc_addr = qp->lmtline.fc_addr;
+	ROC_LMT_BASE_ID_GET(lmt_base, lmt_id);
+	inst = (struct cpt_inst_s *)lmt_base;
+
+again:
+	burst_size = RTE_MIN(PKTS_PER_STEORL, vec_tbl_len);
+	for (i = 0; i < burst_size; i++)
+		cn10k_cpt_vec_inst_fill(&vec_tbl[i], &inst[i * 2], qp);
+
+	do {
+		fc.u64[0] = __atomic_load_n(fc_addr, __ATOMIC_RELAXED);
+		if (likely(fc.s.qsize < fc_thresh))
+			break;
+		if (unlikely(rte_get_timer_cycles() > timeout))
+			cn10k_cpt_vec_pkt_submission_timeout_handle();
+	} while (true);
+
+	lmt_arg = ROC_CN10K_CPT_LMT_ARG | (i - 1) << 12 | lmt_id;
+	roc_lmt_submit_steorl(lmt_arg, io_addr);
+
+	rte_io_wmb();
+
+	vec_tbl_len -= i;
+
+	if (vec_tbl_len > 0) {
+		vec_tbl += i;
+		goto again;
+	}
+}
+
+static inline int
+ca_lmtst_vec_submit(struct ops_burst *burst, struct vec_request vec_tbl[], uint16_t *vec_tbl_len)
+{
+	struct cpt_inflight_req *infl_reqs[PKTS_PER_LOOP];
+	uint64_t lmt_base, lmt_arg, io_addr;
+	uint16_t lmt_id, len = *vec_tbl_len;
+	struct cpt_inst_s *inst, *inst_base;
+	struct cpt_inflight_req *infl_req;
+	struct rte_event_vector *vec;
 	union cpt_fc_write_s fc;
 	struct cnxk_cpt_qp *qp;
 	uint64_t *fc_addr;
-	uint16_t lmt_id;
-	int ret;
+	int ret, i, vi;
 
-	ret = cn10k_ca_meta_info_extract(op, &qp, &w2);
-	if (unlikely(ret)) {
-		rte_errno = EINVAL;
-		return 0;
-	}
-
-	if (unlikely(!qp->ca.enabled)) {
-		rte_errno = EINVAL;
-		return 0;
-	}
-
-	if (unlikely(rte_mempool_get(qp->ca.req_mp, (void **)&infl_req))) {
-		rte_errno = ENOMEM;
-		return 0;
-	}
-	infl_req->op_flags = 0;
+	qp = burst->qp;
 
 	lmt_base = qp->lmtline.lmt_base;
+	io_addr = qp->lmtline.io_addr;
 	fc_addr = qp->lmtline.fc_addr;
 
 	const uint32_t fc_thresh = qp->lmtline.fc_thresh;
 
 	ROC_LMT_BASE_ID_GET(lmt_base, lmt_id);
-	inst = (struct cpt_inst_s *)lmt_base;
+	inst_base = (struct cpt_inst_s *)lmt_base;
 
-	ret = cn10k_cpt_fill_inst(qp, &op, inst, infl_req);
-	if (unlikely(ret != 1)) {
-		plt_dp_err("Could not process op: %p", op);
-		rte_mempool_put(qp->ca.req_mp, infl_req);
+#ifdef CNXK_CRYPTODEV_DEBUG
+	if (unlikely(!qp->ca.enabled)) {
+		rte_errno = EINVAL;
 		return 0;
 	}
+#endif
 
-	infl_req->cop = op;
-	infl_req->res.cn10k.compcode = CPT_COMP_NOT_DONE;
-	infl_req->qp = qp;
-	inst->w0.u64 = 0;
-	inst->res_addr = (uint64_t)&infl_req->res;
-	inst->w2.u64 = w2;
-	inst->w3.u64 = CNXK_CPT_INST_W3(1, infl_req);
-
+	/* Perform fc check before putting packets into vectors */
 	fc.u64[0] = __atomic_load_n(fc_addr, __ATOMIC_RELAXED);
 	if (unlikely(fc.s.qsize > fc_thresh)) {
-		rte_mempool_put(qp->ca.req_mp, infl_req);
 		rte_errno = EAGAIN;
 		return 0;
 	}
 
-	if (inst->w2.s.tt == RTE_SCHED_TYPE_ORDERED)
-		roc_sso_hws_head_wait(base);
+	if (unlikely(rte_mempool_get_bulk(qp->ca.req_mp, (void **)infl_reqs, burst->nb_ops))) {
+		rte_errno = ENOMEM;
+		return 0;
+	}
 
-	lmt_arg = ROC_CN10K_CPT_LMT_ARG | (uint64_t)lmt_id;
-	roc_lmt_submit_steorl(lmt_arg, qp->lmtline.io_addr);
+	for (i = 0; i < burst->nb_ops; i++) {
+		inst = &inst_base[2 * i];
+		infl_req = infl_reqs[i];
+		infl_req->op_flags = 0;
+
+		ret = cn10k_cpt_fill_inst(qp, &burst->op[i], inst, infl_req);
+		if (unlikely(ret != 1)) {
+			plt_cpt_dbg("Could not process op: %p", burst->op[i]);
+			if (i != 0)
+				goto submit;
+			else
+				goto put;
+		}
+
+		infl_req->res.cn10k.compcode = CPT_COMP_NOT_DONE;
+		infl_req->qp = qp;
+		inst->w3.u64 = 0x1;
+
+		/* Lookup for existing vector by w2 */
+		for (vi = len - 1; vi >= 0; vi--) {
+			if (vec_tbl[vi].w2 != burst->w2[i])
+				continue;
+			vec = vec_tbl[vi].vec;
+			if (unlikely(vec->nb_elem == qp->ca.vector_sz))
+				continue;
+			vec->ptrs[vec->nb_elem++] = infl_req;
+			goto next_op; /* continue outer loop */
+		}
+
+		/* No available vectors found, allocate a new one */
+		if (unlikely(rte_mempool_get(qp->ca.vector_mp, (void **)&vec_tbl[len].vec))) {
+			rte_errno = ENOMEM;
+			if (i != 0)
+				goto submit;
+			else
+				goto put;
+		}
+		/* Also preallocate in-flight request, that will be used to
+		 * submit misc passthrough instruction
+		 */
+		if (unlikely(rte_mempool_get(qp->ca.req_mp, (void **)&vec_tbl[len].req))) {
+			rte_mempool_put(qp->ca.vector_mp, vec_tbl[len].vec);
+			rte_errno = ENOMEM;
+			if (i != 0)
+				goto submit;
+			else
+				goto put;
+		}
+		vec_tbl[len].w2 = burst->w2[i];
+		vec_tbl[len].vec->ptrs[0] = infl_req;
+		vec_tbl[len].vec->nb_elem = 1;
+		len++;
+
+next_op:;
+	}
+
+	/* Submit operations in burst */
+submit:
+	if (CNXK_TT_FROM_TAG(burst->ws->gw_rdata) == SSO_TT_ORDERED)
+		roc_sso_hws_head_wait(burst->ws->base);
+
+	if (i > PKTS_PER_STEORL) {
+		lmt_arg = ROC_CN10K_CPT_LMT_ARG | (PKTS_PER_STEORL - 1) << 12 | (uint64_t)lmt_id;
+		roc_lmt_submit_steorl(lmt_arg, io_addr);
+		lmt_arg = ROC_CN10K_CPT_LMT_ARG | (i - PKTS_PER_STEORL - 1) << 12 |
+			  (uint64_t)(lmt_id + PKTS_PER_STEORL);
+		roc_lmt_submit_steorl(lmt_arg, io_addr);
+	} else {
+		lmt_arg = ROC_CN10K_CPT_LMT_ARG | (i - 1) << 12 | (uint64_t)lmt_id;
+		roc_lmt_submit_steorl(lmt_arg, io_addr);
+	}
 
 	rte_io_wmb();
 
-	return 1;
+put:
+	if (i != burst->nb_ops)
+		rte_mempool_put_bulk(qp->ca.req_mp, (void *)&infl_reqs[i], burst->nb_ops - i);
+
+	*vec_tbl_len = len;
+
+	return i;
+}
+
+static inline uint16_t
+ca_lmtst_burst_submit(struct ops_burst *burst)
+{
+	struct cpt_inflight_req *infl_reqs[PKTS_PER_LOOP];
+	uint64_t lmt_base, lmt_arg, io_addr;
+	struct cpt_inst_s *inst, *inst_base;
+	struct cpt_inflight_req *infl_req;
+	union cpt_fc_write_s fc;
+	struct cnxk_cpt_qp *qp;
+	uint64_t *fc_addr;
+	uint16_t lmt_id;
+	int ret, i, j;
+
+	qp = burst->qp;
+
+	lmt_base = qp->lmtline.lmt_base;
+	io_addr = qp->lmtline.io_addr;
+	fc_addr = qp->lmtline.fc_addr;
+
+	const uint32_t fc_thresh = qp->lmtline.fc_thresh;
+
+	ROC_LMT_BASE_ID_GET(lmt_base, lmt_id);
+	inst_base = (struct cpt_inst_s *)lmt_base;
+
+#ifdef CNXK_CRYPTODEV_DEBUG
+	if (unlikely(!qp->ca.enabled)) {
+		rte_errno = EINVAL;
+		return 0;
+	}
+#endif
+
+	if (unlikely(rte_mempool_get_bulk(qp->ca.req_mp, (void **)infl_reqs, burst->nb_ops))) {
+		rte_errno = ENOMEM;
+		return 0;
+	}
+
+	for (i = 0; i < burst->nb_ops; i++) {
+		inst = &inst_base[2 * i];
+		infl_req = infl_reqs[i];
+		infl_req->op_flags = 0;
+
+		ret = cn10k_cpt_fill_inst(qp, &burst->op[i], inst, infl_req);
+		if (unlikely(ret != 1)) {
+			plt_dp_dbg("Could not process op: %p", burst->op[i]);
+			if (i != 0)
+				goto submit;
+			else
+				goto put;
+		}
+
+		infl_req->res.cn10k.compcode = CPT_COMP_NOT_DONE;
+		infl_req->qp = qp;
+		inst->w0.u64 = 0;
+		inst->res_addr = (uint64_t)&infl_req->res;
+		inst->w2.u64 = burst->w2[i];
+		inst->w3.u64 = CNXK_CPT_INST_W3(1, infl_req);
+	}
+
+	fc.u64[0] = __atomic_load_n(fc_addr, __ATOMIC_RELAXED);
+	if (unlikely(fc.s.qsize > fc_thresh)) {
+		rte_errno = EAGAIN;
+		for (j = 0; j < i; j++) {
+			infl_req = infl_reqs[j];
+			if (unlikely(infl_req->op_flags & CPT_OP_FLAGS_METABUF))
+				rte_mempool_put(qp->meta_info.pool, infl_req->mdata);
+		}
+		i = 0;
+		goto put;
+	}
+
+submit:
+	if (CNXK_TT_FROM_TAG(burst->ws->gw_rdata) == SSO_TT_ORDERED)
+		roc_sso_hws_head_wait(burst->ws->base);
+
+	if (i > PKTS_PER_STEORL) {
+		lmt_arg = ROC_CN10K_CPT_LMT_ARG | (PKTS_PER_STEORL - 1) << 12 | (uint64_t)lmt_id;
+		roc_lmt_submit_steorl(lmt_arg, io_addr);
+		lmt_arg = ROC_CN10K_CPT_LMT_ARG | (i - PKTS_PER_STEORL - 1) << 12 |
+			  (uint64_t)(lmt_id + PKTS_PER_STEORL);
+		roc_lmt_submit_steorl(lmt_arg, io_addr);
+	} else {
+		lmt_arg = ROC_CN10K_CPT_LMT_ARG | (i - 1) << 12 | (uint64_t)lmt_id;
+		roc_lmt_submit_steorl(lmt_arg, io_addr);
+	}
+
+	rte_io_wmb();
+
+put:
+	if (unlikely(i != burst->nb_ops))
+		rte_mempool_put_bulk(qp->ca.req_mp, (void *)&infl_reqs[i], burst->nb_ops - i);
+
+	return i;
+}
+
+uint16_t __rte_hot
+cn10k_cpt_crypto_adapter_enqueue(void *ws, struct rte_event ev[], uint16_t nb_events)
+{
+	uint16_t submitted, count = 0, vec_tbl_len = 0;
+	struct vec_request vec_tbl[nb_events];
+	struct rte_crypto_op *op;
+	struct ops_burst burst;
+	struct cnxk_cpt_qp *qp;
+	bool is_vector = false;
+	uint64_t w2;
+	int ret, i;
+
+	burst.ws = ws;
+	burst.qp = NULL;
+	burst.nb_ops = 0;
+
+	for (i = 0; i < nb_events; i++) {
+		op = ev[i].event_ptr;
+		ret = cn10k_ca_meta_info_extract(op, &qp, &w2);
+		if (unlikely(ret)) {
+			rte_errno = EINVAL;
+			goto vec_submit;
+		}
+
+		/* Queue pair change check */
+		if (qp != burst.qp) {
+			if (burst.nb_ops) {
+				if (is_vector) {
+					submitted =
+						ca_lmtst_vec_submit(&burst, vec_tbl, &vec_tbl_len);
+					/*
+					 * Vector submission is required on qp change, but not in
+					 * other cases, since we could send several vectors per
+					 * lmtst instruction only for same qp
+					 */
+					cn10k_cpt_vec_submit(vec_tbl, vec_tbl_len, burst.qp);
+					vec_tbl_len = 0;
+				} else {
+					submitted = ca_lmtst_burst_submit(&burst);
+				}
+				count += submitted;
+				if (unlikely(submitted != burst.nb_ops))
+					goto vec_submit;
+				burst.nb_ops = 0;
+			}
+			is_vector = qp->ca.vector_sz;
+			burst.qp = qp;
+		}
+		burst.w2[burst.nb_ops] = w2;
+		burst.op[burst.nb_ops] = op;
+
+		/* Max nb_ops per burst check */
+		if (++burst.nb_ops == PKTS_PER_LOOP) {
+			if (is_vector)
+				submitted = ca_lmtst_vec_submit(&burst, vec_tbl, &vec_tbl_len);
+			else
+				submitted = ca_lmtst_burst_submit(&burst);
+			count += submitted;
+			if (unlikely(submitted != burst.nb_ops))
+				goto vec_submit;
+			burst.nb_ops = 0;
+		}
+	}
+	/* Submit the rest of crypto operations */
+	if (burst.nb_ops) {
+		if (is_vector)
+			count += ca_lmtst_vec_submit(&burst, vec_tbl, &vec_tbl_len);
+		else
+			count += ca_lmtst_burst_submit(&burst);
+	}
+
+vec_submit:
+	cn10k_cpt_vec_submit(vec_tbl, vec_tbl_len, burst.qp);
+	return count;
 }
 
 static inline void
-cn10k_cpt_sec_post_process(struct rte_crypto_op *cop,
-			   struct cpt_cn10k_res_s *res)
+cn10k_cpt_sec_post_process(struct rte_crypto_op *cop, struct cpt_cn10k_res_s *res)
 {
 	struct rte_mbuf *mbuf = cop->sym->m_src;
 	const uint16_t m_len = res->rlen;
@@ -505,7 +812,6 @@ cn10k_cpt_dequeue_post_process(struct cnxk_cpt_qp *qp,
 {
 	const uint8_t uc_compcode = res->uc_compcode;
 	const uint8_t compcode = res->compcode;
-	unsigned int sz;
 
 	cop->status = RTE_CRYPTO_OP_STATUS_SUCCESS;
 
@@ -582,11 +888,7 @@ cn10k_cpt_dequeue_post_process(struct cnxk_cpt_qp *qp,
 temp_sess_free:
 	if (unlikely(cop->sess_type == RTE_CRYPTO_OP_SESSIONLESS)) {
 		if (cop->type == RTE_CRYPTO_OP_TYPE_SYMMETRIC) {
-			sym_session_clear(cn10k_cryptodev_driver_id,
-					  cop->sym->session);
-			sz = rte_cryptodev_sym_get_existing_header_session_size(
-				cop->sym->session);
-			memset(cop->sym->session, 0, sz);
+			sym_session_clear(cop->sym->session);
 			rte_mempool_put(qp->sess_mp, cop->sym->session);
 			cop->sym->session = NULL;
 		}
@@ -614,6 +916,49 @@ cn10k_cpt_crypto_adapter_dequeue(uintptr_t get_work1)
 
 	rte_mempool_put(qp->ca.req_mp, infl_req);
 	return (uintptr_t)cop;
+}
+
+uintptr_t
+cn10k_cpt_crypto_adapter_vector_dequeue(uintptr_t get_work1)
+{
+	struct cpt_inflight_req *infl_req, *vec_infl_req;
+	struct rte_mempool *meta_mp, *req_mp;
+	struct rte_event_vector *vec;
+	struct rte_crypto_op *cop;
+	struct cnxk_cpt_qp *qp;
+	union cpt_res_s res;
+	int i;
+
+	vec_infl_req = (struct cpt_inflight_req *)(get_work1);
+
+	vec = vec_infl_req->vec;
+	qp = vec_infl_req->qp;
+	meta_mp = qp->meta_info.pool;
+	req_mp = qp->ca.req_mp;
+
+#ifdef CNXK_CRYPTODEV_DEBUG
+	res.u64[0] = __atomic_load_n(&vec_infl_req->res.u64[0], __ATOMIC_RELAXED);
+	PLT_ASSERT(res.cn10k.compcode == CPT_COMP_WARN);
+	PLT_ASSERT(res.cn10k.uc_compcode == 0);
+#endif
+
+	for (i = 0; i < vec->nb_elem; i++) {
+		infl_req = vec->ptrs[i];
+		cop = infl_req->cop;
+
+		res.u64[0] = __atomic_load_n(&infl_req->res.u64[0], __ATOMIC_RELAXED);
+		cn10k_cpt_dequeue_post_process(qp, cop, infl_req, &res.cn10k);
+
+		vec->ptrs[i] = cop;
+		if (unlikely(infl_req->op_flags & CPT_OP_FLAGS_METABUF))
+			rte_mempool_put(meta_mp, infl_req->mdata);
+
+		rte_mempool_put(req_mp, infl_req);
+	}
+
+	rte_mempool_put(req_mp, vec_infl_req);
+
+	return (uintptr_t)vec;
 }
 
 static uint16_t

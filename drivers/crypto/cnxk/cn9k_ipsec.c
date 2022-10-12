@@ -29,11 +29,10 @@ cn9k_ipsec_outb_sa_create(struct cnxk_cpt_qp *qp,
 	union cpt_inst_w4 w4;
 	union cpt_inst_w7 w7;
 	size_t ctx_len;
-	uint8_t opcode;
 	uint8_t egrp;
 	int ret;
 
-	sess = get_sec_session_private_data(sec_sess);
+	sess = SECURITY_GET_SESS_PRIV(sec_sess);
 	sa = &sess->sa;
 
 	memset(sa, 0, sizeof(struct cn9k_ipsec_sa));
@@ -80,10 +79,9 @@ cn9k_ipsec_outb_sa_create(struct cnxk_cpt_qp *qp,
 		return ret;
 
 	ctx_len = ret;
-	opcode = ROC_IE_ON_MAJOR_OP_WRITE_IPSEC_OUTBOUND;
 	egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_IE];
-	ret = roc_on_cpt_ctx_write(&qp->lf, (void *)&sa->out_sa, opcode,
-				   ctx_len, egrp);
+	ret = roc_on_cpt_ctx_write(&qp->lf, SECURITY_GET_SESS_PRIV_IOVA(sec_sess),
+				   false, ctx_len, egrp);
 
 	if (ret)
 		return ret;
@@ -110,7 +108,7 @@ cn9k_ipsec_outb_sa_create(struct cnxk_cpt_qp *qp,
 
 	w7.u64 = 0;
 	w7.s.egrp = egrp;
-	w7.s.cptr = rte_mempool_virt2iova(&sa->out_sa);
+	w7.s.cptr = SECURITY_GET_SESS_PRIV_IOVA(sec_sess);
 
 	inst_tmpl = &sa->inst;
 	inst_tmpl->w4 = w4.u64;
@@ -133,11 +131,10 @@ cn9k_ipsec_inb_sa_create(struct cnxk_cpt_qp *qp,
 	union cpt_inst_w4 w4;
 	union cpt_inst_w7 w7;
 	size_t ctx_len = 0;
-	uint8_t opcode;
 	uint8_t egrp;
 	int ret = 0;
 
-	sess = get_sec_session_private_data(sec_sess);
+	sess = SECURITY_GET_SESS_PRIV(sec_sess);
 	sa = &sess->sa;
 
 	memset(sa, 0, sizeof(struct cn9k_ipsec_sa));
@@ -172,10 +169,9 @@ cn9k_ipsec_inb_sa_create(struct cnxk_cpt_qp *qp,
 		sa->esn_en = 1;
 
 	ctx_len = ret;
-	opcode = ROC_IE_ON_MAJOR_OP_WRITE_IPSEC_INBOUND;
 	egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_IE];
-	ret = roc_on_cpt_ctx_write(&qp->lf, (void *)&sa->in_sa, opcode, ctx_len,
-				   egrp);
+	ret = roc_on_cpt_ctx_write(&qp->lf, SECURITY_GET_SESS_PRIV_IOVA(sec_sess),
+				   true, ctx_len, egrp);
 	if (ret)
 		return ret;
 
@@ -188,7 +184,7 @@ cn9k_ipsec_inb_sa_create(struct cnxk_cpt_qp *qp,
 	w4.s.param2 = param2.u16;
 
 	w7.s.egrp = egrp;
-	w7.s.cptr = rte_mempool_virt2iova(&sa->in_sa);
+	w7.s.cptr = SECURITY_GET_SESS_PRIV_IOVA(sec_sess);
 
 	inst_tmpl = &sa->inst;
 	inst_tmpl->w4 = w4.u64;
@@ -252,6 +248,12 @@ cn9k_ipsec_xform_verify(struct rte_security_ipsec_xform *ipsec,
 				plt_err("Transport mode AES-CBC AES-XCBC is not supported");
 				return -ENOTSUP;
 			}
+
+			if ((cipher->algo == RTE_CRYPTO_CIPHER_3DES_CBC) &&
+			    (auth->algo == RTE_CRYPTO_AUTH_AES_XCBC_MAC)) {
+				plt_err("Transport mode 3DES-CBC AES-XCBC is not supported");
+				return -ENOTSUP;
+			}
 		}
 	}
 
@@ -293,40 +295,20 @@ cn9k_ipsec_session_create(void *dev,
 
 static int
 cn9k_sec_session_create(void *device, struct rte_security_session_conf *conf,
-			struct rte_security_session *sess,
-			struct rte_mempool *mempool)
+			struct rte_security_session *sess)
 {
-	struct cn9k_sec_session *priv;
-	int ret;
+	struct cn9k_sec_session *priv = SECURITY_GET_SESS_PRIV(sess);
 
 	if (conf->action_type != RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL)
 		return -EINVAL;
 
-	if (rte_mempool_get(mempool, (void **)&priv)) {
-		plt_err("Could not allocate security session private data");
-		return -ENOMEM;
-	}
-
 	memset(priv, 0, sizeof(*priv));
 
-	set_sec_session_private_data(sess, priv);
+	if (conf->protocol != RTE_SECURITY_PROTOCOL_IPSEC)
+		return -ENOTSUP;
 
-	if (conf->protocol != RTE_SECURITY_PROTOCOL_IPSEC) {
-		ret = -ENOTSUP;
-		goto mempool_put;
-	}
-
-	ret = cn9k_ipsec_session_create(device, &conf->ipsec,
+	return cn9k_ipsec_session_create(device, &conf->ipsec,
 					conf->crypto_xform, sess);
-	if (ret)
-		goto mempool_put;
-
-	return 0;
-
-mempool_put:
-	rte_mempool_put(mempool, priv);
-	set_sec_session_private_data(sess, NULL);
-	return ret;
 }
 
 static int
@@ -335,11 +317,10 @@ cn9k_sec_session_destroy(void *device __rte_unused,
 {
 	struct roc_ie_on_outb_sa *out_sa;
 	struct cn9k_sec_session *priv;
-	struct rte_mempool *sess_mp;
 	struct roc_ie_on_sa_ctl *ctl;
 	struct cn9k_ipsec_sa *sa;
 
-	priv = get_sec_session_private_data(sess);
+	priv = SECURITY_GET_SESS_PRIV(sess);
 	if (priv == NULL)
 		return 0;
 
@@ -351,12 +332,7 @@ cn9k_sec_session_destroy(void *device __rte_unused,
 
 	rte_io_wmb();
 
-	sess_mp = rte_mempool_from_obj(priv);
-
 	memset(priv, 0, sizeof(*priv));
-
-	set_sec_session_private_data(sess, NULL);
-	rte_mempool_put(sess_mp, priv);
 
 	return 0;
 }

@@ -3,6 +3,7 @@
  * Copyright(c) 2014 6WIND S.A.
  */
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -816,7 +817,7 @@ rte_eal_init(int argc, char **argv)
 
 		/* Set thread_name for aid in debugging. */
 		snprintf(thread_name, sizeof(thread_name),
-				"lcore-worker-%d", i);
+				"rte-worker-%d", i);
 		rte_thread_setname(lcore_config[i].thread_id, thread_name);
 
 		ret = pthread_setaffinity_np(lcore_config[i].thread_id,
@@ -893,6 +894,7 @@ rte_eal_cleanup(void)
 		eal_get_internal_configuration();
 	rte_service_finalize();
 	rte_mp_channel_cleanup();
+	eal_bus_cleanup();
 	rte_trace_save();
 	eal_trace_fini();
 	/* after this point, any DPDK pointers will become dangling */

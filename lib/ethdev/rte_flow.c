@@ -97,9 +97,6 @@ static const struct rte_flow_desc_data rte_flow_desc_item[] = {
 	MK_FLOW_ITEM(VOID, 0),
 	MK_FLOW_ITEM(INVERT, 0),
 	MK_FLOW_ITEM(ANY, sizeof(struct rte_flow_item_any)),
-	MK_FLOW_ITEM(PF, 0),
-	MK_FLOW_ITEM(VF, sizeof(struct rte_flow_item_vf)),
-	MK_FLOW_ITEM(PHY_PORT, sizeof(struct rte_flow_item_phy_port)),
 	MK_FLOW_ITEM(PORT_ID, sizeof(struct rte_flow_item_port_id)),
 	MK_FLOW_ITEM(RAW, sizeof(struct rte_flow_item_raw)),
 	MK_FLOW_ITEM(ETH, sizeof(struct rte_flow_item_eth)),
@@ -159,6 +156,7 @@ static const struct rte_flow_desc_data rte_flow_desc_item[] = {
 			rte_flow_item_flex_conv),
 	MK_FLOW_ITEM(L2TPV2, sizeof(struct rte_flow_item_l2tpv2)),
 	MK_FLOW_ITEM(PPP, sizeof(struct rte_flow_item_ppp)),
+	MK_FLOW_ITEM(METER_COLOR, sizeof(struct rte_flow_item_meter_color)),
 };
 
 /** Generate flow_action[] entry. */
@@ -191,18 +189,10 @@ static const struct rte_flow_desc_data rte_flow_desc_action[] = {
 	MK_FLOW_ACTION(RSS, sizeof(struct rte_flow_action_rss)),
 	MK_FLOW_ACTION(PF, 0),
 	MK_FLOW_ACTION(VF, sizeof(struct rte_flow_action_vf)),
-	MK_FLOW_ACTION(PHY_PORT, sizeof(struct rte_flow_action_phy_port)),
 	MK_FLOW_ACTION(PORT_ID, sizeof(struct rte_flow_action_port_id)),
 	MK_FLOW_ACTION(METER, sizeof(struct rte_flow_action_meter)),
 	MK_FLOW_ACTION(SECURITY, sizeof(struct rte_flow_action_security)),
-	MK_FLOW_ACTION(OF_SET_MPLS_TTL,
-		       sizeof(struct rte_flow_action_of_set_mpls_ttl)),
-	MK_FLOW_ACTION(OF_DEC_MPLS_TTL, 0),
-	MK_FLOW_ACTION(OF_SET_NW_TTL,
-		       sizeof(struct rte_flow_action_of_set_nw_ttl)),
 	MK_FLOW_ACTION(OF_DEC_NW_TTL, 0),
-	MK_FLOW_ACTION(OF_COPY_TTL_OUT, 0),
-	MK_FLOW_ACTION(OF_COPY_TTL_IN, 0),
 	MK_FLOW_ACTION(OF_POP_VLAN, 0),
 	MK_FLOW_ACTION(OF_PUSH_VLAN,
 		       sizeof(struct rte_flow_action_of_push_vlan)),
@@ -259,6 +249,8 @@ static const struct rte_flow_desc_data rte_flow_desc_action[] = {
 	MK_FLOW_ACTION(CONNTRACK, sizeof(struct rte_flow_action_conntrack)),
 	MK_FLOW_ACTION(PORT_REPRESENTOR, sizeof(struct rte_flow_action_ethdev)),
 	MK_FLOW_ACTION(REPRESENTED_PORT, sizeof(struct rte_flow_action_ethdev)),
+	MK_FLOW_ACTION(METER_MARK, sizeof(struct rte_flow_action_meter_mark)),
+	MK_FLOW_ACTION(SEND_TO_KERNEL, 0),
 };
 
 int
@@ -356,6 +348,13 @@ rte_flow_validate(uint16_t port_id,
 	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
 	int ret;
+
+	if (likely(!!attr) && attr->transfer &&
+	    (attr->ingress || attr->egress)) {
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ATTR,
+					  attr, "cannot use attr ingress/egress with attr transfer");
+	}
 
 	if (unlikely(!ops))
 		return -rte_errno;
@@ -1842,5 +1841,23 @@ rte_flow_async_action_handle_update(uint16_t port_id,
 
 	ret = ops->async_action_handle_update(dev, queue_id, op_attr,
 					  action_handle, update, user_data, error);
+	return flow_err(port_id, ret, error);
+}
+
+int
+rte_flow_async_action_handle_query(uint16_t port_id,
+		uint32_t queue_id,
+		const struct rte_flow_op_attr *op_attr,
+		const struct rte_flow_action_handle *action_handle,
+		void *data,
+		void *user_data,
+		struct rte_flow_error *error)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
+	int ret;
+
+	ret = ops->async_action_handle_query(dev, queue_id, op_attr,
+					  action_handle, data, user_data, error);
 	return flow_err(port_id, ret, error);
 }

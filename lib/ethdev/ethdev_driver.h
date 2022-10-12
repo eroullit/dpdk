@@ -19,6 +19,7 @@ extern "C" {
  *
  */
 
+#include <dev_driver.h>
 #include <rte_ethdev.h>
 
 /**
@@ -598,7 +599,7 @@ typedef int (*eth_uc_all_hash_table_set_t)(struct rte_eth_dev *dev,
 /** @internal Set queue Tx rate. */
 typedef int (*eth_set_queue_rate_limit_t)(struct rte_eth_dev *dev,
 				uint16_t queue_idx,
-				uint16_t tx_rate);
+				uint32_t tx_rate);
 
 /** @internal Add tunneling UDP port. */
 typedef int (*eth_udp_tunnel_port_add_t)(struct rte_eth_dev *dev,
@@ -1056,6 +1057,18 @@ typedef int (*eth_ip_reassembly_conf_set_t)(struct rte_eth_dev *dev,
 
 /**
  * @internal
+ * Get supported header protocols of a PMD to split.
+ *
+ * @param dev
+ *   Ethdev handle of port.
+ *
+ * @return
+ *   An array pointer to store supported protocol headers.
+ */
+typedef const uint32_t *(*eth_buffer_split_supported_hdr_ptypes_get_t)(struct rte_eth_dev *dev);
+
+/**
+ * @internal
  * Dump private info from device to a file.
  *
  * @param dev
@@ -1092,6 +1105,70 @@ typedef int (*eth_rx_queue_avail_thresh_set_t)(struct rte_eth_dev *dev,
 typedef int (*eth_rx_queue_avail_thresh_query_t)(struct rte_eth_dev *dev,
 					uint16_t *rx_queue_id,
 					uint8_t *avail_thresh);
+
+/** @internal Get congestion management information. */
+typedef int (*eth_cman_info_get_t)(struct rte_eth_dev *dev,
+				struct rte_eth_cman_info *info);
+
+/** @internal Init congestion management structure with default values. */
+typedef int (*eth_cman_config_init_t)(struct rte_eth_dev *dev,
+				struct rte_eth_cman_config *config);
+
+/** @internal Configure congestion management on a port. */
+typedef int (*eth_cman_config_set_t)(struct rte_eth_dev *dev,
+				const struct rte_eth_cman_config *config);
+
+/** @internal Retrieve congestion management configuration of a port. */
+typedef int (*eth_cman_config_get_t)(struct rte_eth_dev *dev,
+				struct rte_eth_cman_config *config);
+
+/**
+ * @internal
+ * Dump Rx descriptor info to a file.
+ *
+ * It is used for debugging, not a dataplane API.
+ *
+ * @param dev
+ *   Port (ethdev) handle.
+ * @param queue_id
+ *   A Rx queue identifier on this port.
+ * @param offset
+ *   The offset of the descriptor starting from tail. (0 is the next
+ *   packet to be received by the driver).
+ * @param num
+ *   The number of the descriptors to dump.
+ * @param file
+ *   A pointer to a file for output.
+ * @return
+ *   Negative errno value on error, zero on success.
+ */
+typedef int (*eth_rx_descriptor_dump_t)(const struct rte_eth_dev *dev,
+					uint16_t queue_id, uint16_t offset,
+					uint16_t num, FILE *file);
+
+/**
+ * @internal
+ * Dump Tx descriptor info to a file.
+ *
+ * This API is used for debugging, not a dataplane API.
+ *
+ * @param dev
+ *   Port (ethdev) handle.
+ * @param queue_id
+ *   A Tx queue identifier on this port.
+ * @param offset
+ *   The offset of the descriptor starting from tail. (0 is the place where
+ *   the next packet will be send).
+ * @param num
+ *   The number of the descriptors to dump.
+ * @param file
+ *   A pointer to a file for output.
+ * @return
+ *   Negative errno value on error, zero on success.
+ */
+typedef int (*eth_tx_descriptor_dump_t)(const struct rte_eth_dev *dev,
+					uint16_t queue_id, uint16_t offset,
+					uint16_t num, FILE *file);
 
 /**
  * @internal A structure containing the functions exported by an Ethernet driver.
@@ -1301,6 +1378,9 @@ struct eth_dev_ops {
 	/** Set IP reassembly configuration */
 	eth_ip_reassembly_conf_set_t ip_reassembly_conf_set;
 
+	/** Get supported header ptypes to split */
+	eth_buffer_split_supported_hdr_ptypes_get_t buffer_split_supported_hdr_ptypes_get;
+
 	/** Dump private info from device */
 	eth_dev_priv_dump_t eth_dev_priv_dump;
 
@@ -1308,6 +1388,20 @@ struct eth_dev_ops {
 	eth_rx_queue_avail_thresh_set_t rx_queue_avail_thresh_set;
 	/** Query Rx queue available descriptors threshold event */
 	eth_rx_queue_avail_thresh_query_t rx_queue_avail_thresh_query;
+
+	/** Dump Rx descriptor info */
+	eth_rx_descriptor_dump_t eth_rx_descriptor_dump;
+	/** Dump Tx descriptor info */
+	eth_tx_descriptor_dump_t eth_tx_descriptor_dump;
+
+	/** Get congestion management information */
+	eth_cman_info_get_t cman_info_get;
+	/** Initialize congestion management structure with default values */
+	eth_cman_config_init_t cman_config_init;
+	/** Configure congestion management */
+	eth_cman_config_set_t cman_config_set;
+	/** Retrieve congestion management configuration */
+	eth_cman_config_get_t cman_config_get;
 };
 
 /**
@@ -1913,6 +2007,42 @@ struct rte_eth_tunnel_filter_conf {
 	enum rte_eth_tunnel_type tunnel_type; /**< Tunnel Type */
 	uint32_t tenant_id;     /**< Tenant ID to match: VNI, GRE key... */
 	uint16_t queue_id;      /**< Queue assigned to if match */
+};
+
+/**
+ *  Memory space that can be configured to store Flow Director filters
+ *  in the board memory.
+ */
+enum rte_eth_fdir_pballoc_type {
+	RTE_ETH_FDIR_PBALLOC_64K = 0,  /**< 64k. */
+	RTE_ETH_FDIR_PBALLOC_128K,     /**< 128k. */
+	RTE_ETH_FDIR_PBALLOC_256K,     /**< 256k. */
+};
+
+/**
+ *  Select report mode of FDIR hash information in Rx descriptors.
+ */
+enum rte_fdir_status_mode {
+	RTE_FDIR_NO_REPORT_STATUS = 0, /**< Never report FDIR hash. */
+	RTE_FDIR_REPORT_STATUS, /**< Only report FDIR hash for matching pkts. */
+	RTE_FDIR_REPORT_STATUS_ALWAYS, /**< Always report FDIR hash. */
+};
+
+/**
+ * A structure used to configure the Flow Director (FDIR) feature
+ * of an Ethernet port.
+ *
+ * If mode is RTE_FDIR_MODE_NONE, the pballoc value is ignored.
+ */
+struct rte_eth_fdir_conf {
+	enum rte_fdir_mode mode; /**< Flow Director mode. */
+	enum rte_eth_fdir_pballoc_type pballoc; /**< Space for FDIR filters. */
+	enum rte_fdir_status_mode status;  /**< How to report FDIR hash. */
+	/** Rx queue of packets matching a "drop" filter in perfect mode. */
+	uint8_t drop_queue;
+	struct rte_eth_fdir_masks mask;
+	/** Flex payload configuration. */
+	struct rte_eth_fdir_flex_conf flex_conf;
 };
 
 #ifdef __cplusplus

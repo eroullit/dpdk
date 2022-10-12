@@ -123,7 +123,7 @@ cn9k_sso_hws_flush_events(void *hws, uint8_t queue_id, uintptr_t base,
 {
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(arg);
 	uint64_t retry = CNXK_SSO_FLUSH_RETRY_MAX;
-	struct cnxk_timesync_info *tstamp;
+	struct cnxk_timesync_info **tstamp;
 	struct cn9k_sso_hws_dual *dws;
 	struct cn9k_sso_hws *ws;
 	uint64_t cq_ds_cnt = 1;
@@ -943,7 +943,7 @@ cn9k_sso_rx_adapter_caps_get(const struct rte_eventdev *event_dev,
 
 static void
 cn9k_sso_set_priv_mem(const struct rte_eventdev *event_dev, void *lookup_mem,
-		      void *tstmp_info)
+		      uint64_t aura __rte_unused)
 {
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
 	int i;
@@ -952,12 +952,18 @@ cn9k_sso_set_priv_mem(const struct rte_eventdev *event_dev, void *lookup_mem,
 		if (dev->dual_ws) {
 			struct cn9k_sso_hws_dual *dws =
 				event_dev->data->ports[i];
-			dws->lookup_mem = lookup_mem;
-			dws->tstamp = tstmp_info;
+			dws->xaq_lmt = dev->xaq_lmt;
+			dws->fc_mem = (uint64_t *)dev->fc_iova;
+			dws->tstamp = dev->tstamp;
+			if (lookup_mem)
+				dws->lookup_mem = lookup_mem;
 		} else {
 			struct cn9k_sso_hws *ws = event_dev->data->ports[i];
-			ws->lookup_mem = lookup_mem;
-			ws->tstamp = tstmp_info;
+			ws->xaq_lmt = dev->xaq_lmt;
+			ws->fc_mem = (uint64_t *)dev->fc_iova;
+			ws->tstamp = dev->tstamp;
+			if (lookup_mem)
+				ws->lookup_mem = lookup_mem;
 		}
 	}
 }
@@ -970,7 +976,6 @@ cn9k_sso_rx_adapter_queue_add(
 {
 	struct cn9k_eth_rxq *rxq;
 	void *lookup_mem;
-	void *tstmp_info;
 	int rc;
 
 	rc = strncmp(eth_dev->device->driver->name, "net_cn9k", 8);
@@ -984,8 +989,7 @@ cn9k_sso_rx_adapter_queue_add(
 
 	rxq = eth_dev->data->rx_queues[0];
 	lookup_mem = rxq->lookup_mem;
-	tstmp_info = rxq->tstamp;
-	cn9k_sso_set_priv_mem(event_dev, lookup_mem, tstmp_info);
+	cn9k_sso_set_priv_mem(event_dev, lookup_mem, 0);
 	cn9k_sso_fp_fns_set((struct rte_eventdev *)(uintptr_t)event_dev);
 
 	return 0;
@@ -1046,7 +1050,8 @@ cn9k_sso_txq_fc_update(const struct rte_eth_dev *eth_dev, int32_t tx_queue_id)
 			sq->nb_sqb_bufs_adj -= (cnxk_eth_dev->outb.nb_desc /
 						(sqes_per_sqb - 1));
 		txq->nb_sqb_bufs_adj = sq->nb_sqb_bufs_adj;
-		txq->nb_sqb_bufs_adj = (70 * txq->nb_sqb_bufs_adj) / 100;
+		txq->nb_sqb_bufs_adj =
+			(ROC_NIX_SQB_LOWER_THRESH * txq->nb_sqb_bufs_adj) / 100;
 	}
 }
 
@@ -1120,11 +1125,11 @@ cn9k_crypto_adapter_caps_get(const struct rte_eventdev *event_dev,
 static int
 cn9k_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
 			   const struct rte_cryptodev *cdev,
-			   int32_t queue_pair_id, const struct rte_event *event)
+			   int32_t queue_pair_id,
+			   const struct rte_event_crypto_adapter_queue_conf *conf)
 {
 	struct cnxk_sso_evdev *dev = cnxk_sso_pmd_priv(event_dev);
-
-	RTE_SET_USED(event);
+	int ret;
 
 	CNXK_VALID_DEV_OR_ERR_RET(event_dev->dev, "event_cn9k");
 	CNXK_VALID_DEV_OR_ERR_RET(cdev->device, "crypto_cn9k");
@@ -1132,18 +1137,28 @@ cn9k_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
 	dev->is_ca_internal_port = 1;
 	cn9k_sso_fp_fns_set((struct rte_eventdev *)(uintptr_t)event_dev);
 
-	return cnxk_crypto_adapter_qp_add(event_dev, cdev, queue_pair_id);
+	ret = cnxk_crypto_adapter_qp_add(event_dev, cdev, queue_pair_id, conf);
+	cn9k_sso_set_priv_mem(event_dev, NULL, 0);
+
+	return ret;
 }
 
 static int
-cn9k_crypto_adapter_qp_del(const struct rte_eventdev *event_dev,
-			   const struct rte_cryptodev *cdev,
+cn9k_crypto_adapter_qp_del(const struct rte_eventdev *event_dev, const struct rte_cryptodev *cdev,
 			   int32_t queue_pair_id)
 {
 	CNXK_VALID_DEV_OR_ERR_RET(event_dev->dev, "event_cn9k");
 	CNXK_VALID_DEV_OR_ERR_RET(cdev->device, "crypto_cn9k");
 
 	return cnxk_crypto_adapter_qp_del(cdev, queue_pair_id);
+}
+
+static int
+cn9k_tim_caps_get(const struct rte_eventdev *evdev, uint64_t flags,
+		  uint32_t *caps, const struct event_timer_adapter_ops **ops)
+{
+	return cnxk_tim_caps_get(evdev, flags, caps, ops,
+				 cn9k_sso_set_priv_mem);
 }
 
 static struct eventdev_ops cn9k_sso_dev_ops = {
@@ -1153,7 +1168,6 @@ static struct eventdev_ops cn9k_sso_dev_ops = {
 	.queue_def_conf = cnxk_sso_queue_def_conf,
 	.queue_setup = cnxk_sso_queue_setup,
 	.queue_release = cnxk_sso_queue_release,
-	.queue_attr_get = cnxk_sso_queue_attribute_get,
 	.queue_attr_set = cnxk_sso_queue_attribute_set,
 
 	.port_def_conf = cnxk_sso_port_def_conf,
@@ -1177,11 +1191,15 @@ static struct eventdev_ops cn9k_sso_dev_ops = {
 	.eth_tx_adapter_stop = cnxk_sso_tx_adapter_stop,
 	.eth_tx_adapter_free = cnxk_sso_tx_adapter_free,
 
-	.timer_adapter_caps_get = cnxk_tim_caps_get,
+	.timer_adapter_caps_get = cn9k_tim_caps_get,
 
 	.crypto_adapter_caps_get = cn9k_crypto_adapter_caps_get,
 	.crypto_adapter_queue_pair_add = cn9k_crypto_adapter_qp_add,
 	.crypto_adapter_queue_pair_del = cn9k_crypto_adapter_qp_del,
+
+	.xstats_get = cnxk_sso_xstats_get,
+	.xstats_reset = cnxk_sso_xstats_reset,
+	.xstats_get_names = cnxk_sso_xstats_get_names,
 
 	.dump = cnxk_sso_dump,
 	.dev_start = cn9k_sso_start,

@@ -5,8 +5,6 @@
 #ifndef _PMD_AESNI_MB_PRIV_H_
 #define _PMD_AESNI_MB_PRIV_H_
 
-#include <intel-ipsec-mb.h>
-
 #if defined(RTE_LIB_SECURITY)
 #define AESNI_MB_DOCSIS_SEC_ENABLED 1
 #include <rte_security.h>
@@ -568,8 +566,13 @@ static const struct rte_cryptodev_capabilities aesni_mb_capabilities[] = {
 				},
 				.digest_size = {
 					.min = 4,
+#if IMB_VERSION(1, 2, 0) > IMB_VERSION_NUM
+					.max = 16,
+					.increment = 4
+#else
 					.max = 4,
 					.increment = 0
+#endif
 				},
 				.iv_size = {
 					.min = 16,

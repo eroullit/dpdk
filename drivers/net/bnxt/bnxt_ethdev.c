@@ -6,7 +6,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
-#include <rte_dev.h>
+#include <dev_driver.h>
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
 #include <rte_malloc.h>
@@ -1654,6 +1654,7 @@ static void bnxt_drv_uninit(struct bnxt *bp)
 	bnxt_free_link_info(bp);
 	bnxt_free_parent_info(bp);
 	bnxt_uninit_locks(bp);
+	bnxt_free_rep_info(bp);
 
 	rte_memzone_free((const struct rte_memzone *)bp->tx_mem_zone);
 	bp->tx_mem_zone = NULL;
@@ -3030,7 +3031,7 @@ int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 	/* Return if port is active */
 	if (eth_dev->data->dev_started) {
 		PMD_DRV_LOG(ERR, "Stop port before changing MTU\n");
-		return -EPERM;
+		return -EBUSY;
 	}
 
 	/* Exit if receive queues are not configured yet */
@@ -5977,9 +5978,7 @@ bnxt_uninit_resources(struct bnxt *bp, bool reconfig_dev)
 	bnxt_uninit_ctx_mem(bp);
 
 	bnxt_free_flow_stats_info(bp);
-	if (bp->rep_info != NULL)
-		bnxt_free_switch_domain(bp);
-	bnxt_free_rep_info(bp);
+	bnxt_free_switch_domain(bp);
 	rte_free(bp->ptp_cfg);
 	bp->ptp_cfg = NULL;
 	return rc;

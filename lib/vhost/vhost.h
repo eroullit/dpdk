@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <sys/queue.h>
 #include <unistd.h>
 #include <linux/virtio_net.h>
@@ -37,6 +38,8 @@
 #define VIRTIO_DEV_LEGACY_OL_FLAGS ((uint32_t)1 << 5)
 /*  Used to indicate the application has requested statistics collection */
 #define VIRTIO_DEV_STATS_ENABLED ((uint32_t)1 << 6)
+/*  Used to indicate the application has requested iommu support */
+#define VIRTIO_DEV_SUPPORT_IOMMU ((uint32_t)1 << 7)
 
 /* Backend value set by guest. */
 #define VIRTIO_DEV_STOPPED -1
@@ -803,7 +806,8 @@ int alloc_vring_queue(struct virtio_net *dev, uint32_t vring_idx);
 void vhost_attach_vdpa_device(int vid, struct rte_vdpa_device *dev);
 
 void vhost_set_ifname(int, const char *if_name, unsigned int if_len);
-void vhost_setup_virtio_net(int vid, bool enable, bool legacy_ol_flags, bool stats_enabled);
+void vhost_setup_virtio_net(int vid, bool enable, bool legacy_ol_flags, bool stats_enabled,
+	bool support_iommu);
 void vhost_enable_extbuf(int vid);
 void vhost_enable_linearbuf(int vid);
 int vhost_enable_guest_notification(struct virtio_net *dev,
@@ -967,7 +971,7 @@ restore_mbuf(struct rte_mbuf *m)
 		/* start of buffer is after mbuf structure and priv data */
 
 		m->buf_addr = (char *)m + mbuf_size;
-		m->buf_iova = rte_mempool_virt2iova(m) + mbuf_size;
+		rte_mbuf_iova_set(m, rte_mempool_virt2iova(m) + mbuf_size);
 		m = m->next;
 	}
 }

@@ -4,8 +4,15 @@
 
 .. include:: <isonum.txt>
 
-MLX5 Ethernet Poll Mode Driver
-==============================
+NVIDIA MLX5 Ethernet Driver
+===========================
+
+.. note::
+
+   NVIDIA acquired Mellanox Technologies in 2020.
+   The DPDK documentation and code might still include instances
+   of or references to Mellanox trademarks (like BlueField and ConnectX)
+   that are now NVIDIA trademarks.
 
 The mlx5 Ethernet poll mode driver library (**librte_net_mlx5**) provides support
 for **NVIDIA ConnectX-4**, **NVIDIA ConnectX-4 Lx** , **NVIDIA ConnectX-5**,
@@ -29,7 +36,8 @@ This means legacy linux control tools (for example: ethtool, ifconfig and
 more) can operate on the same network interfaces that owned by the DPDK
 application.
 
-See :doc:`../../platform/mlx5` guide for more design details.
+See :doc:`../../platform/mlx5` guide for more design details,
+including prerequisites installation.
 
 Features
 --------
@@ -473,6 +481,10 @@ Limitations
   - meter profile packet mode is supported.
   - meter profiles of RFC2697, RFC2698 and RFC4115 are supported.
   - RFC4115 implementation is following MEF, meaning yellow traffic may reclaim unused green bandwidth when green token bucket is full.
+  - When using DV flow engine (``dv_flow_en`` = 1),
+    if meter has drop count
+    or meter hierarchy contains any meter that uses drop count,
+    it cannot be used by flow rule matching all ports.
 
 - Integrity:
 
@@ -507,7 +519,7 @@ Limitations
 
 - Bonding under socket direct mode
 
-  - Needs OFED 5.4+.
+  - Needs MLNX_OFED 5.4+.
 
 - Timestamps:
 
@@ -537,7 +549,7 @@ Limitations
   - key
   - sequence
 
-  Matching on checksum and sequence needs OFED 5.6+.
+  Matching on checksum and sequence needs MLNX_OFED 5.6+.
 
 - The NIC egress flow rules on representor port are not supported.
 
@@ -632,7 +644,7 @@ for an additional list of options shared with other mlx5 drivers.
   dropping a packet. Once the timer is expired, the delay drop will be
   deactivated for all the Rx queues with this feature enable. To re-activate
   it, a rearming is needed and it is part of the kernel driver starting from
-  OFED 5.5.
+  MLNX_OFED 5.5.
 
   To enable / disable the delay drop rearming, the private flag ``dropless_rq``
   can be set and queried via ethtool:
@@ -1273,6 +1285,14 @@ There are multiple Rx burst functions with different advantages and limitations.
 Supported hardware offloads
 ---------------------------
 
+Below tables show offload support depending on hardware, firmware,
+and Linux software support.
+
+The :ref:`Linux prerequisites <mlx5_linux_prerequisites>`
+are Linux kernel and rdma-core libraries.
+These dependencies are also packaged in MLNX_OFED or MLNX_EN,
+shortened below as "OFED".
+
 .. table:: Minimal SW/HW versions for queue offloads
 
    ============== ===== ===== ========= ===== ========== =============
@@ -1481,6 +1501,48 @@ All references to these flows held by the application should be discarded
 directly but neither destroyed nor flushed.
 
 The application should re-create the flows as required after the port restart.
+
+
+Notes for hairpin
+-----------------
+
+NVIDIA ConnectX and BlueField devices support
+specifying memory placement for hairpin Rx and Tx queues.
+This feature requires NVIDIA MLNX_OFED 5.8.
+
+By default, data buffers and packet descriptors for hairpin queues
+are placed in device memory
+which is shared with other resources (e.g. flow rules).
+
+Starting with DPDK 22.11 and NVIDIA MLNX_OFED 5.8,
+applications are allowed to:
+
+#. Place data buffers and Rx packet descriptors in dedicated device memory.
+   Application can request that configuration
+   through ``use_locked_device_memory`` configuration option.
+
+   Placing data buffers and Rx packet descriptors in dedicated device memory
+   can decrease latency on hairpinned traffic,
+   since traffic processing for the hairpin queue will not be memory starved.
+
+   However, reserving device memory for hairpin Rx queues
+   may decrease throughput under heavy load,
+   since less resources will be available on device.
+
+   This option is supported only for Rx hairpin queues.
+
+#. Place Tx packet descriptors in host memory.
+   Application can request that configuration
+   through ``use_rte_memory`` configuration option.
+
+   Placing Tx packet descritors in host memory can increase traffic throughput.
+   This results in more resources available on the device for other purposes,
+   which reduces memory contention on device.
+   Side effect of this option is visible increase in latency,
+   since each packet incurs additional PCI transactions.
+
+   This option is supported only for Tx hairpin queues.
+
 
 Notes for testpmd
 -----------------
@@ -1740,7 +1802,7 @@ Dependency on mstflint package
 
 In order to configure host shaper register,
 ``librte_net_mlx5`` depends on ``libmtcr_ul``
-which can be installed from OFED mstflint package.
+which can be installed from MLNX_OFED mstflint package.
 Meson detects ``libmtcr_ul`` existence at configure stage.
 If the library is detected, the application must link with ``-lmtcr_ul``,
 as done by the pkg-config file libdpdk.pc.

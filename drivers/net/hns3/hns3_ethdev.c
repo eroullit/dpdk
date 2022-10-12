@@ -3,11 +3,11 @@
  */
 
 #include <rte_alarm.h>
-#include <rte_bus_pci.h>
+#include <bus_pci_driver.h>
 #include <ethdev_pci.h>
 
-#include "hns3_ethdev.h"
 #include "hns3_common.h"
+#include "hns3_dump.h"
 #include "hns3_logs.h"
 #include "hns3_rxtx.h"
 #include "hns3_intr.h"
@@ -15,6 +15,7 @@
 #include "hns3_dcb.h"
 #include "hns3_mp.h"
 #include "hns3_flow.h"
+#include "hns3_ethdev.h"
 
 #define HNS3_SERVICE_INTERVAL		1000000 /* us */
 #define HNS3_SERVICE_QUICK_INTERVAL	10
@@ -1712,6 +1713,7 @@ hns3_add_mc_mac_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 	char mac_str[RTE_ETHER_ADDR_FMT_SIZE];
 	uint8_t vf_id;
 	int ret;
+	int idx;
 
 	/* Check if mac addr is valid */
 	if (!rte_is_multicast_ether_addr(mac_addr)) {
@@ -1729,9 +1731,8 @@ hns3_add_mc_mac_addr(struct hns3_hw *hw, struct rte_ether_addr *mac_addr)
 					HNS3_MC_MAC_VLAN_OPS_DESC_NUM);
 	if (ret) {
 		/* This mac addr do not exist, add new entry for it */
-		memset(desc[0].data, 0, sizeof(desc[0].data));
-		memset(desc[1].data, 0, sizeof(desc[0].data));
-		memset(desc[2].data, 0, sizeof(desc[0].data));
+		for (idx = 0; idx < HNS3_MC_MAC_VLAN_OPS_DESC_NUM; idx++)
+			memset(desc[idx].data, 0, sizeof(desc[idx].data));
 	}
 
 	/*
@@ -2660,14 +2661,17 @@ static void
 hns3_parse_dev_specifications(struct hns3_hw *hw, struct hns3_cmd_desc *desc)
 {
 	struct hns3_dev_specs_0_cmd *req0;
+	struct hns3_dev_specs_1_cmd *req1;
 
 	req0 = (struct hns3_dev_specs_0_cmd *)desc[0].data;
+	req1 = (struct hns3_dev_specs_1_cmd *)desc[1].data;
 
 	hw->max_non_tso_bd_num = req0->max_non_tso_bd_num;
 	hw->rss_ind_tbl_size = rte_le_to_cpu_16(req0->rss_ind_tbl_size);
 	hw->rss_key_size = rte_le_to_cpu_16(req0->rss_key_size);
 	hw->max_tm_rate = rte_le_to_cpu_32(req0->max_tm_rate);
 	hw->intr.int_ql_max = rte_le_to_cpu_16(req0->intr_ql_max);
+	hw->min_tx_pkt_len = req1->min_tx_pkt_len;
 }
 
 static int
@@ -2762,7 +2766,6 @@ hns3_get_capability(struct hns3_hw *hw)
 	hw->tso_mode = HNS3_TSO_HW_CAL_PSEUDO_H_CSUM;
 	hw->vlan_mode = HNS3_HW_SHIFT_AND_DISCARD_MODE;
 	hw->drop_stats_mode = HNS3_PKTS_DROP_STATS_MODE2;
-	hw->min_tx_pkt_len = HNS3_HIP09_MIN_TX_PKT_LEN;
 	pf->tqp_config_mode = HNS3_FLEX_MAX_TQP_NUM_MODE;
 	hw->rss_info.ipv6_sctp_offload_supported = true;
 	hw->udp_cksum_mode = HNS3_SPECIAL_PORT_HW_CKSUM_MODE;
@@ -2807,6 +2810,7 @@ hns3_get_board_configuration(struct hns3_hw *hw)
 	struct hns3_cfg cfg;
 	int ret;
 
+	memset(&cfg, 0, sizeof(cfg));
 	ret = hns3_get_board_cfg(hw, &cfg);
 	if (ret) {
 		PMD_INIT_LOG(ERR, "get board config failed %d", ret);
@@ -5041,7 +5045,7 @@ hns3_do_start(struct hns3_adapter *hns, bool reset_queue)
 	if (ret)
 		goto err_set_link_speed;
 
-	return 0;
+	return hns3_restore_filter(hns);
 
 err_set_link_speed:
 	(void)hns3_cfg_mac_mode(hw, false);
@@ -5056,12 +5060,6 @@ err_config_mac_mode:
 	 */
 	(void)hns3_reset_all_tqps(hns);
 	return ret;
-}
-
-static void
-hns3_restore_filter(struct rte_eth_dev *dev)
-{
-	hns3_restore_rss_filter(dev);
 }
 
 static int
@@ -5119,8 +5117,6 @@ hns3_dev_start(struct rte_eth_dev *dev)
 	hns3_rx_scattered_calc(dev);
 	hns3_set_rxtx_function(dev);
 	hns3_mp_req_start_rxtx(dev);
-
-	hns3_restore_filter(dev);
 
 	/* Enable interrupt of all rx queues before enabling queues */
 	hns3_dev_all_rx_queue_intr_enable(hw, true);
@@ -5601,7 +5597,15 @@ hns3_is_reset_pending(struct hns3_adapter *hns)
 	struct hns3_hw *hw = &hns->hw;
 	enum hns3_reset_level reset;
 
-	hns3_check_event_cause(hns, NULL);
+	/*
+	 * Check the registers to confirm whether there is reset pending.
+	 * Note: This check may lead to schedule reset task, but only primary
+	 *       process can process the reset event. Therefore, limit the
+	 *       checking under only primary process.
+	 */
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		hns3_check_event_cause(hns, NULL);
+
 	reset = hns3_get_reset_level(hns, &hw->reset.pending);
 	if (reset != HNS3_NONE_RESET && hw->reset.level != HNS3_NONE_RESET &&
 	    hw->reset.level < reset) {
@@ -5902,10 +5906,6 @@ hns3_restore_conf(struct hns3_adapter *hns)
 		goto err_promisc;
 
 	ret = hns3_restore_vlan_conf(hns);
-	if (ret)
-		goto err_promisc;
-
-	ret = hns3_restore_all_fdir_filter(hns);
 	if (ret)
 		goto err_promisc;
 
@@ -6558,6 +6558,8 @@ static const struct eth_dev_ops hns3_eth_dev_ops = {
 	.timesync_read_time         = hns3_timesync_read_time,
 	.timesync_write_time        = hns3_timesync_write_time,
 	.eth_dev_priv_dump          = hns3_eth_dev_priv_dump,
+	.eth_rx_descriptor_dump     = hns3_rx_descriptor_dump,
+	.eth_tx_descriptor_dump     = hns3_tx_descriptor_dump,
 };
 
 static const struct hns3_reset_ops hns3_reset_ops = {

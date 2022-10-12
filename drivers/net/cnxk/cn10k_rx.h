@@ -171,7 +171,7 @@ nix_sec_attach_frags(const struct cpt_parse_hdr_s *hdr,
 
 	/* offset of 0 implies 256B, otherwise it implies offset*8B */
 	offset = (((offset - 1) & 0x1f) + 1) * 8;
-	finfo = RTE_PTR_ADD(hdr, offset + hdr->w2.fi_pad);
+	finfo = RTE_PTR_ADD(hdr, offset);
 
 	/* Frag-0: */
 	wqe = (uint64_t *)(rte_be_to_cpu_64(hdr->wqe_ptr));
@@ -300,7 +300,7 @@ nix_sec_reassemble_frags(const struct cpt_parse_hdr_s *hdr, uint64_t cq_w1,
 
 	/* offset of 0 implies 256B, otherwise it implies offset*8B */
 	offset = (((offset - 1) & 0x1f) + 1) * 8;
-	finfo = RTE_PTR_ADD(hdr, offset + hdr->w2.fi_pad);
+	finfo = RTE_PTR_ADD(hdr, offset);
 
 	/* Frag-0: */
 	wqe = (uint64_t *)rte_be_to_cpu_64(hdr->wqe_ptr);
@@ -685,20 +685,32 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf,
 	struct rte_mbuf *head;
 	const rte_iova_t *eol;
 	uint8_t nb_segs;
+	uint64_t cq_w1;
+	int64_t len;
 	uint64_t sg;
+
+	cq_w1 = *(const uint64_t *)rx;
+	/* Use inner rx parse for meta pkts sg list */
+	if (cq_w1 & BIT(11) && flags & NIX_RX_OFFLOAD_SECURITY_F) {
+		const uint64_t *wqe = (const uint64_t *)(mbuf + 1);
+		rx = (const union nix_rx_parse_u *)(wqe + 1);
+	}
 
 	sg = *(const uint64_t *)(rx + 1);
 	nb_segs = (sg >> 48) & 0x3;
 
-	if (nb_segs == 1 && !(flags & NIX_RX_SEC_REASSEMBLY_F)) {
-		mbuf->next = NULL;
+	if (nb_segs == 1)
 		return;
-	}
 
-	mbuf->pkt_len = (rx->pkt_lenm1 + 1) - (flags & NIX_RX_OFFLOAD_TSTAMP_F ?
-					       CNXK_NIX_TIMESYNC_RX_OFFSET : 0);
-	mbuf->data_len = (sg & 0xFFFF) - (flags & NIX_RX_OFFLOAD_TSTAMP_F ?
-					  CNXK_NIX_TIMESYNC_RX_OFFSET : 0);
+	/* For security we have already updated right pkt_len */
+	if (cq_w1 & BIT(11) && flags & NIX_RX_OFFLOAD_SECURITY_F)
+		len = mbuf->pkt_len;
+	else
+		len = rx->pkt_lenm1 + 1;
+	mbuf->pkt_len = len - (flags & NIX_RX_OFFLOAD_TSTAMP_F ? CNXK_NIX_TIMESYNC_RX_OFFSET : 0);
+	mbuf->data_len =
+		(sg & 0xFFFF) - (flags & NIX_RX_OFFLOAD_TSTAMP_F ? CNXK_NIX_TIMESYNC_RX_OFFSET : 0);
+	len -= mbuf->data_len;
 	mbuf->nb_segs = nb_segs;
 	sg = sg >> 16;
 
@@ -717,6 +729,7 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf,
 		RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
 
 		mbuf->data_len = sg & 0xFFFF;
+		len -= sg & 0XFFFF;
 		sg = sg >> 16;
 		*(uint64_t *)(&mbuf->rearm_data) = rearm;
 		nb_segs--;
@@ -729,7 +742,10 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf,
 			iova_list = (const rte_iova_t *)(iova_list + 1);
 		}
 	}
-	mbuf->next = NULL;
+
+	/* Adjust last mbuf data length with negative offset for security pkts if needed */
+	if (cq_w1 & BIT(11) && flags & NIX_RX_OFFLOAD_SECURITY_F && len < 0)
+		mbuf->data_len += len;
 }
 
 static __rte_always_inline void
@@ -787,9 +803,9 @@ cn10k_nix_cqe_to_mbuf(const struct nix_cqe_hdr_s *cq, const uint32_t tag,
 		 * For multi segment packets, mbuf length correction according
 		 * to Rx timestamp length will be handled later during
 		 * timestamp data process.
-		 * Hence, flag argument is not required.
+		 * Hence, timestamp flag argument is not required.
 		 */
-		nix_cqe_xtract_mseg(rx, mbuf, val, 0);
+		nix_cqe_xtract_mseg(rx, mbuf, val, flag & ~NIX_RX_OFFLOAD_TSTAMP_F);
 }
 
 static inline uint16_t
@@ -877,7 +893,7 @@ cn10k_nix_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t pkts,
 	nb_pkts = nix_rx_nb_pkts(rxq, wdata, pkts, qmask);
 
 	if (flags & NIX_RX_OFFLOAD_SECURITY_F) {
-		aura_handle = rxq->aura_handle;
+		aura_handle = rxq->meta_aura;
 		sa_base = rxq->sa_base;
 		sa_base &= ~(ROC_NIX_INL_SA_BASE_ALIGN - 1);
 		ROC_LMT_BASE_ID_GET(lbase, lmt_id);
@@ -984,7 +1000,7 @@ static __rte_always_inline uint16_t
 cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 			   const uint16_t flags, void *lookup_mem,
 			   struct cnxk_timesync_info *tstamp,
-			   uintptr_t lmt_base)
+			   uintptr_t lmt_base, uint64_t meta_aura)
 {
 	struct cn10k_eth_rxq *rxq = args;
 	const uint64_t mbuf_initializer = (flags & NIX_RX_VWQE_F) ?
@@ -1003,10 +1019,10 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 	uint64x2_t rearm2 = vdupq_n_u64(mbuf_initializer);
 	uint64x2_t rearm3 = vdupq_n_u64(mbuf_initializer);
 	struct rte_mbuf *mbuf0, *mbuf1, *mbuf2, *mbuf3;
-	uint64_t aura_handle, lbase, laddr;
 	uint8_t loff = 0, lnum = 0, shft = 0;
 	uint8x16_t f0, f1, f2, f3;
 	uint16_t lmt_id, d_off;
+	uint64_t lbase, laddr;
 	uint16_t packets = 0;
 	uint16_t pkts_left;
 	uintptr_t sa_base;
@@ -1035,6 +1051,7 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 
 	if (flags & NIX_RX_OFFLOAD_SECURITY_F) {
 		if (flags & NIX_RX_VWQE_F) {
+			uint64_t sg_w1;
 			uint16_t port;
 
 			mbuf0 = (struct rte_mbuf *)((uintptr_t)mbufs[0] -
@@ -1042,10 +1059,15 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 			/* Pick first mbuf's aura handle assuming all
 			 * mbufs are from a vec and are from same RQ.
 			 */
-			aura_handle = mbuf0->pool->pool_id;
+			if (!meta_aura)
+				meta_aura = mbuf0->pool->pool_id;
 			/* Calculate offset from mbuf to actual data area */
-			d_off = ((uintptr_t)mbuf0->buf_addr - (uintptr_t)mbuf0);
-			d_off += (mbuf_initializer & 0xFFFF);
+			/* Zero aura's first skip i.e mbuf setup might not match the actual
+			 * offset as first skip is taken from second pass RQ. So compute
+			 * using diff b/w first SG pointer and mbuf addr.
+			 */
+			sg_w1 = *(uint64_t *)((uintptr_t)mbufs[0] + 72);
+			d_off = (sg_w1 - (uint64_t)mbuf0);
 
 			/* Get SA Base from lookup tbl using port_id */
 			port = mbuf_initializer >> 48;
@@ -1053,7 +1075,7 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 
 			lbase = lmt_base;
 		} else {
-			aura_handle = rxq->aura_handle;
+			meta_aura = rxq->meta_aura;
 			d_off = rxq->data_off;
 			sa_base = rxq->sa_base;
 			lbase = rxq->lmt_base;
@@ -1567,7 +1589,8 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 				ol_flags3, mbuf3);
 		}
 
-		if (flags & NIX_RX_OFFLOAD_TSTAMP_F) {
+		if ((flags & NIX_RX_OFFLOAD_TSTAMP_F) &&
+		    ((flags & NIX_RX_VWQE_F) && tstamp)) {
 			const uint16x8_t len_off = {
 				0,			     /* ptype   0:15 */
 				0,			     /* ptype  16:32 */
@@ -1720,7 +1743,7 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 				/* Update aura handle */
 				*(uint64_t *)(laddr - 8) =
 					(((uint64_t)(15 & 0x1) << 32) |
-				    roc_npa_aura_handle_to_aura(aura_handle));
+				    roc_npa_aura_handle_to_aura(meta_aura));
 				loff = loff - 15;
 				shft += 3;
 
@@ -1743,14 +1766,14 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 				/* Update aura handle */
 				*(uint64_t *)(laddr - 8) =
 					(((uint64_t)(loff & 0x1) << 32) |
-				    roc_npa_aura_handle_to_aura(aura_handle));
+				    roc_npa_aura_handle_to_aura(meta_aura));
 
 				data = (data & ~(0x7UL << shft)) |
 				       (((uint64_t)loff >> 1) << shft);
 
 				/* Send up to 16 lmt lines of pointers */
 				nix_sec_flush_meta_burst(lmt_id, data, lnum + 1,
-							 aura_handle);
+							 meta_aura);
 				rte_io_wmb();
 				lnum = 0;
 				loff = 0;
@@ -1768,13 +1791,13 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 		/* Update aura handle */
 		*(uint64_t *)(laddr - 8) =
 			(((uint64_t)(loff & 0x1) << 32) |
-			 roc_npa_aura_handle_to_aura(aura_handle));
+			 roc_npa_aura_handle_to_aura(meta_aura));
 
 		data = (data & ~(0x7UL << shft)) |
 		       (((uint64_t)loff >> 1) << shft);
 
 		/* Send up to 16 lmt lines of pointers */
-		nix_sec_flush_meta_burst(lmt_id, data, lnum + 1, aura_handle);
+		nix_sec_flush_meta_burst(lmt_id, data, lnum + 1, meta_aura);
 		if (flags & NIX_RX_VWQE_F)
 			plt_io_wmb();
 	}
@@ -1802,7 +1825,7 @@ static inline uint16_t
 cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 			   const uint16_t flags, void *lookup_mem,
 			   struct cnxk_timesync_info *tstamp,
-			   uintptr_t lmt_base)
+			   uintptr_t lmt_base, uint64_t meta_aura)
 {
 	RTE_SET_USED(args);
 	RTE_SET_USED(mbufs);
@@ -1811,6 +1834,7 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 	RTE_SET_USED(lookup_mem);
 	RTE_SET_USED(tstamp);
 	RTE_SET_USED(lmt_base);
+	RTE_SET_USED(meta_aura);
 
 	return 0;
 }
@@ -2037,7 +2061,7 @@ NIX_RX_FASTPATH_MODES
 		void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t pkts)      \
 	{                                                                      \
 		return cn10k_nix_recv_pkts_vector(rx_queue, rx_pkts, pkts,     \
-						  (flags), NULL, NULL, 0);     \
+						  (flags), NULL, NULL, 0, 0);  \
 	}
 
 #define NIX_RX_RECV_VEC_MSEG(fn, flags)                                        \

@@ -640,6 +640,22 @@ struct rte_event_queue_conf {
 	 * event device supported priority value.
 	 * Valid when the device has RTE_EVENT_DEV_CAP_QUEUE_QOS capability
 	 */
+	uint8_t weight;
+	/**< Weight of the event queue relative to other event queues.
+	 * The requested weight should be in the range of
+	 * [RTE_EVENT_DEV_WEIGHT_HIGHEST, RTE_EVENT_DEV_WEIGHT_LOWEST].
+	 * The implementation shall normalize the requested weight to event
+	 * device supported weight value.
+	 * Valid when the device has RTE_EVENT_DEV_CAP_QUEUE_QOS capability.
+	 */
+	uint8_t affinity;
+	/**< Affinity of the event queue relative to other event queues.
+	 * The requested affinity should be in the range of
+	 * [RTE_EVENT_DEV_AFFINITY_HIGHEST, RTE_EVENT_DEV_AFFINITY_LOWEST].
+	 * The implementation shall normalize the requested affinity to event
+	 * device supported affinity value.
+	 * Valid when the device has RTE_EVENT_DEV_CAP_QUEUE_QOS capability.
+	 */
 };
 
 /**
@@ -1007,8 +1023,8 @@ rte_event_dev_start(uint8_t dev_id);
 void
 rte_event_dev_stop(uint8_t dev_id);
 
-typedef void (*eventdev_stop_flush_t)(uint8_t dev_id, struct rte_event event,
-		void *arg);
+typedef void (*rte_eventdev_stop_flush_t)(uint8_t dev_id,
+					  struct rte_event event, void *arg);
 /**< Callback function called during rte_event_dev_stop(), invoked once per
  * flushed event.
  */
@@ -1037,9 +1053,8 @@ typedef void (*eventdev_stop_flush_t)(uint8_t dev_id, struct rte_event event,
  *
  * @see rte_event_dev_stop()
  */
-int
-rte_event_dev_stop_flush_callback_register(uint8_t dev_id,
-		eventdev_stop_flush_t callback, void *userdata);
+int rte_event_dev_stop_flush_callback_register(uint8_t dev_id,
+					       rte_eventdev_stop_flush_t callback, void *userdata);
 
 /**
  * Close an event device. The device cannot be restarted!
@@ -1060,8 +1075,10 @@ rte_event_dev_close(uint8_t dev_id);
  */
 struct rte_event_vector {
 	uint16_t nb_elem;
-	/**< Number of elements in this event vector. */
-	uint16_t rsvd : 15;
+	/**< Number of elements valid in this event vector. */
+	uint16_t elem_offset : 12;
+	/**< Offset into the vector array where valid elements start from. */
+	uint16_t rsvd : 3;
 	/**< Reserved for future use */
 	uint16_t attr_valid : 1;
 	/**< Indicates that the below union attributes have valid information.
@@ -1100,7 +1117,7 @@ struct rte_event_vector {
 #endif
 		struct rte_mbuf *mbufs[0];
 		void *ptrs[0];
-		uint64_t *u64s[0];
+		uint64_t u64s[0];
 #ifndef __cplusplus
 	} __rte_aligned(16);
 #endif
@@ -1203,6 +1220,9 @@ struct rte_event_vector {
 #define RTE_EVENT_TYPE_ETH_RX_ADAPTER_VECTOR                                   \
 	(RTE_EVENT_TYPE_VECTOR | RTE_EVENT_TYPE_ETH_RX_ADAPTER)
 /**< The event vector generated from eth Rx adapter. */
+#define RTE_EVENT_TYPE_CRYPTODEV_VECTOR                                        \
+	(RTE_EVENT_TYPE_VECTOR | RTE_EVENT_TYPE_CRYPTODEV)
+/**< The event vector generated from cryptodev adapter. */
 
 #define RTE_EVENT_TYPE_MAX              0x10
 /**< Maximum number of event types */
@@ -1418,6 +1438,11 @@ rte_event_timer_adapter_caps_get(uint8_t dev_id, uint32_t *caps);
 #define RTE_EVENT_CRYPTO_ADAPTER_CAP_SESSION_PRIVATE_DATA   0x8
 /**< Flag indicates HW/SW supports a mechanism to store and retrieve
  * the private data information along with the crypto session.
+ */
+
+#define RTE_EVENT_CRYPTO_ADAPTER_CAP_EVENT_VECTOR   0x10
+/**< Flag indicates HW is capable of aggregating processed
+ * crypto operations into rte_event_vector.
  */
 
 /**

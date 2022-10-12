@@ -377,7 +377,7 @@ roc_sso_hwgrp_hws_link_status(struct roc_sso *roc_sso, uint8_t hws,
 
 int
 roc_sso_hwgrp_qos_config(struct roc_sso *roc_sso, struct roc_sso_hwgrp_qos *qos,
-			 uint8_t nb_qos, uint32_t nb_xaq)
+			 uint8_t nb_qos)
 {
 	struct sso *sso = roc_sso_to_sso_priv(roc_sso);
 	struct dev *dev = &sso->dev;
@@ -386,7 +386,6 @@ roc_sso_hwgrp_qos_config(struct roc_sso *roc_sso, struct roc_sso_hwgrp_qos *qos,
 
 	plt_spinlock_lock(&sso->mbox_lock);
 	for (i = 0; i < nb_qos; i++) {
-		uint8_t xaq_prcnt = qos[i].xaq_prcnt;
 		uint8_t iaq_prcnt = qos[i].iaq_prcnt;
 		uint8_t taq_prcnt = qos[i].taq_prcnt;
 
@@ -405,7 +404,6 @@ roc_sso_hwgrp_qos_config(struct roc_sso *roc_sso, struct roc_sso_hwgrp_qos *qos,
 			}
 		}
 		req->grp = qos[i].hwgrp;
-		req->xaq_limit = (nb_xaq * (xaq_prcnt ? xaq_prcnt : 100)) / 100;
 		req->iaq_thr = (SSO_HWGRP_IAQ_MAX_THR_MASK *
 				(iaq_prcnt ? iaq_prcnt : 100)) /
 			       100;
@@ -473,7 +471,7 @@ sso_hwgrp_init_xaq_aura(struct dev *dev, struct roc_sso_xaq_data *xaq,
 	aura.fc_addr = (uint64_t)xaq->fc;
 	aura.fc_hyst_bits = 0; /* Store count on all updates */
 	rc = roc_npa_pool_create(&xaq->aura_handle, xaq_buf_size, xaq->nb_xaq,
-				 &aura, &pool);
+				 &aura, &pool, 0);
 	if (rc) {
 		plt_err("Failed to create XAQ pool");
 		goto npa_fail;

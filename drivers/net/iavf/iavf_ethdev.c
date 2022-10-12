@@ -2,6 +2,7 @@
  * Copyright(c) 2017 Intel Corporation
  */
 
+#include <ctype.h>
 #include <sys/queue.h>
 #include <stdio.h>
 #include <errno.h>
@@ -24,7 +25,7 @@
 #include <ethdev_pci.h>
 #include <rte_malloc.h>
 #include <rte_memzone.h>
-#include <rte_dev.h>
+#include <dev_driver.h>
 
 #include "iavf.h"
 #include "iavf_rxtx.h"
@@ -1134,6 +1135,7 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_SCTP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
+		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_TCP_TSO |
 		RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
 		RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
