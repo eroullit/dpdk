@@ -1,0 +1,31 @@
+name: "Microsoft DevSecOps"
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    # The branches below must be a subset of the branches above
+    branches: [ main ]
+  schedule:
+    - cron: '29 12 * * 0'
+
+jobs:
+  analyze:
+    name: Analyze
+    runs-on: windows-latest
+    env:
+      DEF_LIB: shared
+
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+    - uses: actions/checkout@v3
+    - name: Run Microsoft Security DevOps
+      uses: microsoft/security-devops-action@preview
+      id: msdo
+    - name: Upload results to Security tab
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: ${{ steps.msdo.outputs.sarifFile }}
