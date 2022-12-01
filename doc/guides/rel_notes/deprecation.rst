@@ -54,18 +54,36 @@ Deprecation Notices
   us extending existing enum/define.
   One solution can be using a fixed size array instead of ``.*MAX.*`` value.
 
-* ethdev: Announce moving from dedicated modify function for each field,
-  to using the general ``rte_flow_modify_field`` action.
-
 * ethdev: The flow API matching pattern structures, ``struct rte_flow_item_*``,
-  should start with relevant protocol header.
-  Some matching pattern structures implements this by duplicating protocol header
-  fields in the struct. To clarify the intention and to be sure protocol header
-  is intact, will replace those fields with relevant protocol header struct.
-  In v21.02 both individual protocol header fields and the protocol header struct
-  will be added as union, target is switch usage to the protocol header by time.
-  In v21.11 LTS, protocol header fields will be cleaned and only protocol header
-  struct will remain.
+  should start with relevant protocol header structure from lib/net/.
+  The individual protocol header fields and the protocol header struct
+  may be kept together in a union as a first migration step.
+
+  These items are not compliant (not including struct from lib/net/):
+
+  - ``rte_flow_item_ah``
+  - ``rte_flow_item_arp_eth_ipv4``
+  - ``rte_flow_item_e_tag``
+  - ``rte_flow_item_geneve``
+  - ``rte_flow_item_geneve_opt``
+  - ``rte_flow_item_gre``
+  - ``rte_flow_item_gtp``
+  - ``rte_flow_item_icmp6``
+  - ``rte_flow_item_icmp6_nd_na``
+  - ``rte_flow_item_icmp6_nd_ns``
+  - ``rte_flow_item_icmp6_nd_opt``
+  - ``rte_flow_item_icmp6_nd_opt_sla_eth``
+  - ``rte_flow_item_icmp6_nd_opt_tla_eth``
+  - ``rte_flow_item_igmp``
+  - ``rte_flow_item_ipv6_ext``
+  - ``rte_flow_item_l2tpv3oip``
+  - ``rte_flow_item_mpls``
+  - ``rte_flow_item_nsh``
+  - ``rte_flow_item_nvgre``
+  - ``rte_flow_item_pfcp``
+  - ``rte_flow_item_pppoe``
+  - ``rte_flow_item_pppoe_proto_id``
+  - ``rte_flow_item_vxlan_gpe``
 
 * ethdev: Queue specific stats fields will be removed from ``struct rte_eth_stats``.
   Mentioned fields are: ``q_ipackets``, ``q_opackets``, ``q_ibytes``, ``q_obytes``,
@@ -87,12 +105,17 @@ Deprecation Notices
   ``DEC_TTL``, ``SET_TTL``, ``SET_MAC_SRC``, ``SET_MAC_DST``, ``INC_TCP_SEQ``,
   ``DEC_TCP_SEQ``, ``INC_TCP_ACK``, ``DEC_TCP_ACK``, ``SET_IPV4_DSCP``,
   ``SET_IPV6_DSCP``, ``SET_TAG``, ``SET_META`` are marked as legacy and
-  superseded by the generic MODIFY_FIELD action.
-  The legacy actions should be deprecated in 22.07, once MODIFY_FIELD
-  alternative is implemented.
-  The legacy actions should be removed in DPDK 22.11.
+  superseded by the generic ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD``.
+  The legacy actions should be removed
+  once ``MODIFY_FIELD`` alternative is implemented in drivers.
 
 * cryptodev: The function ``rte_cryptodev_cb_fn`` will be updated
   to have another parameter ``qp_id`` to return the queue pair ID
   which got error interrupt to the application,
   so that application can reset that particular queue pair.
+
+* flow_classify: The flow_classify library and example have no maintainer.
+  The library is experimental and, as such, it could be removed from DPDK.
+  Its removal has been postponed to let potential users report interest
+  in maintaining it.
+  In the absence of such interest, this library will be removed in DPDK 23.11.

@@ -365,6 +365,10 @@ The command line options are:
     Set TX segment sizes or total packet length. Valid for ``tx-only``
     and ``flowgen`` forwarding modes.
 
+* ``--multi-rx-mempool``
+
+    Enable multiple mbuf pools per Rx queue.
+
 *   ``--txonly-multi-flow``
 
     Generate multiple flows in txonly mode.
@@ -414,12 +418,12 @@ The command line options are:
 
     Set the logical core N to perform bitrate calculation.
 
-*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|all>``
+*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|err_recovering|recovery_success|recovery_failed|all>``
 
     Enable printing the occurrence of the designated event. Using all will
     enable all of them.
 
-*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|all>``
+*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|err_recovering|recovery_success|recovery_failed|all>``
 
     Disable printing the occurrence of the designated event. Using all will
     disable all of them.
@@ -600,6 +604,7 @@ as follows:
 - ``dev_configure``
 - ``dev_start``
 - ``dev_stop``
+- ``dev_reset``
 - ``rx_queue_setup``
 - ``tx_queue_setup``
 - ``rx_queue_release``

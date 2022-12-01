@@ -5,6 +5,8 @@
 #ifndef RTE_PMD_PRIVATE_MLX5_H_
 #define RTE_PMD_PRIVATE_MLX5_H_
 
+#include <rte_compat.h>
+
 /**
  * @file
  * MLX5 public header.
@@ -138,6 +140,23 @@ int rte_pmd_mlx5_external_rx_queue_id_unmap(uint16_t port_id,
  */
 __rte_experimental
 int rte_pmd_mlx5_host_shaper_config(int port_id, uint8_t rate, uint32_t flags);
+
+/**
+ * Enable traffic for external SQ.
+ *
+ * @param[in] port_id
+ *   The port identifier of the Ethernet device.
+ * @param[in] sq_num
+ *   SQ HW number.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ *   Possible values for rte_errno:
+ *   - EINVAL - invalid sq_number or port type.
+ *   - ENODEV - there is no Ethernet device for this port id.
+ */
+__rte_experimental
+int rte_pmd_mlx5_external_sq_enable(uint16_t port_id, uint32_t sq_num);
 
 #ifdef __cplusplus
 }

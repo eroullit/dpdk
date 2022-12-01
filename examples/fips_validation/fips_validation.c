@@ -460,6 +460,8 @@ fips_test_parse_one_json_vector_set(void)
 	/* Vector sets contain the algorithm type, and nothing else we need. */
 	if (strstr(algo_str, "AES-GCM"))
 		info.algo = FIPS_TEST_ALGO_AES_GCM;
+	else if (strstr(algo_str, "AES-GMAC"))
+		info.algo = FIPS_TEST_ALGO_AES_GMAC;
 	else if (strstr(algo_str, "HMAC"))
 		info.algo = FIPS_TEST_ALGO_HMAC;
 	else if (strstr(algo_str, "CMAC"))
@@ -468,11 +470,17 @@ fips_test_parse_one_json_vector_set(void)
 		info.algo = FIPS_TEST_ALGO_AES_CBC;
 	else if (strstr(algo_str, "AES-XTS"))
 		info.algo = FIPS_TEST_ALGO_AES_XTS;
+	else if (strstr(algo_str, "AES-CTR"))
+		info.algo = FIPS_TEST_ALGO_AES_CTR;
 	else if (strstr(algo_str, "SHA"))
 		info.algo = FIPS_TEST_ALGO_SHA;
 	else if (strstr(algo_str, "TDES-CBC") ||
 		strstr(algo_str, "TDES-ECB"))
 		info.algo = FIPS_TEST_ALGO_TDES;
+	else if (strstr(algo_str, "RSA"))
+		info.algo = FIPS_TEST_ALGO_RSA;
+	else if (strstr(algo_str, "ECDSA"))
+		info.algo = FIPS_TEST_ALGO_ECDSA;
 	else
 		return -EINVAL;
 
@@ -638,10 +646,11 @@ parse_uint8_hex_str(const char *key, char *src, struct fips_val *val)
 	/*
 	 * Offset not applicable in case of JSON test vectors.
 	 */
-	RTE_SET_USED(key);
-#else
-	src += strlen(key);
+	if (info.file_type == FIPS_TYPE_JSON) {
+		RTE_SET_USED(key);
+	} else
 #endif
+		src += strlen(key);
 
 	len = strlen(src) / 2;
 
@@ -669,18 +678,16 @@ parse_uint8_hex_str(const char *key, char *src, struct fips_val *val)
 	return 0;
 }
 
+int
+parser_read_uint32_val(const char *key, char *src, struct fips_val *val)
+{
 #ifdef USE_JANSSON
-int
-parser_read_uint32_val(const char *key, char *src, struct fips_val *val)
-{
-	RTE_SET_USED(key);
+	if (info.file_type == FIPS_TYPE_JSON) {
+		RTE_SET_USED(key);
 
-	return parser_read_uint32(&val->len, src);
-}
-#else
-int
-parser_read_uint32_val(const char *key, char *src, struct fips_val *val)
-{
+		return parser_read_uint32(&val->len, src);
+	}
+# endif
 	char *data = src + strlen(key);
 	size_t data_len = strlen(data);
 	int ret;
@@ -701,7 +708,6 @@ parser_read_uint32_val(const char *key, char *src, struct fips_val *val)
 
 	return ret;
 }
-#endif
 
 int
 parser_read_uint32_bit_val(const char *key, char *src, struct fips_val *val)

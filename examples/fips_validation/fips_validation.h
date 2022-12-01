@@ -35,13 +35,17 @@
 enum fips_test_algorithms {
 		FIPS_TEST_ALGO_AES = 0,
 		FIPS_TEST_ALGO_AES_CBC,
+		FIPS_TEST_ALGO_AES_CTR,
 		FIPS_TEST_ALGO_AES_GCM,
+		FIPS_TEST_ALGO_AES_GMAC,
 		FIPS_TEST_ALGO_AES_CMAC,
 		FIPS_TEST_ALGO_AES_CCM,
 		FIPS_TEST_ALGO_AES_XTS,
 		FIPS_TEST_ALGO_HMAC,
 		FIPS_TEST_ALGO_TDES,
 		FIPS_TEST_ALGO_SHA,
+		FIPS_TEST_ALGO_RSA,
+		FIPS_TEST_ALGO_ECDSA,
 		FIPS_TEST_ALGO_MAX
 };
 
@@ -55,6 +59,9 @@ enum file_types {
 enum fips_test_op {
 	FIPS_TEST_ENC_AUTH_GEN = 1,
 	FIPS_TEST_DEC_AUTH_VERIF,
+	FIPS_TEST_ASYM_KEYGEN,
+	FIPS_TEST_ASYM_SIGGEN,
+	FIPS_TEST_ASYM_SIGVER
 };
 
 #define MAX_LINE_PER_VECTOR            16
@@ -78,11 +85,31 @@ struct fips_test_vector {
 			struct fips_val aad;
 		} aead;
 	};
+	struct {
+		struct fips_val seed;
+		struct fips_val signature;
+		struct fips_val e;
+		struct fips_val n;
+		struct fips_val d;
+		struct fips_val p;
+		struct fips_val q;
+		struct fips_val dp;
+		struct fips_val dq;
+		struct fips_val qinv;
+	} rsa;
+	struct {
+		struct fips_val seed;
+		struct fips_val pkey;
+		struct fips_val qx;
+		struct fips_val qy;
+		struct fips_val r;
+		struct fips_val s;
+		struct fips_val k;
+	} ecdsa;
 
 	struct fips_val pt;
 	struct fips_val ct;
 	struct fips_val iv;
-
 	enum rte_crypto_op_status status;
 };
 
@@ -105,6 +132,7 @@ enum fips_aesavs_test_types {
 	AESAVS_TYPE_MMT,
 	AESAVS_TYPE_MCT,
 	AESAVS_TYPE_AFT,
+	AESAVS_TYPE_CTR,
 };
 
 enum fips_tdes_test_types {
@@ -138,6 +166,16 @@ enum fips_sha_test_types {
 	SHA_MCT
 };
 
+enum fips_rsa_test_types {
+	RSA_AFT = 0,
+	RSA_GDT,
+	RSA_KAT
+};
+
+enum fips_ecdsa_test_types {
+	ECDSA_AFT = 0,
+};
+
 struct aesavs_interim_data {
 	enum fips_aesavs_test_types test_type;
 	uint32_t cipher_algo;
@@ -164,8 +202,9 @@ struct ccm_interim_data {
 };
 
 struct sha_interim_data {
-	enum fips_sha_test_types test_type;
+	/* keep algo always on top as it is also used in asym digest */
 	enum rte_crypto_auth_algorithm algo;
+	enum fips_sha_test_types test_type;
 };
 
 struct gcm_interim_data {
@@ -180,6 +219,23 @@ enum xts_tweak_modes {
 
 struct xts_interim_data {
 	enum xts_tweak_modes tweak_mode;
+};
+
+struct rsa_interim_data {
+	enum rte_crypto_auth_algorithm auth;
+	uint16_t modulo;
+	uint16_t saltlen;
+	enum rte_crypto_rsa_padding_type padding;
+	enum rte_crypto_rsa_priv_key_type privkey;
+	uint8_t random_msg;
+};
+
+struct ecdsa_interim_data {
+	enum rte_crypto_auth_algorithm auth;
+	enum rte_crypto_curve_id curve_id;
+	uint8_t curve_len;
+	uint8_t random_msg;
+	uint8_t pubkey_gen;
 };
 
 #ifdef USE_JANSSON
@@ -227,6 +283,8 @@ struct fips_test_interim_info {
 		struct sha_interim_data sha_data;
 		struct gcm_interim_data gcm_data;
 		struct xts_interim_data xts_data;
+		struct rsa_interim_data rsa_data;
+		struct ecdsa_interim_data ecdsa_data;
 	} interim_info;
 
 	enum fips_test_op op;
@@ -236,6 +294,7 @@ struct fips_test_interim_info {
 	const struct fips_test_callback *writeback_callbacks;
 
 	post_prcess_t parse_interim_writeback;
+	post_prcess_t post_interim_writeback;
 	post_prcess_t parse_writeback;
 	post_prcess_t kat_check;
 };
@@ -302,6 +361,15 @@ parse_test_sha_json_test_type(void);
 
 int
 parse_test_tdes_json_init(void);
+
+int
+parse_test_rsa_json_init(void);
+
+int
+parse_test_ecdsa_json_init(void);
+
+int
+fips_test_randomize_message(struct fips_val *msg, struct fips_val *rand);
 #endif /* USE_JANSSON */
 
 int
@@ -363,11 +431,14 @@ update_info_vec(uint32_t count);
 
 typedef int (*fips_test_one_case_t)(void);
 typedef int (*fips_prepare_op_t)(void);
-typedef int (*fips_prepare_xform_t)(struct rte_crypto_sym_xform *);
+typedef int (*fips_prepare_sym_xform_t)(struct rte_crypto_sym_xform *);
+typedef int (*fips_prepare_asym_xform_t)(struct rte_crypto_asym_xform *);
 
 struct fips_test_ops {
-	fips_prepare_xform_t prepare_xform;
-	fips_prepare_op_t prepare_op;
+	fips_prepare_sym_xform_t prepare_sym_xform;
+	fips_prepare_asym_xform_t prepare_asym_xform;
+	fips_prepare_op_t prepare_sym_op;
+	fips_prepare_op_t prepare_asym_op;
 	fips_test_one_case_t test;
 };
 

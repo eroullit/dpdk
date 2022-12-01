@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <sys/eventfd.h>
 
+#include <rte_compat.h>
 #include <rte_memory.h>
 #include <rte_mempool.h>
 
@@ -910,6 +911,21 @@ rte_vhost_clr_inflight_desc_packed(int vid, uint16_t vring_idx,
 int rte_vhost_vring_call(int vid, uint16_t vring_idx);
 
 /**
+ * Notify the guest that used descriptors have been added to the vring.  This
+ * function acts as a memory barrier.  This function will return -EAGAIN when
+ * vq's access lock is held by other thread, user should try again later.
+ *
+ * @param vid
+ *  vhost device ID
+ * @param vring_idx
+ *  vring index
+ * @return
+ *  0 on success, -1 on failure, -EAGAIN for another retry
+ */
+__rte_experimental
+int rte_vhost_vring_call_nonblock(int vid, uint16_t vring_idx);
+
+/**
  * Get vhost RX queue avail count.
  *
  * @param vid
@@ -1075,7 +1091,6 @@ rte_vhost_slave_config_change(int vid, bool need_reply);
  *  - Failure if lower than 0. The device ID or queue ID is invalid or
  +    statistics collection is not enabled.
  */
-__rte_experimental
 int
 rte_vhost_vring_stats_get_names(int vid, uint16_t queue_id,
 		struct rte_vhost_stat_name *name, unsigned int size);
@@ -1103,7 +1118,6 @@ rte_vhost_vring_stats_get_names(int vid, uint16_t queue_id,
  *  - Failure if lower than 0. The device ID or queue ID is invalid, or
  *    statistics collection is not enabled.
  */
-__rte_experimental
 int
 rte_vhost_vring_stats_get(int vid, uint16_t queue_id,
 		struct rte_vhost_stat *stats, unsigned int n);
@@ -1120,7 +1134,6 @@ rte_vhost_vring_stats_get(int vid, uint16_t queue_id,
  *  - Failure if lower than 0. The device ID or queue ID is invalid, or
  *    statistics collection is not enabled.
  */
-__rte_experimental
 int
 rte_vhost_vring_stats_reset(int vid, uint16_t queue_id);
 

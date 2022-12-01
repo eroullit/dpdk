@@ -680,7 +680,7 @@ cnxk_nix_rx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
 	first_skip += RTE_PKTMBUF_HEADROOM;
 	first_skip += rte_pktmbuf_priv_size(lpb_pool);
 	rq->first_skip = first_skip;
-	rq->later_skip = sizeof(struct rte_mbuf);
+	rq->later_skip = sizeof(struct rte_mbuf) + rte_pktmbuf_priv_size(mp);
 	rq->lpb_size = lpb_pool->elt_size;
 	if (roc_errata_nix_no_meta_aura())
 		rq->lpb_drop_ena = !(dev->rx_offloads & RTE_ETH_RX_OFFLOAD_SECURITY);
@@ -1744,6 +1744,10 @@ struct eth_dev_ops cnxk_eth_dev_ops = {
 	.tm_ops_get = cnxk_nix_tm_ops_get,
 	.mtr_ops_get = cnxk_nix_mtr_ops_get,
 	.eth_dev_priv_dump  = cnxk_nix_eth_dev_priv_dump,
+	.cman_info_get = cnxk_nix_cman_info_get,
+	.cman_config_init = cnxk_nix_cman_config_init,
+	.cman_config_set = cnxk_nix_cman_config_set,
+	.cman_config_get = cnxk_nix_cman_config_get,
 };
 
 static int

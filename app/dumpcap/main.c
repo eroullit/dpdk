@@ -61,9 +61,12 @@ static char *output_name;
 static const char *filter_str;
 static unsigned int ring_size = 2048;
 static const char *capture_comment;
+static const char *file_prefix;
 static uint32_t snaplen = RTE_MBUF_DEFAULT_BUF_SIZE;
 static bool dump_bpf;
 static bool show_interfaces;
+static bool select_interfaces;
+const char *interface_arg;
 
 static struct {
 	uint64_t  duration;	/* nanoseconds */
@@ -124,6 +127,7 @@ static void usage(void)
 	       "                           add a capture comment to the output file\n"
 	       "\n"
 	       "Miscellaneous:\n"
+	       "  --file-prefix=<prefix>   prefix to use for multi-process\n"
 	       "  -q                       don't report packet capture counts\n"
 	       "  -v, --version            print version information and exit\n"
 	       "  -h, --help               display this help and exit\n"
@@ -314,6 +318,7 @@ static void parse_opts(int argc, char **argv)
 	static const struct option long_options[] = {
 		{ "autostop",        required_argument, NULL, 'a' },
 		{ "capture-comment", required_argument, NULL, 0 },
+		{ "file-prefix",     required_argument, NULL, 0 },
 		{ "help",            no_argument,       NULL, 'h' },
 		{ "interface",       required_argument, NULL, 'i' },
 		{ "list-interfaces", no_argument,       NULL, 'D' },
@@ -334,11 +339,13 @@ static void parse_opts(int argc, char **argv)
 
 		switch (c) {
 		case 0:
-			switch (option_index) {
-			case 0:
+			if (!strcmp(long_options[option_index].name,
+				    "capture-comment")) {
 				capture_comment = optarg;
-				break;
-			default:
+			} else if (!strcmp(long_options[option_index].name,
+					   "file-prefix")) {
+				file_prefix = optarg;
+			} else {
 				usage();
 				exit(1);
 			}
@@ -370,7 +377,8 @@ static void parse_opts(int argc, char **argv)
 			usage();
 			exit(0);
 		case 'i':
-			select_interface(optarg);
+			select_interfaces = true;
+			interface_arg = optarg;
 			break;
 		case 'n':
 			use_pcapng = true;
@@ -516,11 +524,13 @@ static void dpdk_init(void)
 	static const char * const args[] = {
 		"dumpcap", "--proc-type", "secondary",
 		"--log-level", "notice"
-
 	};
-	const int eal_argc = RTE_DIM(args);
+	int eal_argc = RTE_DIM(args);
 	char **eal_argv;
 	unsigned int i;
+
+	if (file_prefix != NULL)
+		eal_argc += 2;
 
 	/* DPDK API requires mutable versions of command line arguments. */
 	eal_argv = calloc(eal_argc + 1, sizeof(char *));
@@ -530,6 +540,11 @@ static void dpdk_init(void)
 	eal_argv[0] = strdup(progname);
 	for (i = 1; i < RTE_DIM(args); i++)
 		eal_argv[i] = strdup(args[i]);
+
+	if (file_prefix != NULL) {
+		eal_argv[i++] = strdup("--file-prefix");
+		eal_argv[i++] = strdup(file_prefix);
+	}
 
 	if (rte_eal_init(eal_argc, eal_argv) < 0)
 		rte_exit(EXIT_FAILURE, "EAL init failed: is primary process running?\n");
@@ -637,6 +652,7 @@ static dumpcap_out_t create_output(void)
 	else {
 		mode_t mode = group_read ? 0640 : 0600;
 
+		fprintf(stderr, "File: %s\n", output_name);
 		fd = open(output_name, O_WRONLY | O_CREAT, mode);
 		if (fd < 0)
 			rte_exit(EXIT_FAILURE, "Can not open \"%s\": %s\n",
@@ -784,8 +800,13 @@ int main(int argc, char **argv)
 	struct rte_ring *r;
 	struct rte_mempool *mp;
 	dumpcap_out_t out;
+	char *p;
 
-	progname = argv[0];
+	p = strrchr(argv[0], '/');
+	if (p == NULL)
+		progname = argv[0];
+	else
+		progname = p + 1;
 
 	parse_opts(argc, argv);
 	dpdk_init();
@@ -795,6 +816,9 @@ int main(int argc, char **argv)
 
 	if (rte_eth_dev_count_avail() == 0)
 		rte_exit(EXIT_FAILURE, "No Ethernet ports found\n");
+
+	if (select_interfaces)
+		select_interface(interface_arg);
 
 	if (filter_str)
 		compile_filter();
@@ -849,7 +873,7 @@ int main(int argc, char **argv)
 		pcap_dump_close(out.dumper);
 
 	cleanup_pdump_resources();
-	rte_free(bpf_filter);
+
 	rte_ring_free(r);
 	rte_mempool_free(mp);
 

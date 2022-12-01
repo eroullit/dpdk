@@ -428,7 +428,12 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 			sa = (struct roc_ot_ipsec_outb_sa *)args;
 			priv = roc_nix_inl_ot_ipsec_outb_sa_sw_rsvd(sa);
 			desc.metadata = (uint64_t)priv->userdata;
-			desc.subtype = RTE_ETH_EVENT_IPSEC_SA_TIME_EXPIRY;
+			if (sa->w2.s.life_unit == ROC_IE_OT_SA_LIFE_UNIT_PKTS)
+				desc.subtype =
+					RTE_ETH_EVENT_IPSEC_SA_PKT_EXPIRY;
+			else
+				desc.subtype =
+					RTE_ETH_EVENT_IPSEC_SA_BYTE_EXPIRY;
 			eth_dev = &rte_eth_devices[soft_exp_event >> 8];
 			rte_eth_dev_callback_process(eth_dev,
 				RTE_ETH_EVENT_IPSEC, &desc);
@@ -473,6 +478,12 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 	switch (res->uc_compcode) {
 	case ROC_IE_OT_UCC_ERR_SA_OVERFLOW:
 		desc.subtype = RTE_ETH_EVENT_IPSEC_ESN_OVERFLOW;
+		break;
+	case ROC_IE_OT_UCC_ERR_SA_EXPIRED:
+		if (sa->w2.s.life_unit == ROC_IE_OT_SA_LIFE_UNIT_PKTS)
+			desc.subtype = RTE_ETH_EVENT_IPSEC_SA_PKT_HARD_EXPIRY;
+		else
+			desc.subtype = RTE_ETH_EVENT_IPSEC_SA_BYTE_HARD_EXPIRY;
 		break;
 	case ROC_IE_OT_UCC_ERR_PKT_IP:
 		warn_cnt++;
@@ -798,6 +809,8 @@ cn10k_eth_sec_session_create(void *device,
 		sess_priv.chksum = (!ipsec->options.ip_csum_enable << 1 |
 				    !ipsec->options.l4_csum_enable);
 		sess_priv.dec_ttl = ipsec->options.dec_ttl;
+		if (roc_model_is_cn10kb_a0())
+			sess_priv.nixtx_off = 1;
 
 		/* Pointer from eth_sec -> outb_sa */
 		eth_sec->sa = outb_sa;

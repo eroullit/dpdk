@@ -114,8 +114,9 @@ pci_common_set(struct rte_pci_device *dev)
 		/* Otherwise, it uses the internal, canonical form. */
 		dev->device.name = dev->name;
 
-	if (asprintf(&dev->bus_info, "vendor_id=%"PRIx16", device_id=%"PRIx16,
-			dev->id.vendor_id, dev->id.device_id) != -1)
+	if (dev->bus_info != NULL ||
+			asprintf(&dev->bus_info, "vendor_id=%"PRIx16", device_id=%"PRIx16,
+				dev->id.vendor_id, dev->id.device_id) != -1)
 		dev->device.bus_info = dev->bus_info;
 }
 
@@ -456,7 +457,14 @@ pci_cleanup(void)
 		}
 		dev->driver = NULL;
 		dev->device.driver = NULL;
-		free(dev);
+
+		/* free interrupt handles */
+		rte_intr_instance_free(dev->intr_handle);
+		dev->intr_handle = NULL;
+		rte_intr_instance_free(dev->vfio_req_intr_handle);
+		dev->vfio_req_intr_handle = NULL;
+
+		pci_free(dev);
 	}
 
 	return error;

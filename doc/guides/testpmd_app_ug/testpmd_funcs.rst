@@ -1553,8 +1553,8 @@ Enable or disable a per port Rx offloading on all Rx queues of a port::
 * ``offloading``: can be any of these offloading capability:
                   vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
-                  vlan_filter, vlan_extend, jumbo_frame,
-                  scatter, timestamp, security, keep_crc, rss_hash
+                  vlan_filter, vlan_extend, scatter, timestamp, security,
+                  keep_crc, rss_hash
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -1568,8 +1568,8 @@ Enable or disable a per queue Rx offloading only on a specific Rx queue::
 * ``offloading``: can be any of these offloading capability:
                   vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
-                  vlan_filter, vlan_extend, jumbo_frame,
-                  scatter, timestamp, security, keep_crc
+                  vlan_filter, vlan_extend, scatter, timestamp, security,
+                  keep_crc
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -2891,12 +2891,13 @@ following sections.
        [queues_number {number}] [queues_size {size}]
        [counters_number {number}]
        [aging_counters_number {number}]
-       [meters_number {number}]
+       [meters_number {number}] [flags {number}]
 
 - Create a pattern template::
+
    flow pattern_template {port_id} create [pattern_template_id {id}]
        [relaxed {boolean}] [ingress] [egress] [transfer]
-	   template {item} [/ {item} [...]] / end
+       template {item} [/ {item} [...]] / end
 
 - Destroy a pattern template::
 
@@ -2995,6 +2996,10 @@ following sections.
 
    flow aged {port_id} [destroy]
 
+- Enqueue list and destroy aged flow rules::
+
+   flow queue {port_id} aged {queue_id} [destroy]
+
 - Tunnel offload - create a tunnel stub::
 
    flow tunnel create {port_id} type {tunnel_type}
@@ -3042,7 +3047,7 @@ for asynchronous flow creation/destruction operations. It is bound to
        [queues_number {number}] [queues_size {size}]
        [counters_number {number}]
        [aging_counters_number {number}]
-       [meters_number {number}]
+       [meters_number {number}] [flags {number}]
 
 If successful, it will show::
 
@@ -4236,7 +4241,7 @@ Disabling isolated mode::
  testpmd>
 
 Dumping HW internal information
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``flow dump`` dumps the hardware's internal representation information of
 all flows. It is bound to ``rte_flow_dev_dump()``::
@@ -4252,10 +4257,10 @@ Otherwise, it will complain error occurred::
    Caught error type [...] ([...]): [...]
 
 Listing and destroying aged flow rules
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``flow aged`` simply lists aged flow rules be get from api ``rte_flow_get_aged_flows``,
-and ``destroy`` parameter can be used to destroy those flow rules in PMD.
+and ``destroy`` parameter can be used to destroy those flow rules in PMD::
 
    flow aged {port_id} [destroy]
 
@@ -4290,7 +4295,7 @@ will be ID 3, ID 1, ID 0::
    1       0       0       i--
    0       0       0       i--
 
-If attach ``destroy`` parameter, the command will destroy all the list aged flow rules.
+If attach ``destroy`` parameter, the command will destroy all the list aged flow rules::
 
    testpmd> flow aged 0 destroy
    Port 0 total aged flows: 4
@@ -4307,6 +4312,77 @@ If attach ``destroy`` parameter, the command will destroy all the list aged flow
    4 flows be destroyed
    testpmd> flow aged 0
    Port 0 total aged flows: 0
+
+
+Enqueueing listing and destroying aged flow rules
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``flow queue aged`` simply lists aged flow rules be get from
+``rte_flow_get_q_aged_flows`` API, and ``destroy`` parameter can be used to
+destroy those flow rules in PMD::
+
+   flow queue {port_id} aged {queue_id} [destroy]
+
+Listing current aged flow rules::
+
+   testpmd> flow queue 0 aged 0
+   Port 0 queue 0 total aged flows: 0
+   testpmd> flow queue 0 create 0 ingress tanle 0 item_template 0 action_template 0
+      pattern eth / ipv4 src is 2.2.2.14 / end
+      actions age timeout 5 / queue index 0 /  end
+   Flow rule #0 creation enqueued
+   testpmd> flow queue 0 create 0 ingress tanle 0 item_template 0 action_template 0
+      pattern eth / ipv4 src is 2.2.2.15 / end
+      actions age timeout 4 / queue index 0 /  end
+   Flow rule #1 creation enqueued
+   testpmd> flow queue 0 create 0 ingress tanle 0 item_template 0 action_template 0
+      pattern eth / ipv4 src is 2.2.2.16 / end
+      actions age timeout 4 / queue index 0 /  end
+   Flow rule #2 creation enqueued
+   testpmd> flow queue 0 create 0 ingress tanle 0 item_template 0 action_template 0
+      pattern eth / ipv4 src is 2.2.2.17 / end
+      actions age timeout 4 / queue index 0 /  end
+   Flow rule #3 creation enqueued
+   testpmd> flow pull 0 queue 0
+   Queue #0 pulled 4 operations (0 failed, 4 succeeded)
+
+Aged Rules are simply list as command ``flow queue {port_id} list {queue_id}``,
+but strip the detail rule information, all the aged flows are sorted by the
+longest timeout time. For example, if those rules is configured in the same time,
+ID 2 will be the first aged out rule, the next will be ID 3, ID 1, ID 0::
+
+   testpmd> flow queue 0 aged 0
+   Port 0 queue 0 total aged flows: 4
+   ID      Group   Prio    Attr
+   2       0       0       ---
+   3       0       0       ---
+   1       0       0       ---
+   0       0       0       ---
+
+   0 flows destroyed
+
+If attach ``destroy`` parameter, the command will destroy all the list aged flow rules::
+
+   testpmd> flow queue 0 aged 0 destroy
+   Port 0 queue 0 total aged flows: 4
+   ID      Group   Prio    Attr
+   2       0       0       ---
+   3       0       0       ---
+   1       0       0       ---
+   0       0       0       ---
+   Flow rule #2 destruction enqueued
+   Flow rule #3 destruction enqueued
+   Flow rule #1 destruction enqueued
+   Flow rule #0 destruction enqueued
+
+   4 flows destroyed
+   testpmd> flow queue 0 aged 0
+   Port 0 total aged flows: 0
+
+.. note::
+
+   The queue must be empty before attaching ``destroy`` parameter.
+
 
 Creating indirect actions
 ~~~~~~~~~~~~~~~~~~~~~~~~~

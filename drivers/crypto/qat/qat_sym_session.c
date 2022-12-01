@@ -520,8 +520,7 @@ qat_sym_session_configure(struct rte_cryptodev *dev,
 	int ret;
 
 #if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
-	if (ossl_legacy_provider_load())
-		return -EINVAL;
+	ossl_legacy_provider_load();
 #endif
 	ret = qat_sym_session_set_parameters(dev, xform,
 			CRYPTODEV_GET_SYM_SESS_PRIV(sess),
@@ -2040,7 +2039,12 @@ int qat_sym_cd_auth_set(struct qat_sym_session *cdesc,
 	hash_offset = cdesc->cd_cur_ptr-((uint8_t *)&cdesc->cd);
 	hash = (struct icp_qat_hw_auth_setup *)cdesc->cd_cur_ptr;
 	hash->auth_config.reserved = 0;
-	hash->auth_config.config =
+	if (cdesc->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_NULL)
+		hash->auth_config.config =
+			ICP_QAT_HW_AUTH_CONFIG_BUILD(cdesc->auth_mode,
+				cdesc->qat_hash_alg, 4);
+	else
+		hash->auth_config.config =
 			ICP_QAT_HW_AUTH_CONFIG_BUILD(cdesc->auth_mode,
 				cdesc->qat_hash_alg, digestsize);
 
@@ -2408,10 +2412,16 @@ int qat_sym_cd_auth_set(struct qat_sym_session *cdesc,
 	/* Auth CD config setup */
 	hash_cd_ctrl->hash_cfg_offset = hash_offset >> 3;
 	hash_cd_ctrl->hash_flags = ICP_QAT_FW_AUTH_HDR_FLAG_NO_NESTED;
-	hash_cd_ctrl->inner_res_sz = digestsize;
-	hash_cd_ctrl->final_sz = digestsize;
 	hash_cd_ctrl->inner_state1_sz = state1_size;
-	auth_param->auth_res_sz = digestsize;
+	if (cdesc->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_NULL) {
+		hash_cd_ctrl->inner_res_sz = 4;
+		hash_cd_ctrl->final_sz = 4;
+		auth_param->auth_res_sz = 4;
+	} else {
+		hash_cd_ctrl->inner_res_sz = digestsize;
+		hash_cd_ctrl->final_sz = digestsize;
+		auth_param->auth_res_sz = digestsize;
+	}
 
 	hash_cd_ctrl->inner_state2_sz  = state2_size;
 	hash_cd_ctrl->inner_state2_offset = hash_cd_ctrl->hash_cfg_offset +
@@ -2575,8 +2585,11 @@ qat_sec_session_set_docsis_parameters(struct rte_cryptodev *dev,
 {
 	int ret;
 	int qat_cmd_id;
+	struct rte_cryptodev *cdev = (struct rte_cryptodev *)dev;
 	struct rte_crypto_sym_xform *xform = NULL;
 	struct qat_sym_session *session = session_private;
+	struct qat_cryptodev_private *internals = cdev->data->dev_private;
+	enum qat_device_gen qat_dev_gen = internals->qat_dev->qat_dev_gen;
 
 	/* Clear the session */
 	memset(session, 0, qat_sym_session_get_private_size(dev));
@@ -2613,7 +2626,8 @@ qat_sec_session_set_docsis_parameters(struct rte_cryptodev *dev,
 		return ret;
 	qat_sym_session_finalize(session);
 
-	return 0;
+	return qat_sym_gen_dev_ops[qat_dev_gen].set_session((void *)cdev,
+			(void *)session);
 }
 
 int
@@ -2623,9 +2637,6 @@ qat_security_session_create(void *dev,
 {
 	void *sess_private_data = SECURITY_GET_SESS_PRIV(sess);
 	struct rte_cryptodev *cdev = (struct rte_cryptodev *)dev;
-	struct qat_cryptodev_private *internals = cdev->data->dev_private;
-	enum qat_device_gen qat_dev_gen = internals->qat_dev->qat_dev_gen;
-	struct qat_sym_session *sym_session = NULL;
 	int ret;
 
 	if (conf->action_type != RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL ||
@@ -2645,11 +2656,10 @@ qat_security_session_create(void *dev,
 		return ret;
 	}
 
-	sym_session = (struct qat_sym_session *)sess_private_data;
-	sym_session->dev_id = internals->dev_id;
-
-	return qat_sym_gen_dev_ops[qat_dev_gen].set_session((void *)cdev,
-			sess_private_data);
+#if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
+	ossl_legacy_provider_unload();
+#endif
+	return 0;
 }
 
 int
@@ -2665,9 +2675,6 @@ qat_security_session_destroy(void *dev __rte_unused,
 		memset(s, 0, qat_sym_session_get_private_size(dev));
 	}
 
-# if (OPENSSL_VERSION_NUMBER >= 0x30000000L)
-	ossl_legacy_provider_unload();
-# endif
 	return 0;
 }
 

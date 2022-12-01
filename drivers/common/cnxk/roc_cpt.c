@@ -728,6 +728,87 @@ roc_cpt_lf_ctx_reload(struct roc_cpt_lf *lf, void *cptr)
 	return 0;
 }
 
+static int
+cpt_lf_reset(struct roc_cpt_lf *lf)
+{
+	struct cpt_lf_rst_req *req;
+	struct dev *dev = lf->dev;
+
+	req = mbox_alloc_msg_cpt_lf_reset(dev->mbox);
+	if (req == NULL)
+		return -EIO;
+
+	req->slot = lf->lf_id;
+
+	return mbox_process(dev->mbox);
+}
+
+static void
+cpt_9k_lf_rst_lmtst(struct roc_cpt_lf *lf, uint8_t egrp)
+{
+	struct cpt_inst_s inst;
+	uint64_t lmt_status;
+
+	memset(&inst, 0, sizeof(struct cpt_inst_s));
+	inst.w7.s.egrp = egrp;
+
+	plt_io_wmb();
+
+	do {
+		/* Copy CPT command to LMTLINE */
+		roc_lmt_mov64((void *)lf->lmt_base, &inst);
+		lmt_status = roc_lmt_submit_ldeor(lf->io_addr);
+	} while (lmt_status == 0);
+}
+
+static void
+cpt_10k_lf_rst_lmtst(struct roc_cpt_lf *lf, uint8_t egrp)
+{
+	uint64_t lmt_base, lmt_arg, io_addr;
+	struct cpt_inst_s *inst;
+	uint16_t lmt_id;
+
+	lmt_base = lf->lmt_base;
+	io_addr = lf->io_addr;
+
+	io_addr |= ROC_CN10K_CPT_INST_DW_M1 << 4;
+	ROC_LMT_BASE_ID_GET(lmt_base, lmt_id);
+
+	inst = (struct cpt_inst_s *)lmt_base;
+	memset(inst, 0, sizeof(struct cpt_inst_s));
+	inst->w7.s.egrp = egrp;
+	lmt_arg = ROC_CN10K_CPT_LMT_ARG | (uint64_t)lmt_id;
+	roc_lmt_submit_steorl(lmt_arg, io_addr);
+}
+
+static void
+roc_cpt_iq_reset(struct roc_cpt_lf *lf)
+{
+	union cpt_lf_inprog lf_inprog = {.u = 0x0};
+	union cpt_lf_ctl lf_ctl = {.u = 0x0};
+
+	lf_inprog.u = plt_read64(lf->rbase + CPT_LF_INPROG);
+	if (((lf_inprog.s.gwb_cnt & 0x1) == 0x1) &&
+	    (lf_inprog.s.grb_partial == 0x0)) {
+		lf_inprog.s.grp_drp = 1;
+		plt_write64(lf_inprog.u, lf->rbase + CPT_LF_INPROG);
+
+		lf_ctl.u = plt_read64(lf->rbase + CPT_LF_CTL);
+		lf_ctl.s.ena = 1;
+		plt_write64(lf_ctl.u, lf->rbase + CPT_LF_CTL);
+
+		if (roc_model_is_cn10k())
+			cpt_10k_lf_rst_lmtst(lf, ROC_CPT_DFLT_ENG_GRP_SE);
+		else
+			cpt_9k_lf_rst_lmtst(lf, ROC_CPT_DFLT_ENG_GRP_SE);
+
+		plt_read64(lf->rbase + CPT_LF_INPROG);
+		plt_delay_us(2);
+	}
+	if (cpt_lf_reset(lf))
+		plt_err("Invalid CPT LF to reset");
+}
+
 void
 cpt_lf_fini(struct roc_cpt_lf *lf)
 {
@@ -736,6 +817,7 @@ cpt_lf_fini(struct roc_cpt_lf *lf)
 
 	/* Disable IQ */
 	roc_cpt_iq_disable(lf);
+	roc_cpt_iq_reset(lf);
 
 	/* Free memory */
 	plt_free(lf->iq_vaddr);
@@ -996,99 +1078,4 @@ roc_cpt_ctx_write(struct roc_cpt_lf *lf, void *sa_dptr, void *sa_cptr,
 	}
 
 	return 0;
-}
-
-int
-roc_on_cpt_ctx_write(struct roc_cpt_lf *lf, uint64_t sa, bool inb,
-		     uint16_t ctx_len, uint8_t egrp)
-{
-	union cpt_res_s res, *hw_res;
-	struct cpt_inst_s inst;
-	uint64_t lmt_status;
-	int ret = 0;
-
-	hw_res = plt_zmalloc(sizeof(*hw_res), ROC_CPT_RES_ALIGN);
-	if (unlikely(hw_res == NULL)) {
-		plt_err("Couldn't allocate memory for result address");
-		return -ENOMEM;
-	}
-
-	hw_res->cn9k.compcode = CPT_COMP_NOT_DONE;
-
-	inst.w4.s.opcode_major = ROC_IE_ON_MAJOR_OP_WRITE_IPSEC_OUTBOUND;
-	if (inb)
-		inst.w4.s.opcode_major = ROC_IE_ON_MAJOR_OP_WRITE_IPSEC_INBOUND;
-	inst.w4.s.opcode_minor = ctx_len >> 3;
-	inst.w4.s.param1 = 0;
-	inst.w4.s.param2 = 0;
-	inst.w4.s.dlen = ctx_len;
-	inst.dptr = sa;
-	inst.rptr = 0;
-	inst.w7.s.cptr = sa;
-	inst.w7.s.egrp = egrp;
-
-	inst.w0.u64 = 0;
-	inst.w2.u64 = 0;
-	inst.w3.u64 = 0;
-	inst.res_addr = (uintptr_t)hw_res;
-
-	plt_io_wmb();
-
-	do {
-		/* Copy CPT command to LMTLINE */
-		roc_lmt_mov64((void *)lf->lmt_base, &inst);
-		lmt_status = roc_lmt_submit_ldeor(lf->io_addr);
-	} while (lmt_status == 0);
-
-	const uint64_t timeout = plt_tsc_cycles() + 60 * plt_tsc_hz();
-
-	/* Wait until CPT instruction completes */
-	do {
-		res.u64[0] = __atomic_load_n(&hw_res->u64[0], __ATOMIC_RELAXED);
-		if (unlikely(plt_tsc_cycles() > timeout)) {
-			plt_err("Request timed out");
-			ret = -ETIMEDOUT;
-			goto free;
-		}
-	} while (res.cn9k.compcode == CPT_COMP_NOT_DONE);
-
-	if (unlikely(res.cn9k.compcode != CPT_COMP_GOOD)) {
-		ret = res.cn9k.compcode;
-		switch (ret) {
-		case CPT_COMP_INSTERR:
-			plt_err("Request failed with instruction error");
-			break;
-		case CPT_COMP_FAULT:
-			plt_err("Request failed with DMA fault");
-			break;
-		case CPT_COMP_HWERR:
-			plt_err("Request failed with hardware error");
-			break;
-		default:
-			plt_err("Request failed with unknown hardware completion code : 0x%x",
-				ret);
-		}
-		ret = -EINVAL;
-		goto free;
-	}
-
-	if (unlikely(res.cn9k.uc_compcode != ROC_IE_ON_UCC_SUCCESS)) {
-		ret = res.cn9k.uc_compcode;
-		switch (ret) {
-		case ROC_IE_ON_AUTH_UNSUPPORTED:
-			plt_err("Invalid auth type");
-			break;
-		case ROC_IE_ON_ENCRYPT_UNSUPPORTED:
-			plt_err("Invalid encrypt type");
-			break;
-		default:
-			plt_err("Request failed with unknown microcode completion code : 0x%x",
-				ret);
-		}
-		ret = -ENOTSUP;
-	}
-
-free:
-	plt_free(hw_res);
-	return ret;
 }

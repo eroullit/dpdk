@@ -682,6 +682,7 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf,
 		    uint64_t rearm, const uint16_t flags)
 {
 	const rte_iova_t *iova_list;
+	uint16_t later_skip = 0;
 	struct rte_mbuf *head;
 	const rte_iova_t *eol;
 	uint8_t nb_segs;
@@ -720,10 +721,11 @@ nix_cqe_xtract_mseg(const union nix_rx_parse_u *rx, struct rte_mbuf *mbuf,
 	nb_segs--;
 
 	rearm = rearm & ~0xFFFF;
+	later_skip = (uintptr_t)mbuf->buf_addr - (uintptr_t)mbuf;
 
 	head = mbuf;
 	while (nb_segs) {
-		mbuf->next = ((struct rte_mbuf *)*iova_list) - 1;
+		mbuf->next = (struct rte_mbuf *)(*iova_list - later_skip);
 		mbuf = mbuf->next;
 
 		RTE_MEMPOOL_CHECK_COOKIES(mbuf->pool, (void **)&mbuf, 1, 1);
@@ -1201,9 +1203,11 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 			mbuf23 = vqsubq_u64(mbuf23, data_off);
 		} else {
 			mbuf01 =
-				vsubq_u64(vld1q_u64((uint64_t *)cq0), data_off);
-			mbuf23 = vsubq_u64(vld1q_u64((uint64_t *)(cq0 + 16)),
-					   data_off);
+				vsubq_u64(vld1q_u64((uint64_t *)cq0),
+					  vdupq_n_u64(sizeof(struct rte_mbuf)));
+			mbuf23 =
+				vsubq_u64(vld1q_u64((uint64_t *)(cq0 + 16)),
+					  vdupq_n_u64(sizeof(struct rte_mbuf)));
 		}
 
 		/* Move mbufs to scalar registers for future use */
@@ -1304,12 +1308,6 @@ cn10k_nix_recv_pkts_vector(void *args, struct rte_mbuf **mbufs, uint16_t pkts,
 			ol_flags2 |= nix_rx_olflags_get(lookup_mem, cq2_w1);
 			ol_flags3 |= nix_rx_olflags_get(lookup_mem, cq3_w1);
 		}
-
-		/* Mark mempool obj as "get" as it is alloc'ed by NIX */
-		RTE_MEMPOOL_CHECK_COOKIES(mbuf0->pool, (void **)&mbuf0, 1, 1);
-		RTE_MEMPOOL_CHECK_COOKIES(mbuf1->pool, (void **)&mbuf1, 1, 1);
-		RTE_MEMPOOL_CHECK_COOKIES(mbuf2->pool, (void **)&mbuf2, 1, 1);
-		RTE_MEMPOOL_CHECK_COOKIES(mbuf3->pool, (void **)&mbuf3, 1, 1);
 
 		/* Translate meta to mbuf */
 		if (flags & NIX_RX_OFFLOAD_SECURITY_F) {

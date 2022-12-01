@@ -15,6 +15,7 @@
 #include "../nfp_ctrl.h"
 #include "../nfp_cpp_bridge.h"
 #include "../nfp_rxtx.h"
+#include "../nfp_flow.h"
 #include "../nfpcore/nfp_mip.h"
 #include "../nfpcore/nfp_rtsym.h"
 #include "../nfpcore/nfp_nsp.h"
@@ -368,8 +369,6 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 			break;
 		}
 
-		nb_hold++;
-
 		/*
 		 * Grab the mbuf and refill the descriptor with the
 		 * previously allocated mbuf
@@ -454,6 +453,7 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 		rxds->fld.dd = 0;
 		rxds->fld.dma_addr_hi = (dma_addr >> 32) & 0xff;
 		rxds->fld.dma_addr_lo = dma_addr & 0xffffffff;
+		nb_hold++;
 
 		rxq->rd_p++;
 		if (unlikely(rxq->rd_p == rxq->rx_count))
@@ -1056,6 +1056,7 @@ nfp_flower_enable_services(struct nfp_app_fw_flower *app_fw_flower)
 		return -EINVAL;
 	}
 
+	app_fw_flower->ctrl_vnic_id = service_id;
 	PMD_INIT_LOG(INFO, "%s registered", flower_service.name);
 
 	/* Map them to available service cores*/
@@ -1072,6 +1073,8 @@ int
 nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev)
 {
 	int ret;
+	int err;
+	uint64_t ext_features;
 	unsigned int numa_node;
 	struct nfp_net_hw *pf_hw;
 	struct nfp_net_hw *ctrl_hw;
@@ -1089,13 +1092,19 @@ nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev)
 
 	pf_dev->app_fw_priv = app_fw_flower;
 
+	ret = nfp_flow_priv_init(pf_dev);
+	if (ret != 0) {
+		PMD_INIT_LOG(ERR, "init flow priv failed");
+		goto app_cleanup;
+	}
+
 	/* Allocate memory for the PF AND ctrl vNIC here (hence the * 2) */
 	pf_hw = rte_zmalloc_socket("nfp_pf_vnic", 2 * sizeof(struct nfp_net_adapter),
 			RTE_CACHE_LINE_SIZE, numa_node);
 	if (pf_hw == NULL) {
 		PMD_INIT_LOG(ERR, "Could not malloc nfp pf vnic");
 		ret = -ENOMEM;
-		goto app_cleanup;
+		goto flow_priv_cleanup;
 	}
 
 	/* Map the PF ctrl bar */
@@ -1106,6 +1115,18 @@ nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev)
 		ret = -ENODEV;
 		goto vnic_cleanup;
 	}
+
+	/* Read the extra features */
+	ext_features = nfp_rtsym_read_le(pf_dev->sym_tbl, "_abi_flower_extra_features",
+			&err);
+	if (err != 0) {
+		PMD_INIT_LOG(ERR, "Couldn't read extra features from fw");
+		ret = -EIO;
+		goto pf_cpp_area_cleanup;
+	}
+
+	/* Store the extra features */
+	app_fw_flower->ext_features = ext_features;
 
 	/* Fill in the PF vNIC and populate app struct */
 	app_fw_flower->pf_hw = pf_hw;
@@ -1173,6 +1194,8 @@ pf_cpp_area_cleanup:
 	nfp_cpp_area_free(pf_dev->ctrl_area);
 vnic_cleanup:
 	rte_free(pf_hw);
+flow_priv_cleanup:
+	nfp_flow_priv_uninit(pf_dev);
 app_cleanup:
 	rte_free(app_fw_flower);
 

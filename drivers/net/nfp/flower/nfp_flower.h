@@ -6,6 +6,23 @@
 #ifndef _NFP_FLOWER_H_
 #define _NFP_FLOWER_H_
 
+#include "../nfp_common.h"
+
+/* Extra features bitmap. */
+#define NFP_FL_FEATS_GENEVE             RTE_BIT64(0)
+#define NFP_FL_NBI_MTU_SETTING          RTE_BIT64(1)
+#define NFP_FL_FEATS_GENEVE_OPT         RTE_BIT64(2)
+#define NFP_FL_FEATS_VLAN_PCP           RTE_BIT64(3)
+#define NFP_FL_FEATS_VF_RLIM            RTE_BIT64(4)
+#define NFP_FL_FEATS_FLOW_MOD           RTE_BIT64(5)
+#define NFP_FL_FEATS_PRE_TUN_RULES      RTE_BIT64(6)
+#define NFP_FL_FEATS_IPV6_TUN           RTE_BIT64(7)
+#define NFP_FL_FEATS_VLAN_QINQ          RTE_BIT64(8)
+#define NFP_FL_FEATS_QOS_PPS            RTE_BIT64(9)
+#define NFP_FL_FEATS_QOS_METER          RTE_BIT64(10)
+#define NFP_FL_FEATS_DECAP_V2           RTE_BIT64(11)
+#define NFP_FL_FEATS_HOST_ACK           RTE_BIT64(31)
+
 /*
  * Flower fallback and ctrl path always adds and removes
  * 8 bytes of prepended data. Tx descriptors must point
@@ -51,7 +68,21 @@ struct nfp_app_fw_flower {
 
 	/* PF representor */
 	struct nfp_flower_representor *pf_repr;
+
+	/* service id of ctrl vnic service */
+	uint32_t ctrl_vnic_id;
+
+	/* Flower extra features */
+	uint64_t ext_features;
+
+	struct nfp_flow_priv *flow_priv;
 };
+
+static inline bool
+nfp_flower_support_decap_v2(const struct nfp_app_fw_flower *app_fw_flower)
+{
+	return app_fw_flower->ext_features & NFP_FL_FEATS_DECAP_V2;
+}
 
 int nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev);
 int nfp_secondary_init_app_fw_flower(struct nfp_cpp *cpp);

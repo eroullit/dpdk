@@ -5,6 +5,7 @@
 #ifndef _ICE_ETHDEV_H_
 #define _ICE_ETHDEV_H_
 
+#include <rte_compat.h>
 #include <rte_kvargs.h>
 #include <rte_time.h>
 
@@ -734,4 +735,6 @@ ice_align_floor(int n)
 __rte_experimental
 int rte_pmd_ice_dump_package(uint16_t port, uint8_t **buff, uint32_t *size);
 
+__rte_experimental
+int rte_pmd_ice_dump_switch(uint16_t port, uint8_t **buff, uint32_t *size);
 #endif /* _ICE_ETHDEV_H_ */

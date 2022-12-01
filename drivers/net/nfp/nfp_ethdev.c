@@ -114,6 +114,13 @@ nfp_net_start(struct rte_eth_dev *dev)
 		update = NFP_NET_CFG_UPDATE_MSIX;
 	}
 
+	/* Checking MTU set */
+	if (dev->data->mtu > hw->flbufsz) {
+		PMD_INIT_LOG(ERR, "MTU (%u) can't be larger than the current NFP_FRAME_SIZE (%u)",
+				dev->data->mtu, hw->flbufsz);
+		return -ERANGE;
+	}
+
 	rte_intr_enable(intr_handle);
 
 	new_ctrl = nfp_check_offloads(dev);
@@ -137,6 +144,10 @@ nfp_net_start(struct rte_eth_dev *dev)
 	new_ctrl |= NFP_NET_CFG_CTRL_ENABLE;
 
 	update |= NFP_NET_CFG_UPDATE_GEN | NFP_NET_CFG_UPDATE_RING;
+
+	/* Enable vxlan */
+	new_ctrl |= NFP_NET_CFG_CTRL_VXLAN;
+	update |= NFP_NET_CFG_UPDATE_VXLAN;
 
 	if (hw->cap & NFP_NET_CFG_CTRL_RINGCFG)
 		new_ctrl |= NFP_NET_CFG_CTRL_RINGCFG;
@@ -319,6 +330,110 @@ nfp_net_close(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static int
+nfp_net_find_vxlan_idx(struct nfp_net_hw *hw,
+		uint16_t port,
+		uint32_t *idx)
+{
+	uint32_t i;
+	int free_idx = -1;
+
+	for (i = 0; i < NFP_NET_N_VXLAN_PORTS; i++) {
+		if (hw->vxlan_ports[i] == port) {
+			free_idx = i;
+			break;
+		}
+
+		if (hw->vxlan_usecnt[i] == 0) {
+			free_idx = i;
+			break;
+		}
+	}
+
+	if (free_idx == -1)
+		return -EINVAL;
+
+	*idx = free_idx;
+
+	return 0;
+}
+
+static int
+nfp_udp_tunnel_port_add(struct rte_eth_dev *dev,
+		struct rte_eth_udp_tunnel *tunnel_udp)
+{
+	int ret;
+	uint32_t idx;
+	uint16_t vxlan_port;
+	struct nfp_net_hw *hw;
+	enum rte_eth_tunnel_type tnl_type;
+
+	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	vxlan_port = tunnel_udp->udp_port;
+	tnl_type   = tunnel_udp->prot_type;
+
+	if (tnl_type != RTE_ETH_TUNNEL_TYPE_VXLAN) {
+		PMD_DRV_LOG(ERR, "Not VXLAN tunnel");
+		return -ENOTSUP;
+	}
+
+	ret = nfp_net_find_vxlan_idx(hw, vxlan_port, &idx);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "Failed find valid vxlan idx");
+		return -EINVAL;
+	}
+
+	if (hw->vxlan_usecnt[idx] == 0) {
+		ret = nfp_net_set_vxlan_port(hw, idx, vxlan_port);
+		if (ret != 0) {
+			PMD_DRV_LOG(ERR, "Failed set vxlan port");
+			return -EINVAL;
+		}
+	}
+
+	hw->vxlan_usecnt[idx]++;
+
+	return 0;
+}
+
+static int
+nfp_udp_tunnel_port_del(struct rte_eth_dev *dev,
+		struct rte_eth_udp_tunnel *tunnel_udp)
+{
+	int ret;
+	uint32_t idx;
+	uint16_t vxlan_port;
+	struct nfp_net_hw *hw;
+	enum rte_eth_tunnel_type tnl_type;
+
+	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	vxlan_port = tunnel_udp->udp_port;
+	tnl_type   = tunnel_udp->prot_type;
+
+	if (tnl_type != RTE_ETH_TUNNEL_TYPE_VXLAN) {
+		PMD_DRV_LOG(ERR, "Not VXLAN tunnel");
+		return -ENOTSUP;
+	}
+
+	ret = nfp_net_find_vxlan_idx(hw, vxlan_port, &idx);
+	if (ret != 0 || hw->vxlan_usecnt[idx] == 0) {
+		PMD_DRV_LOG(ERR, "Failed find valid vxlan idx");
+		return -EINVAL;
+	}
+
+	hw->vxlan_usecnt[idx]--;
+
+	if (hw->vxlan_usecnt[idx] == 0) {
+		ret = nfp_net_set_vxlan_port(hw, idx, 0);
+		if (ret != 0) {
+			PMD_DRV_LOG(ERR, "Failed set vxlan port");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 /* Initialise and register driver with DPDK Application */
 static const struct eth_dev_ops nfp_net_eth_dev_ops = {
 	.dev_configure		= nfp_net_configure,
@@ -347,6 +462,8 @@ static const struct eth_dev_ops nfp_net_eth_dev_ops = {
 	.tx_queue_release	= nfp_net_tx_queue_release,
 	.rx_queue_intr_enable   = nfp_rx_queue_intr_enable,
 	.rx_queue_intr_disable  = nfp_rx_queue_intr_disable,
+	.udp_tunnel_port_add    = nfp_udp_tunnel_port_add,
+	.udp_tunnel_port_del    = nfp_udp_tunnel_port_del,
 };
 
 static inline int
@@ -492,7 +609,6 @@ nfp_net_init(struct rte_eth_dev *eth_dev)
 	hw->cap = nn_cfg_readl(hw, NFP_NET_CFG_CAP);
 	hw->max_mtu = nn_cfg_readl(hw, NFP_NET_CFG_MAX_MTU);
 	hw->mtu = RTE_ETHER_MTU;
-	hw->flbufsz = RTE_ETHER_MTU;
 
 	/* VLAN insertion is incompatible with LSOv2 */
 	if (hw->cap & NFP_NET_CFG_CTRL_LSO2)
@@ -955,12 +1071,9 @@ nfp_pf_init(struct rte_pci_device *pci_dev)
 	}
 
 	/* register the CPP bridge service here for primary use */
-	ret = nfp_enable_cpp_service(pf_dev->cpp);
-	if (ret != 0) {
-		PMD_INIT_LOG(ERR, "Enable cpp service failed.");
-		ret = -EINVAL;
-		goto hwqueues_cleanup;
-	}
+	ret = nfp_enable_cpp_service(pf_dev);
+	if (ret != 0)
+		PMD_INIT_LOG(INFO, "Enable cpp service failed.");
 
 	return 0;
 
@@ -1096,13 +1209,6 @@ nfp_pf_secondary_init(struct rte_pci_device *pci_dev)
 		PMD_INIT_LOG(ERR, "Unsupported Firmware loaded");
 		ret = -EINVAL;
 		goto sym_tbl_cleanup;
-	}
-
-	/* Register the CPP bridge service for the secondary too */
-	ret = nfp_enable_cpp_service(cpp);
-	if (ret != 0) {
-		PMD_INIT_LOG(ERR, "Enable cpp service failed.");
-		ret = -EINVAL;
 	}
 
 sym_tbl_cleanup:

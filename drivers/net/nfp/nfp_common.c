@@ -37,6 +37,8 @@
 #include "nfpcore/nfp_rtsym.h"
 #include "nfpcore/nfp_nsp.h"
 
+#include "flower/nfp_flower_representor.h"
+
 #include "nfp_common.h"
 #include "nfp_ctrl.h"
 #include "nfp_rxtx.h"
@@ -177,9 +179,9 @@ nfp_net_configure(struct rte_eth_dev *dev)
 	}
 
 	/* Checking MTU set */
-	if (rxmode->mtu > hw->flbufsz) {
-		PMD_INIT_LOG(INFO, "MTU (%u) larger then current mbufsize (%u) not supported",
-				    rxmode->mtu, hw->flbufsz);
+	if (rxmode->mtu > NFP_FRAME_SIZE_MAX) {
+		PMD_INIT_LOG(ERR, "MTU (%u) larger than NFP_FRAME_SIZE_MAX (%u) not supported",
+				    rxmode->mtu, NFP_FRAME_SIZE_MAX);
 		return -ERANGE;
 	}
 
@@ -412,10 +414,16 @@ nfp_net_promisc_enable(struct rte_eth_dev *dev)
 	uint32_t new_ctrl, update = 0;
 	struct nfp_net_hw *hw;
 	int ret;
+	struct nfp_flower_representor *repr;
 
 	PMD_DRV_LOG(DEBUG, "Promiscuous mode enable");
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	if ((dev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR) != 0) {
+		repr = dev->data->dev_private;
+		hw = repr->app_fw_flower->pf_hw;
+	} else {
+		hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	}
 
 	if (!(hw->cap & NFP_NET_CFG_CTRL_PROMISC)) {
 		PMD_INIT_LOG(INFO, "Promiscuous mode not supported");
@@ -1368,6 +1376,38 @@ nfp_net_close_tx_queue(struct rte_eth_dev *dev)
 		nfp_net_reset_tx_queue(this_tx_q);
 		nfp_net_tx_queue_release(dev, i);
 	}
+}
+
+int
+nfp_net_set_vxlan_port(struct nfp_net_hw *hw,
+		size_t idx,
+		uint16_t port)
+{
+	int ret;
+	uint32_t i;
+
+	if (idx >= NFP_NET_N_VXLAN_PORTS) {
+		PMD_DRV_LOG(ERR, "The idx value is out of range.");
+		return -ERANGE;
+	}
+
+	hw->vxlan_ports[idx] = port;
+
+	for (i = 0; i < NFP_NET_N_VXLAN_PORTS; i += 2) {
+		nn_cfg_writel(hw, NFP_NET_CFG_VXLAN_PORT + i * sizeof(port),
+			(hw->vxlan_ports[i + 1] << 16) | hw->vxlan_ports[i]);
+	}
+
+	rte_spinlock_lock(&hw->reconfig_lock);
+
+	nn_cfg_writel(hw, NFP_NET_CFG_UPDATE, NFP_NET_CFG_UPDATE_VXLAN);
+	rte_wmb();
+
+	ret = __nfp_net_reconfig(hw, NFP_NET_CFG_UPDATE_VXLAN);
+
+	rte_spinlock_unlock(&hw->reconfig_lock);
+
+	return ret;
 }
 
 RTE_LOG_REGISTER_SUFFIX(nfp_logtype_init, init, NOTICE);

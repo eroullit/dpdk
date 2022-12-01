@@ -870,7 +870,8 @@ mlx5_devx_tir_attr_set(struct rte_eth_dev *dev, const uint8_t *rss_key,
 	if (lro) {
 		MLX5_ASSERT(priv->sh->config.lro_allowed);
 		tir_attr->lro_timeout_period_usecs = priv->config.lro_timeout;
-		tir_attr->lro_max_msg_sz = priv->max_lro_msg_size;
+		tir_attr->lro_max_msg_sz =
+			priv->max_lro_msg_size / MLX5_LRO_SEG_CHUNK_SIZE;
 		tir_attr->lro_enable_mask =
 				MLX5_TIRC_LRO_ENABLE_MASK_IPV4_LRO |
 				MLX5_TIRC_LRO_ENABLE_MASK_IPV6_LRO;
@@ -908,6 +909,7 @@ mlx5_devx_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 		goto error;
 	}
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
+#ifdef HAVE_MLX5_HWS_SUPPORT
 	if (hrxq->hws_flags) {
 		hrxq->action = mlx5dr_action_create_dest_tir
 			(priv->dr_ctx,
@@ -916,6 +918,7 @@ mlx5_devx_hrxq_new(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 			goto error;
 		return 0;
 	}
+#endif
 	if (mlx5_flow_os_create_flow_action_dest_devx_tir(hrxq->tir,
 							  &hrxq->action)) {
 		rte_errno = errno;

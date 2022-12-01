@@ -15,6 +15,7 @@
  *
  */
 
+#include <rte_compat.h>
 #include <rte_mbuf.h>
 #include <rte_mbuf_dyn.h>
 
@@ -116,8 +117,6 @@ rte_reorder_reset(struct rte_reorder_buffer *b);
  * @param b
  *   Pointer to reorder buffer instance.
  *   If b is NULL, no operation is performed.
- * @return
- *   None
  */
 void
 rte_reorder_free(struct rte_reorder_buffer *b);

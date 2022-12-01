@@ -151,6 +151,7 @@ struct mbox_msghdr {
 	M(CPT_RXC_TIME_CFG, 0xA06, cpt_rxc_time_cfg, cpt_rxc_time_cfg_req,     \
 	  msg_rsp)                                                             \
 	M(CPT_CTX_CACHE_SYNC, 0xA07, cpt_ctx_cache_sync, msg_req, msg_rsp)     \
+	M(CPT_LF_RESET, 0xA08, cpt_lf_reset, cpt_lf_rst_req, msg_rsp)          \
 	M(CPT_RX_INLINE_LF_CFG, 0xBFE, cpt_rx_inline_lf_cfg,                   \
 	  cpt_rx_inline_lf_cfg_msg, msg_rsp)                                   \
 	M(CPT_GET_CAPS, 0xBFD, cpt_caps_get, msg_req, cpt_caps_rsp_msg)        \
@@ -1164,10 +1165,10 @@ struct nix_bp_cfg_req {
 	/* bpid_per_chan = 1 assigns separate bp id for each channel */
 };
 
-/* PF can be mapped to either CGX or LBK interface,
- * so maximum 64 channels are possible.
+/* PF can be mapped to either CGX or LBK or SDP interface,
+ * so maximum 256 channels are possible.
  */
-#define NIX_MAX_CHAN	 64
+#define NIX_MAX_CHAN	 256
 #define NIX_CGX_MAX_CHAN 16
 #define NIX_LBK_MAX_CHAN 1
 struct nix_bp_cfg_rsp {
@@ -1215,7 +1216,13 @@ struct nix_inline_ipsec_lf_cfg {
 struct nix_hw_info {
 	struct mbox_msghdr hdr;
 	uint16_t __io vwqe_delay;
-	uint16_t __io rsvd[15];
+	uint16_t __io max_mtu;
+	uint16_t __io min_mtu;
+	uint32_t __io rpm_dwrr_mtu;
+	uint32_t __io sdp_dwrr_mtu;
+	uint32_t __io lbk_dwrr_mtu;
+	uint32_t __io rsvd32[1];
+	uint64_t __io rsvd[15]; /* Add reserved fields for future expansion */
 };
 
 struct nix_bandprof_alloc_req {
@@ -1516,7 +1523,10 @@ union cpt_eng_caps {
 		uint64_t __io kasumi : 1;
 		uint64_t __io des : 1;
 		uint64_t __io crc : 1;
-		uint64_t __io reserved_14_63 : 50;
+		uint64_t __io mmul : 1;
+		uint64_t __io reserved_15_33 : 19;
+		uint64_t __io pdcp_chain : 1;
+		uint64_t __io reserved_35_63 : 29;
 	};
 };
 
@@ -1536,6 +1546,11 @@ struct cpt_eng_grp_rsp {
 	struct mbox_msghdr hdr;
 	uint8_t __io eng_type;
 	uint8_t __io eng_grp_num;
+};
+
+struct cpt_lf_rst_req {
+	struct mbox_msghdr hdr;
+	uint32_t __io slot;
 };
 
 /* REE mailbox error codes

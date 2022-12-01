@@ -198,7 +198,7 @@ bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
 	if (slave_info.max_rx_queues < bond_dev->data->nb_rx_queues ||
 			slave_info.max_tx_queues < bond_dev->data->nb_tx_queues) {
 		RTE_BOND_LOG(ERR,
-			"%s: Slave %d capabilities doesn't allow to allocate additional queues",
+			"%s: Slave %d capabilities doesn't allow allocating additional queues",
 			__func__, slave_port);
 		return -1;
 	}
@@ -271,6 +271,24 @@ bond_ethdev_8023ad_flow_set(struct rte_eth_dev *bond_dev, uint16_t slave_port) {
 	return 0;
 }
 
+static bool
+is_bond_mac_addr(const struct rte_ether_addr *ea,
+		 const struct rte_ether_addr *mac_addrs, uint32_t max_mac_addrs)
+{
+	uint32_t i;
+
+	for (i = 0; i < max_mac_addrs; i++) {
+		/* skip zero address */
+		if (rte_is_zero_ether_addr(&mac_addrs[i]))
+			continue;
+
+		if (rte_is_same_ether_addr(ea, &mac_addrs[i]))
+			return true;
+	}
+
+	return false;
+}
+
 static inline uint16_t
 rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 		bool dedicated_rxq)
@@ -331,8 +349,9 @@ rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 			/* Remove packet from array if:
 			 * - it is slow packet but no dedicated rxq is present,
 			 * - slave is not in collecting state,
-			 * - bonding interface is not in promiscuous mode:
-			 *   - packet is unicast and address does not match,
+			 * - bonding interface is not in promiscuous mode and
+			 *   packet address isn't in mac_addrs array:
+			 *   - packet is unicast,
 			 *   - packet is multicast and bonding interface
 			 *     is not in allmulti,
 			 */
@@ -342,12 +361,10 @@ rx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts,
 						 bufs[j])) ||
 				!collecting ||
 				(!promisc &&
-				 ((rte_is_unicast_ether_addr(&hdr->dst_addr) &&
-				   !rte_is_same_ether_addr(bond_mac,
-						       &hdr->dst_addr)) ||
-				  (!allmulti &&
-				   rte_is_multicast_ether_addr(&hdr->dst_addr)))))) {
-
+				 !is_bond_mac_addr(&hdr->dst_addr, bond_mac,
+						   BOND_MAX_MAC_ADDRS) &&
+				 (rte_is_unicast_ether_addr(&hdr->dst_addr) ||
+				  !allmulti)))) {
 				if (hdr->ether_type == ether_type_slow_be) {
 					bond_mode_8023ad_handle_slow_pkt(
 					    internals, slaves[idx], bufs[j]);
@@ -602,8 +619,11 @@ bond_ethdev_tx_burst_round_robin(void *queue, struct rte_mbuf **bufs,
 	/* Send packet burst on each slave device */
 	for (i = 0; i < num_of_slaves; i++) {
 		if (slave_nb_pkts[i] > 0) {
+			num_tx_slave = rte_eth_tx_prepare(slaves[i],
+					bd_tx_q->queue_id, slave_bufs[i],
+					slave_nb_pkts[i]);
 			num_tx_slave = rte_eth_tx_burst(slaves[i], bd_tx_q->queue_id,
-					slave_bufs[i], slave_nb_pkts[i]);
+					slave_bufs[i], num_tx_slave);
 
 			/* if tx burst fails move packets to end of bufs */
 			if (unlikely(num_tx_slave < slave_nb_pkts[i])) {
@@ -628,6 +648,7 @@ bond_ethdev_tx_burst_active_backup(void *queue,
 {
 	struct bond_dev_private *internals;
 	struct bond_tx_queue *bd_tx_q;
+	uint16_t nb_prep_pkts;
 
 	bd_tx_q = (struct bond_tx_queue *)queue;
 	internals = bd_tx_q->dev_private;
@@ -635,8 +656,11 @@ bond_ethdev_tx_burst_active_backup(void *queue,
 	if (internals->active_slave_count < 1)
 		return 0;
 
+	nb_prep_pkts = rte_eth_tx_prepare(internals->current_primary_port,
+				bd_tx_q->queue_id, bufs, nb_pkts);
+
 	return rte_eth_tx_burst(internals->current_primary_port, bd_tx_q->queue_id,
-			bufs, nb_pkts);
+			bufs, nb_prep_pkts);
 }
 
 static inline uint16_t
@@ -910,7 +934,7 @@ bond_ethdev_tx_burst_tlb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 
 	struct rte_eth_dev *primary_port =
 			&rte_eth_devices[internals->primary_port];
-	uint16_t num_tx_total = 0;
+	uint16_t num_tx_total = 0, num_tx_prep;
 	uint16_t i, j;
 
 	uint16_t num_of_slaves = internals->active_slave_count;
@@ -951,8 +975,10 @@ bond_ethdev_tx_burst_tlb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 #endif
 		}
 
-		num_tx_total += rte_eth_tx_burst(slaves[i], bd_tx_q->queue_id,
+		num_tx_prep = rte_eth_tx_prepare(slaves[i], bd_tx_q->queue_id,
 				bufs + num_tx_total, nb_pkts - num_tx_total);
+		num_tx_total += rte_eth_tx_burst(slaves[i], bd_tx_q->queue_id,
+				bufs + num_tx_total, num_tx_prep);
 
 		if (num_tx_total == nb_pkts)
 			break;
@@ -1064,8 +1090,10 @@ bond_ethdev_tx_burst_alb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	/* Send ARP packets on proper slaves */
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
 		if (slave_bufs_pkts[i] > 0) {
-			num_send = rte_eth_tx_burst(i, bd_tx_q->queue_id,
+			num_send = rte_eth_tx_prepare(i, bd_tx_q->queue_id,
 					slave_bufs[i], slave_bufs_pkts[i]);
+			num_send = rte_eth_tx_burst(i, bd_tx_q->queue_id,
+					slave_bufs[i], num_send);
 			for (j = 0; j < slave_bufs_pkts[i] - num_send; j++) {
 				bufs[nb_pkts - 1 - num_not_send - j] =
 						slave_bufs[i][nb_pkts - 1 - j];
@@ -1088,8 +1116,10 @@ bond_ethdev_tx_burst_alb(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts)
 	/* Send update packets on proper slaves */
 	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
 		if (update_bufs_pkts[i] > 0) {
+			num_send = rte_eth_tx_prepare(i, bd_tx_q->queue_id,
+					update_bufs[i], update_bufs_pkts[i]);
 			num_send = rte_eth_tx_burst(i, bd_tx_q->queue_id, update_bufs[i],
-					update_bufs_pkts[i]);
+					num_send);
 			for (j = num_send; j < update_bufs_pkts[i]; j++) {
 				rte_pktmbuf_free(update_bufs[i][j]);
 			}
@@ -1158,9 +1188,12 @@ tx_burst_balance(void *queue, struct rte_mbuf **bufs, uint16_t nb_bufs,
 		if (slave_nb_bufs[i] == 0)
 			continue;
 
-		slave_tx_count = rte_eth_tx_burst(slave_port_ids[i],
+		slave_tx_count = rte_eth_tx_prepare(slave_port_ids[i],
 				bd_tx_q->queue_id, slave_bufs[i],
 				slave_nb_bufs[i]);
+		slave_tx_count = rte_eth_tx_burst(slave_port_ids[i],
+				bd_tx_q->queue_id, slave_bufs[i],
+				slave_tx_count);
 
 		total_tx_count += slave_tx_count;
 
@@ -1243,8 +1276,10 @@ tx_burst_8023ad(void *queue, struct rte_mbuf **bufs, uint16_t nb_bufs,
 
 		if (rte_ring_dequeue(port->tx_ring,
 				     (void **)&ctrl_pkt) != -ENOENT) {
-			slave_tx_count = rte_eth_tx_burst(slave_port_ids[i],
+			slave_tx_count = rte_eth_tx_prepare(slave_port_ids[i],
 					bd_tx_q->queue_id, &ctrl_pkt, 1);
+			slave_tx_count = rte_eth_tx_burst(slave_port_ids[i],
+					bd_tx_q->queue_id, &ctrl_pkt, slave_tx_count);
 			/*
 			 * re-enqueue LAG control plane packets to buffering
 			 * ring if transmission fails so the packet isn't lost.
@@ -1315,6 +1350,9 @@ bond_ethdev_tx_burst_broadcast(void *queue, struct rte_mbuf **bufs,
 
 	if (num_of_slaves < 1)
 		return 0;
+
+	/* It is rare that bond different PMDs together, so just call tx-prepare once */
+	nb_pkts = rte_eth_tx_prepare(slaves[0], bd_tx_q->queue_id, bufs, nb_pkts);
 
 	/* Increment reference count on mbufs */
 	for (i = 0; i < nb_pkts; i++)
@@ -1717,21 +1755,14 @@ slave_configure(struct rte_eth_dev *bonded_eth_dev,
 
 	slave_eth_dev->data->dev_conf.rxmode.mtu =
 			bonded_eth_dev->data->dev_conf.rxmode.mtu;
+	slave_eth_dev->data->dev_conf.link_speeds =
+			bonded_eth_dev->data->dev_conf.link_speeds;
 
-	slave_eth_dev->data->dev_conf.txmode.offloads |=
-		bonded_eth_dev->data->dev_conf.txmode.offloads;
+	slave_eth_dev->data->dev_conf.txmode.offloads =
+			bonded_eth_dev->data->dev_conf.txmode.offloads;
 
-	slave_eth_dev->data->dev_conf.txmode.offloads &=
-		(bonded_eth_dev->data->dev_conf.txmode.offloads |
-		~internals->tx_offload_capa);
-
-	slave_eth_dev->data->dev_conf.rxmode.offloads |=
-		bonded_eth_dev->data->dev_conf.rxmode.offloads;
-
-	slave_eth_dev->data->dev_conf.rxmode.offloads &=
-		(bonded_eth_dev->data->dev_conf.rxmode.offloads |
-		~internals->rx_offload_capa);
-
+	slave_eth_dev->data->dev_conf.rxmode.offloads =
+			bonded_eth_dev->data->dev_conf.rxmode.offloads;
 
 	nb_rx_queues = bonded_eth_dev->data->nb_rx_queues;
 	nb_tx_queues = bonded_eth_dev->data->nb_tx_queues;
@@ -1828,15 +1859,6 @@ slave_start(struct rte_eth_dev *bonded_eth_dev,
 			RTE_BOND_LOG(ERR, "bond_ethdev_8023ad_flow_destroy: port=%d, err (%d)",
 				slave_eth_dev->data->port_id, errval);
 		}
-
-		errval = bond_ethdev_8023ad_flow_set(bonded_eth_dev,
-				slave_eth_dev->data->port_id);
-		if (errval != 0) {
-			RTE_BOND_LOG(ERR,
-				"bond_ethdev_8023ad_flow_set: port=%d, err (%d)",
-				slave_eth_dev->data->port_id, errval);
-			return errval;
-		}
 	}
 
 	/* Start device */
@@ -1845,6 +1867,18 @@ slave_start(struct rte_eth_dev *bonded_eth_dev,
 		RTE_BOND_LOG(ERR, "rte_eth_dev_start: port=%u, err (%d)",
 				slave_eth_dev->data->port_id, errval);
 		return -1;
+	}
+
+	if (internals->mode == BONDING_MODE_8023AD &&
+			internals->mode4.dedicated_queues.enabled == 1) {
+		errval = bond_ethdev_8023ad_flow_set(bonded_eth_dev,
+				slave_eth_dev->data->port_id);
+		if (errval != 0) {
+			RTE_BOND_LOG(ERR,
+				"bond_ethdev_8023ad_flow_set: port=%d, err (%d)",
+				slave_eth_dev->data->port_id, errval);
+			return errval;
+		}
 	}
 
 	/* If RSS is enabled for bonding, synchronize RETA */
@@ -2143,24 +2177,28 @@ bond_ethdev_stop(struct rte_eth_dev *eth_dev)
 	return 0;
 }
 
-int
-bond_ethdev_close(struct rte_eth_dev *dev)
+static void
+bond_ethdev_cfg_cleanup(struct rte_eth_dev *dev, bool remove)
 {
 	struct bond_dev_private *internals = dev->data->dev_private;
 	uint16_t bond_port_id = internals->port_id;
 	int skipped = 0;
 	struct rte_flow_error ferror;
 
-	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
-		return 0;
+	/* Flush flows in all back-end devices before removing them */
+	bond_flow_ops.flush(dev, &ferror);
 
-	RTE_BOND_LOG(INFO, "Closing bonded device %s", dev->device->name);
 	while (internals->slave_count != skipped) {
 		uint16_t port_id = internals->slaves[skipped].port_id;
+		int ret;
 
-		if (rte_eth_dev_stop(port_id) != 0) {
+		ret = rte_eth_dev_stop(port_id);
+		if (ret != 0) {
 			RTE_BOND_LOG(ERR, "Failed to stop device on port %u",
 				     port_id);
+		}
+
+		if (ret != 0 || !remove) {
 			skipped++;
 			continue;
 		}
@@ -2172,7 +2210,20 @@ bond_ethdev_close(struct rte_eth_dev *dev)
 			skipped++;
 		}
 	}
-	bond_flow_ops.flush(dev, &ferror);
+}
+
+int
+bond_ethdev_close(struct rte_eth_dev *dev)
+{
+	struct bond_dev_private *internals = dev->data->dev_private;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
+
+	RTE_BOND_LOG(INFO, "Closing bonded device %s", dev->device->name);
+
+	bond_ethdev_cfg_cleanup(dev, true);
+
 	bond_ethdev_free_queues(dev);
 	rte_bitmap_reset(internals->vlan_filter_bmp);
 	rte_bitmap_free(internals->vlan_filter_bmp);
@@ -2200,8 +2251,6 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	uint16_t max_nb_rx_queues = UINT16_MAX;
 	uint16_t max_nb_tx_queues = UINT16_MAX;
-	uint16_t max_rx_desc_lim = UINT16_MAX;
-	uint16_t max_tx_desc_lim = UINT16_MAX;
 
 	dev_info->max_mac_addrs = BOND_MAX_MAC_ADDRS;
 
@@ -2235,12 +2284,6 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 			if (slave_info.max_tx_queues < max_nb_tx_queues)
 				max_nb_tx_queues = slave_info.max_tx_queues;
-
-			if (slave_info.rx_desc_lim.nb_max < max_rx_desc_lim)
-				max_rx_desc_lim = slave_info.rx_desc_lim.nb_max;
-
-			if (slave_info.tx_desc_lim.nb_max < max_tx_desc_lim)
-				max_tx_desc_lim = slave_info.tx_desc_lim.nb_max;
 		}
 	}
 
@@ -2252,8 +2295,10 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	memcpy(&dev_info->default_txconf, &internals->default_txconf,
 	       sizeof(dev_info->default_txconf));
 
-	dev_info->rx_desc_lim.nb_max = max_rx_desc_lim;
-	dev_info->tx_desc_lim.nb_max = max_tx_desc_lim;
+	memcpy(&dev_info->rx_desc_lim, &internals->rx_desc_lim,
+	       sizeof(dev_info->rx_desc_lim));
+	memcpy(&dev_info->tx_desc_lim, &internals->tx_desc_lim,
+	       sizeof(dev_info->tx_desc_lim));
 
 	/**
 	 * If dedicated hw queues enabled for link bonding device in LACP mode
@@ -2275,6 +2320,7 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->reta_size = internals->reta_size;
 	dev_info->hash_key_size = internals->rss_key_len;
+	dev_info->speed_capa = internals->speed_capa;
 
 	return 0;
 }
@@ -3387,6 +3433,15 @@ bond_alloc(struct rte_vdev_device *dev, uint8_t mode)
 	memset(&internals->rx_desc_lim, 0, sizeof(internals->rx_desc_lim));
 	memset(&internals->tx_desc_lim, 0, sizeof(internals->tx_desc_lim));
 
+	/*
+	 * Do not restrict descriptor counts until
+	 * the first back-end device gets attached.
+	 */
+	internals->rx_desc_lim.nb_max = UINT16_MAX;
+	internals->tx_desc_lim.nb_max = UINT16_MAX;
+	internals->rx_desc_lim.nb_align = 1;
+	internals->tx_desc_lim.nb_align = 1;
+
 	memset(internals->active_slaves, 0, sizeof(internals->active_slaves));
 	memset(internals->slaves, 0, sizeof(internals->slaves));
 
@@ -3588,9 +3643,9 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 	const char *name = dev->device->name;
 	struct bond_dev_private *internals = dev->data->dev_private;
 	struct rte_kvargs *kvlist = internals->kvlist;
-	uint64_t offloads;
 	int arg_count;
 	uint16_t port_id = dev - rte_eth_devices;
+	uint32_t link_speeds;
 	uint8_t agg_mode;
 
 	static const uint8_t default_rss_key[40] = {
@@ -3601,6 +3656,9 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 	};
 
 	unsigned i, j;
+
+
+	bond_ethdev_cfg_cleanup(dev, false);
 
 	/*
 	 * If RSS is enabled, fill table with default values and
@@ -3649,14 +3707,27 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 		}
 	}
 
-	offloads = dev->data->dev_conf.txmode.offloads;
-	if ((offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) &&
-			(internals->mode == BONDING_MODE_8023AD ||
-			internals->mode == BONDING_MODE_BROADCAST)) {
-		RTE_BOND_LOG(WARNING,
-			"bond mode broadcast & 8023AD don't support MBUF_FAST_FREE offload, force disable it.");
-		offloads &= ~RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
-		dev->data->dev_conf.txmode.offloads = offloads;
+	link_speeds = dev->data->dev_conf.link_speeds;
+	/*
+	 * The default value of 'link_speeds' is zero. From its definition,
+	 * this value actually means auto-negotiation. But not all PMDs support
+	 * auto-negotiation. So ignore the check for the auto-negotiation and
+	 * only consider fixed speed to reduce the impact on PMDs.
+	 */
+	if (link_speeds & RTE_ETH_LINK_SPEED_FIXED) {
+		if ((link_speeds &
+		    (internals->speed_capa & ~RTE_ETH_LINK_SPEED_FIXED)) == 0) {
+			RTE_BOND_LOG(ERR, "the fixed speed is not supported by all slave devices.");
+			return -EINVAL;
+		}
+		/*
+		 * Two '1' in binary of 'link_speeds': bit0 and a unique
+		 * speed bit.
+		 */
+		if (__builtin_popcountl(link_speeds) != 2) {
+			RTE_BOND_LOG(ERR, "please set a unique speed.");
+			return -EINVAL;
+		}
 	}
 
 	/* set the max_rx_pktlen */
@@ -3666,8 +3737,10 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 	 * if no kvlist, it means that this bonded device has been created
 	 * through the bonding api.
 	 */
-	if (!kvlist)
+	if (!kvlist || internals->kvargs_processing_is_done)
 		return 0;
+
+	internals->kvargs_processing_is_done = true;
 
 	/* Parse MAC address for bonded device */
 	arg_count = rte_kvargs_count(kvlist, PMD_BOND_MAC_ADDR_KVARG);

@@ -80,6 +80,9 @@ extern uint8_t cl_quit;
 
 #define MIN_TOTAL_NUM_MBUFS 1024
 
+/* Maximum number of pools supported per Rx queue */
+#define MAX_MEMPOOL 8
+
 typedef uint8_t  lcoreid_t;
 typedef uint16_t portid_t;
 typedef uint16_t queueid_t;
@@ -204,6 +207,7 @@ struct port_table {
 	uint32_t id; /**< Table ID. */
 	uint32_t nb_pattern_templates; /**< Number of pattern templates. */
 	uint32_t nb_actions_templates; /**< Number of actions templates. */
+	struct rte_flow_attr flow_attr; /**< Flow attributes. */
 	struct rte_flow_template_table *table; /**< PMD opaque template object */
 };
 
@@ -316,7 +320,9 @@ struct rte_port {
 	queueid_t               queue_nb; /**< nb. of queues for flow rules */
 	uint32_t                queue_sz; /**< size of a queue for flow rules */
 	uint8_t                 slave_flag : 1, /**< bonding slave port */
-				bond_flag : 1; /**< port is bond device */
+				bond_flag : 1, /**< port is bond device */
+				fwd_mac_swap : 1, /**< swap packet MAC before forward */
+				update_conf : 1; /**< need to update bonding device configuration */
 	struct port_template    *pattern_templ_list; /**< Pattern templates. */
 	struct port_template    *actions_templ_list; /**< Actions templates. */
 	struct port_table       *table_list; /**< Flow tables. */
@@ -586,6 +592,8 @@ extern uint8_t  rx_pkt_nb_segs; /**< Number of segments to split */
 extern uint16_t rx_pkt_seg_offsets[MAX_SEGS_BUFFER_SPLIT];
 extern uint8_t  rx_pkt_nb_offs; /**< Number of specified offsets */
 
+extern uint8_t multi_rx_mempool; /**< Enables multi-rx-mempool feature. */
+
 /*
  * Configuration of packet segments used by the "txonly" processing engine.
  */
@@ -854,7 +862,7 @@ unsigned int parse_item_list(const char *str, const char *item_name,
 			unsigned int *parsed_items, int check_unique_values);
 unsigned int parse_hdrs_list(const char *str, const char *item_name,
 			unsigned int max_item,
-			unsigned int *parsed_items, int check_unique_values);
+			unsigned int *parsed_items);
 void launch_args_parse(int argc, char** argv);
 void cmd_reconfig_device_queue(portid_t id, uint8_t dev, uint8_t queue);
 void cmdline_read_from_file(const char *filename);
@@ -906,18 +914,21 @@ int port_flow_pattern_template_create(portid_t port_id, uint32_t id,
 				      const struct rte_flow_item *pattern);
 int port_flow_pattern_template_destroy(portid_t port_id, uint32_t n,
 				       const uint32_t *template);
+int port_flow_pattern_template_flush(portid_t port_id);
 int port_flow_actions_template_create(portid_t port_id, uint32_t id,
 				      const struct rte_flow_actions_template_attr *attr,
 				      const struct rte_flow_action *actions,
 				      const struct rte_flow_action *masks);
 int port_flow_actions_template_destroy(portid_t port_id, uint32_t n,
 				       const uint32_t *template);
+int port_flow_actions_template_flush(portid_t port_id);
 int port_flow_template_table_create(portid_t port_id, uint32_t id,
 		   const struct rte_flow_template_table_attr *table_attr,
 		   uint32_t nb_pattern_templates, uint32_t *pattern_templates,
 		   uint32_t nb_actions_templates, uint32_t *actions_templates);
 int port_flow_template_table_destroy(portid_t port_id,
 			    uint32_t n, const uint32_t *table);
+int port_flow_template_table_flush(portid_t port_id);
 int port_queue_flow_create(portid_t port_id, queueid_t queue_id,
 			   bool postpone, uint32_t table_id,
 			   uint32_t pattern_idx, uint32_t actions_idx,
@@ -939,6 +950,7 @@ int port_queue_action_handle_query(portid_t port_id, uint32_t queue_id,
 				   bool postpone, uint32_t id);
 int port_queue_flow_push(portid_t port_id, queueid_t queue_id);
 int port_queue_flow_pull(portid_t port_id, queueid_t queue_id);
+void port_queue_flow_aged(portid_t port_id, uint32_t queue_id, uint8_t destroy);
 int port_flow_validate(portid_t port_id,
 		       const struct rte_flow_attr *attr,
 		       const struct rte_flow_item *pattern,
@@ -1150,7 +1162,6 @@ uint16_t tx_pkt_set_dynf(uint16_t port_id, __rte_unused uint16_t queue,
 void add_tx_dynf_callback(portid_t portid);
 void remove_tx_dynf_callback(portid_t portid);
 int update_mtu_from_frame_size(portid_t portid, uint32_t max_rx_pktlen);
-int update_jumbo_frame_offload(portid_t portid);
 void flex_item_create(portid_t port_id, uint16_t flex_id, const char *filename);
 void flex_item_destroy(portid_t port_id, uint16_t flex_id);
 void port_flex_item_flush(portid_t port_id);

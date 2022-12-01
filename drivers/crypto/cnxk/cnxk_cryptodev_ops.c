@@ -27,11 +27,13 @@ cnxk_cpt_get_mlen(void)
 	len = 2 * sizeof(uint64_t);
 	len += ROC_SE_MAX_MAC_LEN * sizeof(uint8_t);
 
+	/* For PDCP_CHAIN passthrough alignment */
+	len += 8;
 	len += ROC_SE_OFF_CTRL_LEN + ROC_CPT_AES_CBC_IV_LEN;
-	len += RTE_ALIGN_CEIL((ROC_SE_SG_LIST_HDR_SIZE +
-			       (RTE_ALIGN_CEIL(ROC_SE_MAX_SG_IN_OUT_CNT, 4) >>
-				2) * ROC_SE_SG_ENTRY_SIZE),
-			      8);
+	len += RTE_ALIGN_CEIL(
+		(ROC_SE_SG_LIST_HDR_SIZE +
+		 (RTE_ALIGN_CEIL(ROC_SE_MAX_SG_IN_OUT_CNT, 4) >> 2) * ROC_SE_SG_ENTRY_SIZE),
+		8);
 
 	return len;
 }
@@ -449,9 +451,7 @@ cnxk_sess_fill(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xform,
 	bool pdcp_chain_supported = false;
 	bool ciph_then_auth = false;
 
-	if (roc_cpt->cpt_revision == ROC_CPT_REVISION_ID_96XX_B0 ||
-	    roc_cpt->cpt_revision == ROC_CPT_REVISION_ID_96XX_C0 ||
-	    roc_cpt->cpt_revision == ROC_CPT_REVISION_ID_98XX)
+	if (roc_cpt->hw_caps[CPT_ENG_TYPE_SE].pdcp_chain)
 		pdcp_chain_supported = true;
 
 	if (xform == NULL)

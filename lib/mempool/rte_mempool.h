@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2010-2014 Intel Corporation.
  * Copyright(c) 2016 6WIND S.A.
+ * Copyright(c) 2022 SmartShare Systems
  */
 
 #ifndef _RTE_MEMPOOL_H_
@@ -37,6 +38,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 
+#include <rte_compat.h>
 #include <rte_config.h>
 #include <rte_spinlock.h>
 #include <rte_debug.h>
@@ -56,7 +58,7 @@ extern "C" {
 #define RTE_MEMPOOL_HEADER_COOKIE2  0xf2eef2eedadd2e55ULL /**< Header cookie. */
 #define RTE_MEMPOOL_TRAILER_COOKIE  0xadd2e55badbadbadULL /**< Trailer cookie.*/
 
-#ifdef RTE_LIBRTE_MEMPOOL_DEBUG
+#ifdef RTE_LIBRTE_MEMPOOL_STATS
 /**
  * A structure that stores the mempool statistics (per-lcore).
  * Note: Cache stats (put_cache_bulk/objs, get_cache_bulk/objs) are not
@@ -86,11 +88,26 @@ struct rte_mempool_cache {
 	uint32_t size;	      /**< Size of the cache */
 	uint32_t flushthresh; /**< Threshold before we flush excess elements */
 	uint32_t len;	      /**< Current cache count */
+#ifdef RTE_LIBRTE_MEMPOOL_STATS
+	uint32_t unused;
 	/*
+	 * Alternative location for the most frequently updated mempool statistics (per-lcore),
+	 * providing faster update access when using a mempool cache.
+	 */
+	struct {
+		uint64_t put_bulk;          /**< Number of puts. */
+		uint64_t put_objs;          /**< Number of objects successfully put. */
+		uint64_t get_success_bulk;  /**< Successful allocation number. */
+		uint64_t get_success_objs;  /**< Objects successfully allocated. */
+	} stats;                        /**< Statistics */
+#endif
+	/**
+	 * Cache objects
+	 *
 	 * Cache is allocated to this size to allow it to overflow in certain
 	 * cases to avoid needless emptying of cache.
 	 */
-	void *objs[RTE_MEMPOOL_CACHE_MAX_SIZE * 3]; /**< Cache objects */
+	void *objs[RTE_MEMPOOL_CACHE_MAX_SIZE * 2] __rte_cache_aligned;
 } __rte_cache_aligned;
 
 /**
@@ -235,9 +252,12 @@ struct rte_mempool {
 	uint32_t nb_mem_chunks;          /**< Number of memory chunks */
 	struct rte_mempool_memhdr_list mem_list; /**< List of memory chunks */
 
-#ifdef RTE_LIBRTE_MEMPOOL_DEBUG
-	/** Per-lcore statistics. */
-	struct rte_mempool_debug_stats stats[RTE_MAX_LCORE];
+#ifdef RTE_LIBRTE_MEMPOOL_STATS
+	/** Per-lcore statistics.
+	 *
+	 * Plus one, for unregistered non-EAL threads.
+	 */
+	struct rte_mempool_debug_stats stats[RTE_MAX_LCORE + 1];
 #endif
 }  __rte_cache_aligned;
 
@@ -290,25 +310,44 @@ struct rte_mempool {
 	| RTE_MEMPOOL_F_SC_GET \
 	| RTE_MEMPOOL_F_NO_IOVA_CONTIG \
 	)
+
 /**
- * @internal When debug is enabled, store some statistics.
+ * @internal When stats is enabled, store some statistics.
  *
  * @param mp
  *   Pointer to the memory pool.
  * @param name
  *   Name of the statistics field to increment in the memory pool.
  * @param n
- *   Number to add to the object-oriented statistics.
+ *   Number to add to the statistics.
  */
-#ifdef RTE_LIBRTE_MEMPOOL_DEBUG
-#define RTE_MEMPOOL_STAT_ADD(mp, name, n) do {                  \
-		unsigned __lcore_id = rte_lcore_id();           \
-		if (__lcore_id < RTE_MAX_LCORE) {               \
-			mp->stats[__lcore_id].name += n;        \
-		}                                               \
+#ifdef RTE_LIBRTE_MEMPOOL_STATS
+#define RTE_MEMPOOL_STAT_ADD(mp, name, n) do {                                  \
+		unsigned int __lcore_id = rte_lcore_id();                       \
+		if (likely(__lcore_id < RTE_MAX_LCORE))                         \
+			(mp)->stats[__lcore_id].name += (n);                    \
+		else                                                            \
+			__atomic_fetch_add(&((mp)->stats[RTE_MAX_LCORE].name),  \
+					   (n), __ATOMIC_RELAXED);              \
 	} while (0)
 #else
 #define RTE_MEMPOOL_STAT_ADD(mp, name, n) do {} while (0)
+#endif
+
+/**
+ * @internal When stats is enabled, store some statistics.
+ *
+ * @param cache
+ *   Pointer to the memory pool cache.
+ * @param name
+ *   Name of the statistics field to increment in the memory pool cache.
+ * @param n
+ *   Number to add to the statistics.
+ */
+#ifdef RTE_LIBRTE_MEMPOOL_STATS
+#define RTE_MEMPOOL_CACHE_STAT_ADD(cache, name, n) ((cache)->stats.name += (n))
+#else
+#define RTE_MEMPOOL_CACHE_STAT_ADD(cache, name, n) do {} while (0)
 #endif
 
 /**
@@ -1325,37 +1364,46 @@ rte_mempool_do_generic_put(struct rte_mempool *mp, void * const *obj_table,
 {
 	void **cache_objs;
 
-	/* increment stat now, adding in mempool always success */
-	RTE_MEMPOOL_STAT_ADD(mp, put_bulk, 1);
-	RTE_MEMPOOL_STAT_ADD(mp, put_objs, n);
-
-	/* No cache provided or if put would overflow mem allocated for cache */
-	if (unlikely(cache == NULL || n > RTE_MEMPOOL_CACHE_MAX_SIZE))
+	/* No cache provided */
+	if (unlikely(cache == NULL))
 		goto driver_enqueue;
 
-	cache_objs = &cache->objs[cache->len];
+	/* increment stat now, adding in mempool always success */
+	RTE_MEMPOOL_CACHE_STAT_ADD(cache, put_bulk, 1);
+	RTE_MEMPOOL_CACHE_STAT_ADD(cache, put_objs, n);
+
+	/* The request itself is too big for the cache */
+	if (unlikely(n > cache->flushthresh))
+		goto driver_enqueue_stats_incremented;
 
 	/*
-	 * The cache follows the following algorithm
-	 *   1. Add the objects to the cache
-	 *   2. Anything greater than the cache min value (if it crosses the
-	 *   cache flush threshold) is flushed to the backend.
+	 * The cache follows the following algorithm:
+	 *   1. If the objects cannot be added to the cache without crossing
+	 *      the flush threshold, flush the cache to the backend.
+	 *   2. Add the objects to the cache.
 	 */
 
-	/* Add elements back into the cache */
-	rte_memcpy(&cache_objs[0], obj_table, sizeof(void *) * n);
-
-	cache->len += n;
-
-	if (cache->len >= cache->flushthresh) {
-		rte_mempool_ops_enqueue_bulk(mp, &cache->objs[cache->size],
-				cache->len - cache->size);
-		cache->len = cache->size;
+	if (cache->len + n <= cache->flushthresh) {
+		cache_objs = &cache->objs[cache->len];
+		cache->len += n;
+	} else {
+		cache_objs = &cache->objs[0];
+		rte_mempool_ops_enqueue_bulk(mp, cache_objs, cache->len);
+		cache->len = n;
 	}
+
+	/* Add the objects to the cache. */
+	rte_memcpy(cache_objs, obj_table, sizeof(void *) * n);
 
 	return;
 
 driver_enqueue:
+
+	/* increment stat now, adding in mempool always success */
+	RTE_MEMPOOL_STAT_ADD(mp, put_bulk, 1);
+	RTE_MEMPOOL_STAT_ADD(mp, put_objs, n);
+
+driver_enqueue_stats_incremented:
 
 	/* push objects to the backend */
 	rte_mempool_ops_enqueue_bulk(mp, obj_table, n);
@@ -1463,8 +1511,8 @@ rte_mempool_do_generic_get(struct rte_mempool *mp, void **obj_table,
 	if (remaining == 0) {
 		/* The entire request is satisfied from the cache. */
 
-		RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
-		RTE_MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
+		RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
 
 		return 0;
 	}
@@ -1493,8 +1541,8 @@ rte_mempool_do_generic_get(struct rte_mempool *mp, void **obj_table,
 
 	cache->len = cache->size;
 
-	RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
-	RTE_MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+	RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
+	RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
 
 	return 0;
 
@@ -1516,8 +1564,13 @@ driver_dequeue:
 		RTE_MEMPOOL_STAT_ADD(mp, get_fail_bulk, 1);
 		RTE_MEMPOOL_STAT_ADD(mp, get_fail_objs, n);
 	} else {
-		RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
-		RTE_MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+		if (likely(cache != NULL)) {
+			RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_bulk, 1);
+			RTE_MEMPOOL_CACHE_STAT_ADD(cache, get_success_objs, n);
+		} else {
+			RTE_MEMPOOL_STAT_ADD(mp, get_success_bulk, 1);
+			RTE_MEMPOOL_STAT_ADD(mp, get_success_objs, n);
+		}
 	}
 
 	return ret;

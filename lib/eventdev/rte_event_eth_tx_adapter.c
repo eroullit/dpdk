@@ -639,6 +639,7 @@ txa_service_func(void *args)
 	struct txa_service_data *txa = args;
 	uint8_t dev_id;
 	uint8_t port;
+	int ret = -EAGAIN;
 	uint16_t n;
 	uint32_t nb_tx, max_nb_tx;
 	struct rte_event ev[TXA_BATCH_SIZE];
@@ -648,10 +649,10 @@ txa_service_func(void *args)
 	port = txa->port_id;
 
 	if (txa->nb_queues == 0)
-		return 0;
+		return ret;
 
 	if (!rte_spinlock_trylock(&txa->tx_lock))
-		return 0;
+		return ret;
 
 	for (nb_tx = 0; nb_tx < max_nb_tx; nb_tx += n) {
 
@@ -659,6 +660,7 @@ txa_service_func(void *args)
 		if (!n)
 			break;
 		txa_service_tx(txa, ev, n);
+		ret = 0;
 	}
 
 	if ((txa->loop_cnt++ & (TXA_FLUSH_THRESHOLD - 1)) == 0) {
@@ -692,10 +694,13 @@ txa_service_func(void *args)
 			}
 		}
 
-		txa->stats.tx_packets += nb_tx;
+		if (likely(nb_tx > 0)) {
+			txa->stats.tx_packets += nb_tx;
+			ret = 0;
+		}
 	}
 	rte_spinlock_unlock(&txa->tx_lock);
-	return 0;
+	return ret;
 }
 
 static int
@@ -929,6 +934,8 @@ txa_service_queue_del(uint8_t id,
 		uint16_t i, q, nb_queues;
 		int ret = 0;
 
+		if (txa->txa_ethdev == NULL)
+			return 0;
 		nb_queues = txa->txa_ethdev[port_id].nb_queues;
 		if (nb_queues == 0)
 			return 0;
@@ -941,10 +948,10 @@ txa_service_queue_del(uint8_t id,
 
 			if (tqi[q].added) {
 				ret = txa_service_queue_del(id, dev, q);
+				i++;
 				if (ret != 0)
 					break;
 			}
-			i++;
 			q++;
 		}
 		return ret;

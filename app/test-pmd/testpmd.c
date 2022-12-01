@@ -231,7 +231,7 @@ unsigned int xstats_display_num; /**< Size of extended statistics to show */
  * In container, it cannot terminate the process which running with 'stats-period'
  * option. Set flag to exit stats period loop after received SIGINT/SIGTERM.
  */
-uint8_t f_quit;
+static volatile uint8_t f_quit;
 uint8_t cl_quit; /* Quit testpmd from cmdline. */
 
 /*
@@ -248,6 +248,8 @@ uint8_t  rx_pkt_nb_segs; /**< Number of segments to split */
 uint16_t rx_pkt_seg_offsets[MAX_SEGS_BUFFER_SPLIT];
 uint8_t  rx_pkt_nb_offs; /**< Number of specified offsets */
 uint32_t rx_pkt_hdr_protos[MAX_SEGS_BUFFER_SPLIT];
+
+uint8_t multi_rx_mempool; /**< Enables multi-rx-mempool feature */
 
 /*
  * Configuration of packet segments used by the "txonly" processing engine.
@@ -426,6 +428,9 @@ static const char * const eth_event_desc[] = {
 	[RTE_ETH_EVENT_DESTROY] = "device released",
 	[RTE_ETH_EVENT_FLOW_AGED] = "flow aged",
 	[RTE_ETH_EVENT_RX_AVAIL_THRESH] = "RxQ available descriptors threshold reached",
+	[RTE_ETH_EVENT_ERR_RECOVERING] = "error recovering",
+	[RTE_ETH_EVENT_RECOVERY_SUCCESS] = "error recovery successful",
+	[RTE_ETH_EVENT_RECOVERY_FAILED] = "error recovery failed",
 	[RTE_ETH_EVENT_MAX] = NULL,
 };
 
@@ -440,7 +445,10 @@ uint32_t event_print_mask = (UINT32_C(1) << RTE_ETH_EVENT_UNKNOWN) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_IPSEC) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_MACSEC) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RMV) |
-			    (UINT32_C(1) << RTE_ETH_EVENT_FLOW_AGED);
+			    (UINT32_C(1) << RTE_ETH_EVENT_FLOW_AGED) |
+			    (UINT32_C(1) << RTE_ETH_EVENT_ERR_RECOVERING) |
+			    (UINT32_C(1) << RTE_ETH_EVENT_RECOVERY_SUCCESS) |
+			    (UINT32_C(1) << RTE_ETH_EVENT_RECOVERY_FAILED);
 /*
  * Decide if all memory are locked for performance.
  */
@@ -2647,46 +2655,85 @@ rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 	       struct rte_eth_rxconf *rx_conf, struct rte_mempool *mp)
 {
 	union rte_eth_rxseg rx_useg[MAX_SEGS_BUFFER_SPLIT] = {};
+	struct rte_mempool *rx_mempool[MAX_MEMPOOL] = {};
+	struct rte_mempool *mpx;
 	unsigned int i, mp_n;
+	uint32_t prev_hdrs = 0;
 	int ret;
 
-	if (rx_pkt_nb_segs <= 1 ||
-	    (rx_conf->offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT) == 0) {
+
+	if ((rx_pkt_nb_segs > 1) &&
+	    (rx_conf->offloads & RTE_ETH_RX_OFFLOAD_BUFFER_SPLIT)) {
+		/* multi-segment configuration */
+		for (i = 0; i < rx_pkt_nb_segs; i++) {
+			struct rte_eth_rxseg_split *rx_seg = &rx_useg[i].split;
+			/*
+			 * Use last valid pool for the segments with number
+			 * exceeding the pool index.
+			 */
+			mp_n = (i >= mbuf_data_size_n) ? mbuf_data_size_n - 1 : i;
+			mpx = mbuf_pool_find(socket_id, mp_n);
+			/* Handle zero as mbuf data buffer size. */
+			rx_seg->offset = i < rx_pkt_nb_offs ?
+					   rx_pkt_seg_offsets[i] : 0;
+			rx_seg->mp = mpx ? mpx : mp;
+			if (rx_pkt_hdr_protos[i] != 0 && rx_pkt_seg_lengths[i] == 0) {
+				rx_seg->proto_hdr = rx_pkt_hdr_protos[i] & ~prev_hdrs;
+				prev_hdrs |= rx_seg->proto_hdr;
+			} else {
+				rx_seg->length = rx_pkt_seg_lengths[i] ?
+						rx_pkt_seg_lengths[i] :
+						mbuf_data_size[mp_n];
+			}
+		}
+		rx_conf->rx_nseg = rx_pkt_nb_segs;
+		rx_conf->rx_seg = rx_useg;
+		rx_conf->rx_mempools = NULL;
+		rx_conf->rx_nmempool = 0;
+		ret = rte_eth_rx_queue_setup(port_id, rx_queue_id, nb_rx_desc,
+				    socket_id, rx_conf, NULL);
 		rx_conf->rx_seg = NULL;
 		rx_conf->rx_nseg = 0;
-		ret = rte_eth_rx_queue_setup(port_id, rx_queue_id,
-					     nb_rx_desc, socket_id,
-					     rx_conf, mp);
-		goto exit;
-	}
-	for (i = 0; i < rx_pkt_nb_segs; i++) {
-		struct rte_eth_rxseg_split *rx_seg = &rx_useg[i].split;
-		struct rte_mempool *mpx;
-		/*
-		 * Use last valid pool for the segments with number
-		 * exceeding the pool index.
-		 */
-		mp_n = (i >= mbuf_data_size_n) ? mbuf_data_size_n - 1 : i;
-		mpx = mbuf_pool_find(socket_id, mp_n);
-		/* Handle zero as mbuf data buffer size. */
-		rx_seg->offset = i < rx_pkt_nb_offs ?
-				   rx_pkt_seg_offsets[i] : 0;
-		rx_seg->mp = mpx ? mpx : mp;
-		if (rx_pkt_hdr_protos[i] != 0 && rx_pkt_seg_lengths[i] == 0) {
-			rx_seg->proto_hdr = rx_pkt_hdr_protos[i];
-		} else {
-			rx_seg->length = rx_pkt_seg_lengths[i] ?
-					rx_pkt_seg_lengths[i] :
-					mbuf_data_size[mp_n];
+	} else if (multi_rx_mempool == 1) {
+		/* multi-pool configuration */
+		struct rte_eth_dev_info dev_info;
+
+		if (mbuf_data_size_n <= 1) {
+			fprintf(stderr, "Invalid number of mempools %u\n",
+				mbuf_data_size_n);
+			return -EINVAL;
 		}
-	}
-	rx_conf->rx_nseg = rx_pkt_nb_segs;
-	rx_conf->rx_seg = rx_useg;
-	ret = rte_eth_rx_queue_setup(port_id, rx_queue_id, nb_rx_desc,
+		ret = rte_eth_dev_info_get(port_id, &dev_info);
+		if (ret != 0)
+			return ret;
+		if (dev_info.max_rx_mempools == 0) {
+			fprintf(stderr,
+				"Port %u doesn't support requested multi-rx-mempool configuration.\n",
+				port_id);
+			return -ENOTSUP;
+		}
+		for (i = 0; i < mbuf_data_size_n; i++) {
+			mpx = mbuf_pool_find(socket_id, i);
+			rx_mempool[i] = mpx ? mpx : mp;
+		}
+		rx_conf->rx_mempools = rx_mempool;
+		rx_conf->rx_nmempool = mbuf_data_size_n;
+		rx_conf->rx_seg = NULL;
+		rx_conf->rx_nseg = 0;
+		ret = rte_eth_rx_queue_setup(port_id, rx_queue_id, nb_rx_desc,
 				    socket_id, rx_conf, NULL);
-	rx_conf->rx_seg = NULL;
-	rx_conf->rx_nseg = 0;
-exit:
+		rx_conf->rx_mempools = NULL;
+		rx_conf->rx_nmempool = 0;
+	} else {
+		/* Single pool/segment configuration */
+		rx_conf->rx_seg = NULL;
+		rx_conf->rx_nseg = 0;
+		rx_conf->rx_mempools = NULL;
+		rx_conf->rx_nmempool = 0;
+		ret = rte_eth_rx_queue_setup(port_id, rx_queue_id, nb_rx_desc,
+				    socket_id, rx_conf, mp);
+	}
+
 	ports[port_id].rxq[rx_queue_id].state = rx_conf->rx_deferred_start ?
 						RTE_ETH_QUEUE_STATE_STOPPED :
 						RTE_ETH_QUEUE_STATE_STARTED;
@@ -2795,6 +2842,41 @@ fill_xstats_display_info(void)
 		fill_xstats_display_info_for_port(pi);
 }
 
+/*
+ * Some capabilities (like, rx_offload_capa and tx_offload_capa) of bonding
+ * device in dev_info is zero when no slave is added. And its capability
+ * will be updated when add a new slave device. So adding a slave device need
+ * to update the port configurations of bonding device.
+ */
+static void
+update_bonding_port_dev_conf(portid_t bond_pid)
+{
+#ifdef RTE_NET_BOND
+	struct rte_port *port = &ports[bond_pid];
+	uint16_t i;
+	int ret;
+
+	ret = eth_dev_info_get_print_err(bond_pid, &port->dev_info);
+	if (ret != 0) {
+		fprintf(stderr, "Failed to get dev info for port = %u\n",
+			bond_pid);
+		return;
+	}
+
+	if (port->dev_info.tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE)
+		port->dev_conf.txmode.offloads |=
+				RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+	/* Apply Tx offloads configuration */
+	for (i = 0; i < port->dev_info.max_tx_queues; i++)
+		port->txq[i].conf.offloads = port->dev_conf.txmode.offloads;
+
+	port->dev_conf.rx_adv_conf.rss_conf.rss_hf &=
+				port->dev_info.flow_type_rss_offloads;
+#else
+	RTE_SET_USED(bond_pid);
+#endif
+}
+
 int
 start_port(portid_t pid)
 {
@@ -2857,6 +2939,11 @@ start_port(portid_t pid)
 					"Port %d doesn't support hairpin queues\n",
 					pi);
 				return -1;
+			}
+
+			if (port->bond_flag == 1 && port->update_conf == 1) {
+				update_bonding_port_dev_conf(pi);
+				port->update_conf = 0;
 			}
 
 			/* configure port */
@@ -3112,6 +3199,7 @@ stop_port(portid_t pid)
 	int need_check_link_status = 0;
 	portid_t peer_pl[RTE_MAX_ETHPORTS];
 	int peer_pi;
+	int ret;
 
 	if (port_id_is_invalid(pid, ENABLED_WARN))
 		return;
@@ -3161,9 +3249,14 @@ stop_port(portid_t pid)
 		if (port->flow_list)
 			port_flow_flush(pi);
 
-		if (eth_dev_stop_mp(pi) != 0)
+		ret = eth_dev_stop_mp(pi);
+		if (ret != 0) {
 			RTE_LOG(ERR, EAL, "rte_eth_dev_stop failed for port %u\n",
 				pi);
+			/* Allow to retry stopping the port. */
+			port->port_status = RTE_PORT_STARTED;
+			continue;
+		}
 
 		if (port->port_status == RTE_PORT_HANDLING)
 			port->port_status = RTE_PORT_STOPPED;
@@ -3206,6 +3299,9 @@ flush_port_owned_resources(portid_t pi)
 	mcast_addr_pool_destroy(pi);
 	port_flow_flush(pi);
 	port_flex_item_flush(pi);
+	port_flow_template_table_flush(pi);
+	port_flow_pattern_template_flush(pi);
+	port_flow_actions_template_flush(pi);
 	port_action_handle_flush(pi);
 }
 
@@ -3333,14 +3429,16 @@ reset_port(portid_t pid)
 			continue;
 		}
 
-		diag = rte_eth_dev_reset(pi);
-		if (diag == 0) {
-			port = &ports[pi];
-			port->need_reconfig = 1;
-			port->need_reconfig_queues = 1;
-		} else {
-			fprintf(stderr, "Failed to reset port %d. diag=%d\n",
-				pi, diag);
+		if (is_proc_primary()) {
+			diag = rte_eth_dev_reset(pi);
+			if (diag == 0) {
+				port = &ports[pi];
+				port->need_reconfig = 1;
+				port->need_reconfig_queues = 1;
+			} else {
+				fprintf(stderr, "Failed to reset port %d. diag=%d\n",
+					pi, diag);
+			}
 		}
 	}
 
@@ -4206,10 +4304,11 @@ init_port(void)
 				"rte_zmalloc(%d struct rte_port) failed\n",
 				RTE_MAX_ETHPORTS);
 	}
-	for (i = 0; i < RTE_MAX_ETHPORTS; i++)
+	for (i = 0; i < RTE_MAX_ETHPORTS; i++) {
+		ports[i].fwd_mac_swap = 1;
 		ports[i].xstats_info.allocated = false;
-	for (i = 0; i < RTE_MAX_ETHPORTS; i++)
 		LIST_INIT(&ports[i].flow_tunnel_list);
+	}
 	/* Initialize ports NUMA structures */
 	memset(port_numa, NUMA_NO_CONFIG, RTE_MAX_ETHPORTS);
 	memset(rxring_numa, NUMA_NO_CONFIG, RTE_MAX_ETHPORTS);

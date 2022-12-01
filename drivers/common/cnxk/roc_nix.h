@@ -315,6 +315,10 @@ struct roc_nix_rq {
 	/* Average SPB aura level drop threshold for RED */
 	uint8_t spb_red_drop;
 	/* Average SPB aura level pass threshold for RED */
+	uint8_t xqe_red_pass;
+	/* Average xqe level drop threshold for RED */
+	uint8_t xqe_red_drop;
+	/* Average xqe level pass threshold for RED */
 	uint8_t spb_red_pass;
 	/* LPB aura drop enable */
 	bool lpb_drop_ena;
@@ -422,6 +426,7 @@ struct roc_nix {
 	uint32_t ipsec_in_min_spi;
 	uint32_t ipsec_in_max_spi;
 	uint32_t ipsec_out_max_sa;
+	uint32_t dwrr_mtu;
 	bool ipsec_out_sso_pffunc;
 	bool custom_sa_action;
 	/* End of input parameters */
@@ -431,7 +436,7 @@ struct roc_nix {
 	bool rx_ptp_ena;
 	uint16_t cints;
 
-#define ROC_NIX_MEM_SZ (6 * 1024)
+#define ROC_NIX_MEM_SZ (6 * 1056)
 	uint8_t reserved[ROC_NIX_MEM_SZ] __plt_cache_aligned;
 } __plt_cache_aligned;
 
@@ -869,6 +874,7 @@ int __roc_api roc_nix_rq_init(struct roc_nix *roc_nix, struct roc_nix_rq *rq,
 			      bool ena);
 int __roc_api roc_nix_rq_modify(struct roc_nix *roc_nix, struct roc_nix_rq *rq,
 				bool ena);
+int __roc_api roc_nix_rq_cman_config(struct roc_nix *roc_nix, struct roc_nix_rq *rq);
 int __roc_api roc_nix_rq_ena_dis(struct roc_nix_rq *rq, bool enable);
 int __roc_api roc_nix_rq_is_sso_enable(struct roc_nix *roc_nix, uint32_t qid);
 int __roc_api roc_nix_rq_fini(struct roc_nix_rq *rq);

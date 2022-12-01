@@ -10,6 +10,7 @@
 #include "../nfp_logs.h"
 #include "../nfp_ctrl.h"
 #include "../nfp_rxtx.h"
+#include "../nfp_flow.h"
 #include "../nfpcore/nfp_mip.h"
 #include "../nfpcore/nfp_rtsym.h"
 #include "../nfpcore/nfp_nsp.h"
@@ -413,45 +414,6 @@ nfp_flower_repr_stats_reset(struct rte_eth_dev *ethdev)
 }
 
 static int
-nfp_flower_repr_promiscuous_enable(struct rte_eth_dev *dev)
-{
-	struct nfp_net_hw *pf_hw;
-	struct nfp_flower_representor *repr;
-
-	repr = (struct nfp_flower_representor *)dev->data->dev_private;
-	pf_hw = repr->app_fw_flower->pf_hw;
-
-	if (!(pf_hw->cap & NFP_NET_CFG_CTRL_PROMISC)) {
-		PMD_DRV_LOG(INFO, "Promiscuous mode not supported");
-		return -ENOTSUP;
-	}
-
-	if (pf_hw->ctrl & NFP_NET_CFG_CTRL_PROMISC) {
-		PMD_DRV_LOG(INFO, "Promiscuous mode already enabled");
-		return 0;
-	}
-
-	return nfp_net_promisc_enable(pf_hw->eth_dev);
-}
-
-static int
-nfp_flower_repr_promiscuous_disable(struct rte_eth_dev *dev)
-{
-	struct nfp_net_hw *pf_hw;
-	struct nfp_flower_representor *repr;
-
-	repr = (struct nfp_flower_representor *)dev->data->dev_private;
-	pf_hw = repr->app_fw_flower->pf_hw;
-
-	if ((pf_hw->ctrl & NFP_NET_CFG_CTRL_PROMISC) == 0) {
-		PMD_DRV_LOG(INFO, "Promiscuous mode already disabled");
-		return 0;
-	}
-
-	return nfp_net_promisc_disable(pf_hw->eth_dev);
-}
-
-static int
 nfp_flower_repr_mac_addr_set(struct rte_eth_dev *ethdev,
 		struct rte_ether_addr *mac_addr)
 {
@@ -565,8 +527,8 @@ static const struct eth_dev_ops nfp_flower_pf_repr_dev_ops = {
 	.stats_get            = nfp_flower_repr_stats_get,
 	.stats_reset          = nfp_flower_repr_stats_reset,
 
-	.promiscuous_enable   = nfp_flower_repr_promiscuous_enable,
-	.promiscuous_disable  = nfp_flower_repr_promiscuous_disable,
+	.promiscuous_enable   = nfp_net_promisc_enable,
+	.promiscuous_disable  = nfp_net_promisc_enable,
 
 	.mac_addr_set         = nfp_flower_repr_mac_addr_set,
 };
@@ -586,10 +548,12 @@ static const struct eth_dev_ops nfp_flower_repr_dev_ops = {
 	.stats_get            = nfp_flower_repr_stats_get,
 	.stats_reset          = nfp_flower_repr_stats_reset,
 
-	.promiscuous_enable   = nfp_flower_repr_promiscuous_enable,
-	.promiscuous_disable  = nfp_flower_repr_promiscuous_disable,
+	.promiscuous_enable   = nfp_net_promisc_enable,
+	.promiscuous_disable  = nfp_net_promisc_enable,
 
 	.mac_addr_set         = nfp_flower_repr_mac_addr_set,
+
+	.flow_ops_get         = nfp_net_flow_ops_get,
 };
 
 static uint32_t

@@ -81,12 +81,12 @@ parser_read_gcm_pt_len(const char *key, char *src,
 
 	if (vec.pt.len == 0) {
 		info.interim_info.gcm_data.is_gmac = 1;
-		test_ops.prepare_op = prepare_auth_op;
-		test_ops.prepare_xform = prepare_gmac_xform;
+		test_ops.prepare_sym_op = prepare_auth_op;
+		test_ops.prepare_sym_xform = prepare_gmac_xform;
 	} else {
 		info.interim_info.gcm_data.is_gmac = 0;
-		test_ops.prepare_op = prepare_aead_op;
-		test_ops.prepare_xform = prepare_gcm_xform;
+		test_ops.prepare_sym_op = prepare_aead_op;
+		test_ops.prepare_sym_xform = prepare_gcm_xform;
 	}
 
 	return ret;
@@ -292,13 +292,14 @@ parse_test_gcm_json_writeback(struct fips_val *val)
 
 	if (info.op == FIPS_TEST_ENC_AUTH_GEN) {
 		json_t *ct;
+		if (!info.interim_info.gcm_data.is_gmac) {
+			tmp_val.val = val->val;
+			tmp_val.len = vec.pt.len;
 
-		tmp_val.val = val->val;
-		tmp_val.len = vec.pt.len;
-
-		writeback_hex_str("", info.one_line_text, &tmp_val);
-		ct = json_string(info.one_line_text);
-		json_object_set_new(json_info.json_write_case, CT_JSON_STR, ct);
+			writeback_hex_str("", info.one_line_text, &tmp_val);
+			ct = json_string(info.one_line_text);
+			json_object_set_new(json_info.json_write_case, CT_JSON_STR, ct);
+		}
 
 		if (info.interim_info.gcm_data.gen_iv) {
 			json_t *iv;
@@ -329,11 +330,16 @@ parse_test_gcm_json_writeback(struct fips_val *val)
 				json_object_set_new(json_info.json_write_case, PT_JSON_STR,
 					json_string(info.one_line_text));
 			} else {
-				json_object_set_new(json_info.json_write_case, PT_JSON_STR,
-					json_string(""));
+				json_object_set_new(json_info.json_write_case, "testPassed",
+					json_true());
 			}
 		} else {
-			json_object_set_new(json_info.json_write_case, "testPassed", json_false());
+			if (!info.interim_info.gcm_data.is_gmac)
+				json_object_set_new(json_info.json_write_case, PT_JSON_STR,
+					json_string(""));
+			else
+				json_object_set_new(json_info.json_write_case, "testPassed",
+					json_false());
 		}
 	}
 

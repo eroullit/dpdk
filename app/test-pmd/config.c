@@ -921,6 +921,21 @@ port_infos_display(portid_t port_id)
 			printf("Switch Rx domain: %u\n",
 			       dev_info.switch_info.rx_domain);
 	}
+	printf("Device error handling mode: ");
+	switch (dev_info.err_handle_mode) {
+	case RTE_ETH_ERROR_HANDLE_MODE_NONE:
+		printf("none\n");
+		break;
+	case RTE_ETH_ERROR_HANDLE_MODE_PASSIVE:
+		printf("passive\n");
+		break;
+	case RTE_ETH_ERROR_HANDLE_MODE_PROACTIVE:
+		printf("proactive\n");
+		break;
+	default:
+		printf("unknown\n");
+		break;
+	}
 }
 
 void
@@ -1772,7 +1787,6 @@ port_action_handle_destroy(portid_t port_id,
 {
 	struct rte_port *port;
 	struct port_indirect_action **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -1807,7 +1821,6 @@ port_action_handle_destroy(portid_t port_id,
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
 	}
 	return ret;
 }
@@ -1871,6 +1884,7 @@ port_action_handle_update(portid_t port_id, uint32_t id,
 	if (!pia)
 		return -EINVAL;
 	switch (pia->type) {
+	case RTE_FLOW_ACTION_TYPE_AGE:
 	case RTE_FLOW_ACTION_TYPE_CONNTRACK:
 		update = action->conf;
 		break;
@@ -2235,7 +2249,6 @@ port_flow_pattern_template_destroy(portid_t port_id, uint32_t n,
 {
 	struct rte_port *port;
 	struct port_template **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -2272,7 +2285,42 @@ port_flow_pattern_template_destroy(portid_t port_id, uint32_t n,
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
+	}
+	return ret;
+}
+
+/** Flush pattern template */
+int
+port_flow_pattern_template_flush(portid_t port_id)
+{
+	struct rte_port *port;
+	struct port_template **tmp;
+	int ret = 0;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return -EINVAL;
+	port = &ports[port_id];
+	tmp = &port->pattern_templ_list;
+	while (*tmp) {
+		struct rte_flow_error error;
+		struct port_template *pit = *tmp;
+
+		/*
+		 * Poisoning to make sure PMDs update it in case
+		 * of error.
+		 */
+		memset(&error, 0x33, sizeof(error));
+		if (pit->template.pattern_template &&
+		    rte_flow_pattern_template_destroy(port_id,
+			pit->template.pattern_template, &error)) {
+			printf("Pattern template #%u not destroyed\n", pit->id);
+			ret = port_flow_complain(&error);
+			tmp = &pit->next;
+		} else {
+			*tmp = pit->next;
+			free(pit);
+		}
 	}
 	return ret;
 }
@@ -2316,7 +2364,6 @@ port_flow_actions_template_destroy(portid_t port_id, uint32_t n,
 {
 	struct rte_port *port;
 	struct port_template **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -2352,7 +2399,43 @@ port_flow_actions_template_destroy(portid_t port_id, uint32_t n,
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
+	}
+	return ret;
+}
+
+/** Flush actions template */
+int
+port_flow_actions_template_flush(portid_t port_id)
+{
+	struct rte_port *port;
+	struct port_template **tmp;
+	int ret = 0;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return -EINVAL;
+	port = &ports[port_id];
+	tmp = &port->actions_templ_list;
+	while (*tmp) {
+		struct rte_flow_error error;
+		struct port_template *pat = *tmp;
+
+		/*
+		 * Poisoning to make sure PMDs update it in case
+		 * of error.
+		 */
+		memset(&error, 0x33, sizeof(error));
+
+		if (pat->template.actions_template &&
+		    rte_flow_actions_template_destroy(port_id,
+			pat->template.actions_template, &error)) {
+			ret = port_flow_complain(&error);
+			printf("Actions template #%u not destroyed\n", pat->id);
+			tmp = &pat->next;
+		} else {
+			*tmp = pat->next;
+			free(pat);
+		}
 	}
 	return ret;
 }
@@ -2432,6 +2515,8 @@ port_flow_template_table_create(portid_t port_id, uint32_t id,
 	}
 	pt->nb_pattern_templates = nb_pattern_templates;
 	pt->nb_actions_templates = nb_actions_templates;
+	rte_memcpy(&pt->flow_attr, &table_attr->flow_attr,
+		   sizeof(struct rte_flow_attr));
 	printf("Template table #%u created\n", pt->id);
 	return 0;
 }
@@ -2443,7 +2528,6 @@ port_flow_template_table_destroy(portid_t port_id,
 {
 	struct rte_port *port;
 	struct port_table **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -2480,7 +2564,44 @@ port_flow_template_table_destroy(portid_t port_id,
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
+	}
+	return ret;
+}
+
+/** Flush table */
+int
+port_flow_template_table_flush(portid_t port_id)
+{
+	struct rte_port *port;
+	struct port_table **tmp;
+	int ret = 0;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return -EINVAL;
+	port = &ports[port_id];
+	tmp = &port->table_list;
+	while (*tmp) {
+		struct rte_flow_error error;
+		struct port_table *pt = *tmp;
+
+		/*
+		 * Poisoning to make sure PMDs update it in case
+		 * of error.
+		 */
+		memset(&error, 0x33, sizeof(error));
+
+		if (pt->table &&
+		    rte_flow_template_table_destroy(port_id,
+						   pt->table,
+						   &error)) {
+			ret = port_flow_complain(&error);
+			printf("Template table #%u not destroyed\n", pt->id);
+			tmp = &pt->next;
+		} else {
+			*tmp = pt->next;
+			free(pt);
+		}
 	}
 	return ret;
 }
@@ -2553,7 +2674,7 @@ port_queue_flow_create(portid_t port_id, queueid_t queue_id,
 	}
 	job->type = QUEUE_JOB_TYPE_FLOW_CREATE;
 
-	pf = port_flow_new(NULL, pattern, actions, &error);
+	pf = port_flow_new(&pt->flow_attr, pattern, actions, &error);
 	if (!pf) {
 		free(job);
 		return port_flow_complain(&error);
@@ -2590,7 +2711,6 @@ port_queue_flow_destroy(portid_t port_id, queueid_t queue_id,
 	struct rte_flow_op_attr op_attr = { .postpone = postpone };
 	struct rte_port *port;
 	struct port_flow **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 	struct queue_job *job;
 
@@ -2639,7 +2759,6 @@ port_queue_flow_destroy(portid_t port_id, queueid_t queue_id,
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
 	}
 	return ret;
 }
@@ -2707,7 +2826,6 @@ port_queue_action_handle_destroy(portid_t port_id,
 	const struct rte_flow_op_attr attr = { .postpone = postpone};
 	struct rte_port *port;
 	struct port_indirect_action **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 	struct queue_job *job;
 
@@ -2744,9 +2862,9 @@ port_queue_action_handle_destroy(portid_t port_id,
 			job->type = QUEUE_JOB_TYPE_ACTION_DESTROY;
 			job->pia = pia;
 
-			if (pia->handle &&
-			    rte_flow_async_action_handle_destroy(port_id,
+			if (rte_flow_async_action_handle_destroy(port_id,
 				queue_id, &attr, pia->handle, job, &error)) {
+				free(job);
 				ret = port_flow_complain(&error);
 				continue;
 			}
@@ -2757,7 +2875,6 @@ port_queue_action_handle_destroy(portid_t port_id,
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
 	}
 	return ret;
 }
@@ -2800,17 +2917,23 @@ port_queue_action_handle_update(portid_t port_id,
 		return -EINVAL;
 	}
 
-	if (pia->type == RTE_FLOW_ACTION_TYPE_METER_MARK) {
+	switch (pia->type) {
+	case RTE_FLOW_ACTION_TYPE_AGE:
+		update = action->conf;
+		break;
+	case RTE_FLOW_ACTION_TYPE_METER_MARK:
 		rte_memcpy(&mtr_update.meter_mark, action->conf,
 			sizeof(struct rte_flow_action_meter_mark));
 		mtr_update.profile_valid = 1;
-		mtr_update.policy_valid  = 1;
-		mtr_update.color_mode_valid  = 1;
-		mtr_update.init_color_valid  = 1;
-		mtr_update.state_valid  = 1;
+		mtr_update.policy_valid = 1;
+		mtr_update.color_mode_valid = 1;
+		mtr_update.init_color_valid = 1;
+		mtr_update.state_valid = 1;
 		update = &mtr_update;
-	} else {
+		break;
+	default:
 		update = action;
+		break;
 	}
 
 	if (rte_flow_async_action_handle_update(port_id, queue_id, &attr,
@@ -2888,6 +3011,162 @@ port_queue_flow_push(portid_t port_id, queueid_t queue_id)
 	}
 	printf("Queue #%u operations pushed\n", queue_id);
 	return ret;
+}
+
+/** Pull queue operation results from the queue. */
+static int
+port_queue_aged_flow_destroy(portid_t port_id, queueid_t queue_id,
+			     const uint32_t *rule, int nb_flows)
+{
+	struct rte_port *port = &ports[port_id];
+	struct rte_flow_op_result *res;
+	struct rte_flow_error error;
+	uint32_t n = nb_flows;
+	int ret = 0;
+	int i;
+
+	res = calloc(port->queue_sz, sizeof(struct rte_flow_op_result));
+	if (!res) {
+		printf("Failed to allocate memory for pulled results\n");
+		return -ENOMEM;
+	}
+
+	memset(&error, 0x66, sizeof(error));
+	while (nb_flows > 0) {
+		int success = 0;
+
+		if (n > port->queue_sz)
+			n = port->queue_sz;
+		ret = port_queue_flow_destroy(port_id, queue_id, true, n, rule);
+		if (ret < 0) {
+			free(res);
+			return ret;
+		}
+		ret = rte_flow_push(port_id, queue_id, &error);
+		if (ret < 0) {
+			printf("Failed to push operations in the queue: %s\n",
+			       strerror(-ret));
+			free(res);
+			return ret;
+		}
+		while (success < nb_flows) {
+			ret = rte_flow_pull(port_id, queue_id, res,
+					    port->queue_sz, &error);
+			if (ret < 0) {
+				printf("Failed to pull a operation results: %s\n",
+				       strerror(-ret));
+				free(res);
+				return ret;
+			}
+
+			for (i = 0; i < ret; i++) {
+				if (res[i].status == RTE_FLOW_OP_SUCCESS)
+					success++;
+			}
+		}
+		rule += n;
+		nb_flows -= n;
+		n = nb_flows;
+	}
+
+	free(res);
+	return ret;
+}
+
+/** List simply and destroy all aged flows per queue. */
+void
+port_queue_flow_aged(portid_t port_id, uint32_t queue_id, uint8_t destroy)
+{
+	void **contexts;
+	int nb_context, total = 0, idx;
+	uint32_t *rules = NULL;
+	struct rte_port *port;
+	struct rte_flow_error error;
+	enum age_action_context_type *type;
+	union {
+		struct port_flow *pf;
+		struct port_indirect_action *pia;
+	} ctx;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return;
+	port = &ports[port_id];
+	if (queue_id >= port->queue_nb) {
+		printf("Error: queue #%u is invalid\n", queue_id);
+		return;
+	}
+	total = rte_flow_get_q_aged_flows(port_id, queue_id, NULL, 0, &error);
+	if (total < 0) {
+		port_flow_complain(&error);
+		return;
+	}
+	printf("Port %u queue %u total aged flows: %d\n",
+	       port_id, queue_id, total);
+	if (total == 0)
+		return;
+	contexts = calloc(total, sizeof(void *));
+	if (contexts == NULL) {
+		printf("Cannot allocate contexts for aged flow\n");
+		return;
+	}
+	printf("%-20s\tID\tGroup\tPrio\tAttr\n", "Type");
+	nb_context = rte_flow_get_q_aged_flows(port_id, queue_id, contexts,
+					       total, &error);
+	if (nb_context > total) {
+		printf("Port %u queue %u get aged flows count(%d) > total(%d)\n",
+		       port_id, queue_id, nb_context, total);
+		free(contexts);
+		return;
+	}
+	if (destroy) {
+		rules = malloc(sizeof(uint32_t) * nb_context);
+		if (rules == NULL)
+			printf("Cannot allocate memory for destroy aged flow\n");
+	}
+	total = 0;
+	for (idx = 0; idx < nb_context; idx++) {
+		if (!contexts[idx]) {
+			printf("Error: get Null context in port %u queue %u\n",
+			       port_id, queue_id);
+			continue;
+		}
+		type = (enum age_action_context_type *)contexts[idx];
+		switch (*type) {
+		case ACTION_AGE_CONTEXT_TYPE_FLOW:
+			ctx.pf = container_of(type, struct port_flow, age_type);
+			printf("%-20s\t%" PRIu32 "\t%" PRIu32 "\t%" PRIu32
+								 "\t%c%c%c\t\n",
+			       "Flow",
+			       ctx.pf->id,
+			       ctx.pf->rule.attr->group,
+			       ctx.pf->rule.attr->priority,
+			       ctx.pf->rule.attr->ingress ? 'i' : '-',
+			       ctx.pf->rule.attr->egress ? 'e' : '-',
+			       ctx.pf->rule.attr->transfer ? 't' : '-');
+			if (rules != NULL) {
+				rules[total] = ctx.pf->id;
+				total++;
+			}
+			break;
+		case ACTION_AGE_CONTEXT_TYPE_INDIRECT_ACTION:
+			ctx.pia = container_of(type,
+					       struct port_indirect_action,
+					       age_type);
+			printf("%-20s\t%" PRIu32 "\n", "Indirect action",
+			       ctx.pia->id);
+			break;
+		default:
+			printf("Error: invalid context type %u\n", port_id);
+			break;
+		}
+	}
+	if (rules != NULL) {
+		port_queue_aged_flow_destroy(port_id, queue_id, rules, total);
+		free(rules);
+	}
+	printf("\n%d flows destroyed\n", total);
+	free(contexts);
 }
 
 /** Pull queue operation results from the queue. */
@@ -3013,7 +3292,6 @@ port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule)
 {
 	struct rte_port *port;
 	struct port_flow **tmp;
-	uint32_t c = 0;
 	int ret = 0;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -3046,7 +3324,6 @@ port_flow_destroy(portid_t port_id, uint32_t n, const uint32_t *rule)
 		}
 		if (i == n)
 			tmp = &(*tmp)->next;
-		++c;
 	}
 	return ret;
 }
@@ -4891,73 +5168,79 @@ show_rx_pkt_segments(void)
 
 static const char *get_ptype_str(uint32_t ptype)
 {
-	if ((ptype & (RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_TCP)) ==
-		(RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_TCP))
-		return "ipv4-tcp";
-	else if ((ptype & (RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_UDP)) ==
-		(RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_UDP))
-		return "ipv4-udp";
-	else if ((ptype & (RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_SCTP)) ==
-		(RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_SCTP))
-		return "ipv4-sctp";
-	else if ((ptype & (RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_TCP)) ==
-		(RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_TCP))
-		return "ipv6-tcp";
-	else if ((ptype & (RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_UDP)) ==
-		(RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_UDP))
-		return "ipv6-udp";
-	else if ((ptype & (RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_SCTP)) ==
-		(RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_SCTP))
-		return "ipv6-sctp";
-	else if ((ptype & RTE_PTYPE_L4_TCP) == RTE_PTYPE_L4_TCP)
-		return "tcp";
-	else if ((ptype & RTE_PTYPE_L4_UDP) == RTE_PTYPE_L4_UDP)
-		return "udp";
-	else if ((ptype & RTE_PTYPE_L4_SCTP) == RTE_PTYPE_L4_SCTP)
-		return "sctp";
-	else if ((ptype & RTE_PTYPE_L3_IPV4_EXT_UNKNOWN) == RTE_PTYPE_L3_IPV4_EXT_UNKNOWN)
-		return "ipv4";
-	else if ((ptype & RTE_PTYPE_L3_IPV6_EXT_UNKNOWN) == RTE_PTYPE_L3_IPV6_EXT_UNKNOWN)
-		return "ipv6";
-	else if ((ptype & RTE_PTYPE_L2_ETHER) == RTE_PTYPE_L2_ETHER)
-		return "eth";
+	const char *str;
 
-	else if ((ptype & (RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_TCP)) ==
-		(RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_TCP))
-		return "inner-ipv4-tcp";
-	else if ((ptype & (RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_UDP)) ==
-		(RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_UDP))
-		return "inner-ipv4-udp";
-	else if ((ptype & (RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_SCTP)) ==
-		(RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_SCTP))
-		return "inner-ipv4-sctp";
-	else if ((ptype & (RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_TCP)) ==
-		(RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_TCP))
-		return "inner-ipv6-tcp";
-	else if ((ptype & (RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_UDP)) ==
-		(RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_UDP))
-		return "inner-ipv6-udp";
-	else if ((ptype & (RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_SCTP)) ==
-		(RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_SCTP))
-		return "inner-ipv6-sctp";
-	else if ((ptype & RTE_PTYPE_INNER_L4_TCP) == RTE_PTYPE_INNER_L4_TCP)
-		return "inner-tcp";
-	else if ((ptype & RTE_PTYPE_INNER_L4_UDP) == RTE_PTYPE_INNER_L4_UDP)
-		return "inner-udp";
-	else if ((ptype & RTE_PTYPE_INNER_L4_SCTP) == RTE_PTYPE_INNER_L4_SCTP)
-		return "inner-sctp";
-	else if ((ptype & RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN) ==
-		RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN)
-		return "inner-ipv4";
-	else if ((ptype & RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN) ==
-		RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN)
-		return "inner-ipv6";
-	else if ((ptype & RTE_PTYPE_INNER_L2_ETHER) == RTE_PTYPE_INNER_L2_ETHER)
-		return "inner-eth";
-	else if ((ptype & RTE_PTYPE_TUNNEL_GRENAT) == RTE_PTYPE_TUNNEL_GRENAT)
-		return "grenat";
-	else
-		return "unsupported";
+	switch (ptype) {
+	case RTE_PTYPE_L2_ETHER:
+		str = "eth";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN:
+		str = "ipv4";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN:
+		str = "ipv6";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_TCP:
+		str = "ipv4-tcp";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_UDP:
+		str = "ipv4-udp";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_L4_SCTP:
+		str = "ipv4-sctp";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_TCP:
+		str = "ipv6-tcp";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_UDP:
+		str = "ipv6-udp";
+		break;
+	case RTE_PTYPE_L2_ETHER | RTE_PTYPE_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_L4_SCTP:
+		str = "ipv6-sctp";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT:
+		str = "grenat";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER:
+		str = "inner-eth";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER
+			| RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN:
+		str = "inner-ipv4";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER
+			| RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN:
+		str = "inner-ipv6";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+			RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_TCP:
+		str = "inner-ipv4-tcp";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+			RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_UDP:
+		str = "inner-ipv4-udp";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+			RTE_PTYPE_INNER_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_SCTP:
+		str = "inner-ipv4-sctp";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_TCP:
+		str = "inner-ipv6-tcp";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_UDP:
+		str = "inner-ipv6-udp";
+		break;
+	case RTE_PTYPE_TUNNEL_GRENAT | RTE_PTYPE_INNER_L2_ETHER |
+			RTE_PTYPE_INNER_L3_IPV6_EXT_UNKNOWN | RTE_PTYPE_INNER_L4_SCTP:
+		str = "inner-ipv6-sctp";
+		break;
+	default:
+		str = "unsupported";
+	}
+
+	return str;
 }
 
 void

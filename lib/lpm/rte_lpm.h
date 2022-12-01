@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <rte_compat.h>
 #include <rte_branch_prediction.h>
 #include <rte_byteorder.h>
 #include <rte_common.h>
@@ -180,8 +181,6 @@ rte_lpm_find_existing(const char *name);
  * @param lpm
  *   LPM object handle
  *   If lpm is NULL, no operation is performed.
- * @return
- *   None
  */
 void
 rte_lpm_free(struct rte_lpm *lpm);

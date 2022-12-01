@@ -1687,6 +1687,28 @@ enum rte_eth_representor_type {
 };
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this enumeration may change without prior notice.
+ *
+ * Ethernet device error handling mode.
+ */
+enum rte_eth_err_handle_mode {
+	/** No error handling modes are supported. */
+	RTE_ETH_ERROR_HANDLE_MODE_NONE,
+	/** Passive error handling, after the PMD detects that a reset is required,
+	 * the PMD reports @see RTE_ETH_EVENT_INTR_RESET event,
+	 * and the application invokes @see rte_eth_dev_reset to recover the port.
+	 */
+	RTE_ETH_ERROR_HANDLE_MODE_PASSIVE,
+	/** Proactive error handling, after the PMD detects that a reset is required,
+	 * the PMD reports @see RTE_ETH_EVENT_ERR_RECOVERING event,
+	 * do recovery internally, and finally reports the recovery result event
+	 * (@see RTE_ETH_EVENT_RECOVERY_*).
+	 */
+	RTE_ETH_ERROR_HANDLE_MODE_PROACTIVE,
+};
+
+/**
  * A structure used to retrieve the contextual information of
  * an Ethernet device, such as the controlling driver of the
  * device, etc...
@@ -1753,6 +1775,8 @@ struct rte_eth_dev_info {
 	 * embedded managed interconnect/switch.
 	 */
 	struct rte_eth_switch_info switch_info;
+	/** Supported error handling mode. */
+	enum rte_eth_err_handle_mode err_handle_mode;
 
 	uint64_t reserved_64s[2]; /**< Reserved for future fields */
 	void *reserved_ptrs[2];   /**< Reserved for future fields */
@@ -2681,6 +2705,7 @@ int rte_eth_dev_tx_queue_stop(uint16_t port_id, uint16_t tx_queue_id);
  *   The port identifier of the Ethernet device.
  * @return
  *   - 0: Success, Ethernet device started.
+ *   - -EAGAIN: If start operation must be retried.
  *   - <0: Error code of the driver device start function.
  */
 int rte_eth_dev_start(uint16_t port_id);
@@ -2693,6 +2718,7 @@ int rte_eth_dev_start(uint16_t port_id);
  *   The port identifier of the Ethernet device.
  * @return
  *   - 0: Success, Ethernet device stopped.
+ *   - -EBUSY: If stopping the port is not allowed in current state.
  *   - <0: Error code of the driver device stop function.
  */
 int rte_eth_dev_stop(uint16_t port_id);
@@ -3868,6 +3894,59 @@ enum rte_eth_event_type {
 	 * @see rte_eth_rx_avail_thresh_set()
 	 */
 	RTE_ETH_EVENT_RX_AVAIL_THRESH,
+	/** Port recovering from a hardware or firmware error.
+	 * If PMD supports proactive error recovery,
+	 * it should trigger this event to notify application
+	 * that it detected an error and the recovery is being started.
+	 * Upon receiving the event, the application should not invoke any control path API
+	 * (such as rte_eth_dev_configure/rte_eth_dev_stop...) until receiving
+	 * RTE_ETH_EVENT_RECOVERY_SUCCESS or RTE_ETH_EVENT_RECOVERY_FAILED event.
+	 * The PMD will set the data path pointers to dummy functions,
+	 * and re-set the data path pointers to non-dummy functions
+	 * before reporting RTE_ETH_EVENT_RECOVERY_SUCCESS event.
+	 * It means that the application cannot send or receive any packets
+	 * during this period.
+	 * @note Before the PMD reports the recovery result,
+	 * the PMD may report the RTE_ETH_EVENT_ERR_RECOVERING event again,
+	 * because a larger error may occur during the recovery.
+	 */
+	RTE_ETH_EVENT_ERR_RECOVERING,
+	/** Port recovers successfully from the error.
+	 * The PMD already re-configured the port,
+	 * and the effect is the same as a restart operation.
+	 * a) The following operation will be retained: (alphabetically)
+	 *    - DCB configuration
+	 *    - FEC configuration
+	 *    - Flow control configuration
+	 *    - LRO configuration
+	 *    - LSC configuration
+	 *    - MTU
+	 *    - MAC address (default and those supplied by MAC address array)
+	 *    - Promiscuous and allmulticast mode
+	 *    - PTP configuration
+	 *    - Queue (Rx/Tx) settings
+	 *    - Queue statistics mappings
+	 *    - RSS configuration by rte_eth_dev_rss_xxx() family
+	 *    - Rx checksum configuration
+	 *    - Rx interrupt settings
+	 *    - Traffic management configuration
+	 *    - VLAN configuration (including filtering, tpid, strip, pvid)
+	 *    - VMDq configuration
+	 * b) The following configuration maybe retained
+	 *    or not depending on the device capabilities:
+	 *    - flow rules
+	 *      (@see RTE_ETH_DEV_CAPA_FLOW_RULE_KEEP)
+	 *    - shared flow objects
+	 *      (@see RTE_ETH_DEV_CAPA_FLOW_SHARED_OBJECT_KEEP)
+	 * c) Any other configuration will not be stored
+	 *    and will need to be re-configured.
+	 */
+	RTE_ETH_EVENT_RECOVERY_SUCCESS,
+	/** Port recovery failed.
+	 * It means that the port should not be usable anymore.
+	 * The application should close the port.
+	 */
+	RTE_ETH_EVENT_RECOVERY_FAILED,
 	RTE_ETH_EVENT_MAX       /**< max value of this enum */
 };
 
@@ -6094,6 +6173,11 @@ uint16_t rte_eth_call_tx_callbacks(uint16_t port_id, uint16_t queue_id,
  *
  * @see rte_eth_tx_prepare to perform some prior checks or adjustments
  * for offloads.
+ *
+ * @note This function must not modify mbufs (including packets data)
+ * unless the refcnt is 1.
+ * An exception is the bonding PMD, which does not have "Tx prepare" support,
+ * in this case, mbufs may be modified.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.

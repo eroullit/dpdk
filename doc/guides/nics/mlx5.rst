@@ -100,6 +100,7 @@ Features
   flow group.
 - Flow metering, including meter policy API.
 - Flow meter hierarchy.
+- Flow meter mark.
 - Flow integrity offload API.
 - Connection tracking.
 - Sub-Function representors.
@@ -151,6 +152,28 @@ Limitations
   - Support BlueField series NIC from BlueField 2.
   - When configuring host shaper with MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED flag set,
     only rates 0 and 100Mbps are supported.
+
+- HW steering:
+
+  - WQE based high scaling and safer flow insertion/destruction.
+  - Set ``dv_flow_en`` to 2 in order to enable HW steering.
+  - Async queue-based ``rte_flow_async`` APIs supported only.
+  - NIC ConnectX-5 and before are not supported.
+  - Partial match with item template is not supported.
+  - IPv6 5-tuple matching is not supported.
+  - With E-Switch enabled, ports which share the E-Switch domain
+    should be started and stopped in a specific order:
+
+    - When starting ports, the transfer proxy port should be started first
+      and port representors should follow.
+    - When stopping ports, all of the port representors
+      should be stopped before stopping the transfer proxy port.
+
+    If ports are started/stopped in an incorrect order,
+    ``rte_eth_dev_start()``/``rte_eth_dev_stop()`` will return an appropriate error code:
+
+    - ``-EAGAIN`` for ``rte_eth_dev_start()``.
+    - ``-EBUSY`` for ``rte_eth_dev_stop()``.
 
 - When using Verbs flow engine (``dv_flow_en`` = 0), flow pattern without any
   specific VLAN will match for VLAN packets as well:
@@ -394,6 +417,8 @@ Limitations
     TCP header (122B).
   - Rx queue with LRO offload enabled, receiving a non-LRO packet, can forward
     it with size limited to max LRO size, not to max RX packet length.
+  - The driver rounds down the port configuration value ``max_lro_pkt_size``
+    (from ``rte_eth_rxmode``) to a multiple of 256 due to hardware limitation.
   - LRO can be used with outer header of TCP packets of the standard format:
         eth (with or without vlan) / ipv4 or ipv6 / tcp / payload
 
@@ -437,17 +462,39 @@ Limitations
 
 - Modify Field flow:
 
-  - Supports the 'set' operation only for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
+  - Supports the 'set' and 'add' operations for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
   - Modification of an arbitrary place in a packet via the special ``RTE_FLOW_FIELD_START`` Field ID is not supported.
   - Modification of the 802.1Q Tag, VXLAN Network or GENEVE Network ID's is not supported.
   - Encapsulation levels are not supported, can modify outermost header fields only.
-  - Offsets must be 32-bits aligned, cannot skip past the boundary of a field.
+  - Offsets cannot skip past the boundary of a field.
   - If the field type is ``RTE_FLOW_FIELD_MAC_TYPE``
     and packet contains one or more VLAN headers,
     the meaningful type field following the last VLAN header
     is used as modify field operation argument.
     The modify field action is not intended to modify VLAN headers type field,
     dedicated VLAN push and pop actions should be used instead.
+  - For packet fields (e.g. MAC addresses, IPv4 addresses or L4 ports)
+    offset specifies the number of bits to skip from field's start,
+    starting from MSB in the first byte, in the network order.
+  - For flow metadata fields (e.g. META or TAG)
+    offset specifies the number of bits to skip from field's start,
+    starting from LSB in the least significant byte, in the host order.
+
+- Age action:
+
+  - with HW steering (``dv_flow_en=2``)
+
+    - Using the same indirect count action combined with multiple age actions
+      in different flows may cause a wrong age state for the age actions.
+    - Creating/destroying flow rules with indirect age action when it is active
+      (timeout != 0) may cause a wrong age state for the indirect age action.
+
+    - The driver reuses counters for aging action, so for optimization
+      the values in ``rte_flow_port_attr`` structure should describe:
+
+      - ``nb_counters`` is the number of flow rules using counter (with/without age)
+        in addition to flow rules using only age (without count action).
+      - ``nb_aging_objects`` is the number of flow rules containing age action.
 
 - IPv6 header item 'proto' field, indicating the next header protocol, should
   not be set as extension header.
@@ -485,6 +532,11 @@ Limitations
     if meter has drop count
     or meter hierarchy contains any meter that uses drop count,
     it cannot be used by flow rule matching all ports.
+  - When using DV flow engine (``dv_flow_en`` = 1),
+    if meter hierarchy contains any meter that has MODIFY_FIELD/SET_TAG,
+    it cannot be used by flow matching all ports.
+  - When using HWS flow engine (``dv_flow_en`` = 2),
+    only meter mark action is supported.
 
 - Integrity:
 
@@ -506,7 +558,7 @@ Limitations
   - Cannot co-exist with ASO meter, ASO age action in a single flow rule.
   - Flow rules insertion rate and memory consumption need more optimization.
   - 256 ports maximum.
-  - 4M connections maximum.
+  - 4M connections maximum with ``dv_flow_en`` 1 mode. 16M with ``dv_flow_en`` 2.
 
 - Multi-thread flow insertion:
 
@@ -534,12 +586,6 @@ Limitations
   - The send scheduling is based on timestamps
     from the reference "Clock Queue" completions,
     the scheduled send timestamps should not be specified with non-zero MSB.
-
-  - HW steering:
-
-    - WQE based high scaling and safer flow insertion/destruction.
-    - Set ``dv_flow_en`` to 2 in order to enable HW steering.
-    - Async queue-based ``rte_flow_q`` APIs supported only.
 
 - Match on GRE header supports the following fields:
 
@@ -977,6 +1023,10 @@ for an additional list of options shared with other mlx5 drivers.
   - 3, this engages tunnel offload mode. In E-Switch configuration, that
     mode implicitly activates ``dv_xmeta_en=1``.
 
+  - 4, this mode is only supported in HWS (``dv_flow_en=2``).
+    The Rx/Tx metadata with 32b width copy between FDB and NIC is supported.
+    The mark is only supported in NIC and there is no copy supported.
+
   +------+-----------+-----------+-------------+-------------+
   | Mode | ``MARK``  | ``META``  | ``META`` Tx | FDB/Through |
   +======+===========+===========+=============+=============+
@@ -1026,6 +1076,16 @@ for an additional list of options shared with other mlx5 drivers.
 
   Enabled by default if supported.
 
+- ``fdb_def_rule_en`` parameter [int]
+
+  A non-zero value enables to create a dedicated rule on E-Switch root table.
+  This dedicated rule forwards all incoming packets into table 1.
+  Other rules will be created in E-Switch table original table level plus one,
+  to improve the flow insertion rate due to skipping root table managed by firmware.
+  If set to 0, all rules will be created on the original E-Switch table level.
+
+  By default, the PMD will set this value to 1.
+
 - ``lacp_by_user`` parameter [int]
 
   A nonzero value enables the control of LACP traffic by the user application.
@@ -1055,6 +1115,17 @@ for an additional list of options shared with other mlx5 drivers.
   To probe VF port representors 0 through 2 on both PFs of bonding device::
 
     <Primary_PCI_BDF>,representor=pf[0,1]vf[0-2]
+
+- ``repr_matching_en`` parameter [int]
+
+  - 0. If representor matching is disabled, then there will be no implicit
+    item added. As a result, ingress flow rules will match traffic
+    coming to any port, not only the port on which flow rule is created.
+
+  - 1. If representor matching is enabled (default setting),
+    then each ingress pattern template has an implicit REPRESENTED_PORT
+    item added. Flow rules based on this pattern template will match
+    the vport associated with port on which rule is created.
 
 - ``max_dump_files_num`` parameter [int]
 

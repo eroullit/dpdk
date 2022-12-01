@@ -172,6 +172,18 @@
 /* Device parameter to configure the delay drop when creating Rxqs. */
 #define MLX5_DELAY_DROP "delay_drop"
 
+/* Device parameter to create the fdb default rule in PMD */
+#define MLX5_FDB_DEFAULT_RULE_EN "fdb_def_rule_en"
+
+/* HW steering counter configuration. */
+#define MLX5_HWS_CNT_SERVICE_CORE "service_core"
+
+/* HW steering counter's query interval. */
+#define MLX5_HWS_CNT_CYCLE_TIME "svc_cycle_time"
+
+/* Device parameter to control representor matching in ingress/egress flows with HWS. */
+#define MLX5_REPR_MATCHING_EN "repr_matching_en"
+
 /* Shared memory between primary and secondary processes. */
 struct mlx5_shared_data *mlx5_shared_data;
 
@@ -433,7 +445,7 @@ mlx5_flow_aso_age_mng_init(struct mlx5_dev_ctx_shared *sh)
 		rte_errno = ENOMEM;
 		return -ENOMEM;
 	}
-	err = mlx5_aso_queue_init(sh, ASO_OPC_MOD_FLOW_HIT);
+	err = mlx5_aso_queue_init(sh, ASO_OPC_MOD_FLOW_HIT, 1);
 	if (err) {
 		mlx5_free(sh->aso_age_mng);
 		return -1;
@@ -488,6 +500,12 @@ mlx5_flow_aging_init(struct mlx5_dev_ctx_shared *sh)
 	uint32_t i;
 	struct mlx5_age_info *age_info;
 
+	/*
+	 * In HW steering, aging information structure is initialized later
+	 * during configure function.
+	 */
+	if (sh->config.dv_flow_en == 2)
+		return;
 	for (i = 0; i < sh->max_port; i++) {
 		age_info = &sh->port[i].age_info;
 		age_info->flags = 0;
@@ -531,8 +549,8 @@ mlx5_flow_counter_mode_config(struct rte_eth_dev *dev __rte_unused)
 			hca_attr->flow_counter_bulk_alloc_bitmap);
 	/* Initialize fallback mode only on the port initializes sh. */
 	if (sh->refcnt == 1)
-		sh->cmng.counter_fallback = fallback;
-	else if (fallback != sh->cmng.counter_fallback)
+		sh->sws_cmng.counter_fallback = fallback;
+	else if (fallback != sh->sws_cmng.counter_fallback)
 		DRV_LOG(WARNING, "Port %d in sh has different fallback mode "
 			"with others:%d.", PORT_ID(priv), fallback);
 #endif
@@ -543,22 +561,60 @@ mlx5_flow_counter_mode_config(struct rte_eth_dev *dev __rte_unused)
  *
  * @param[in] sh
  *   Pointer to mlx5_dev_ctx_shared object to free
+ *
+ * @return
+ *   0 on success, otherwise negative errno value and rte_errno is set.
  */
-static void
+static int
 mlx5_flow_counters_mng_init(struct mlx5_dev_ctx_shared *sh)
 {
-	int i;
+	int i, j;
 
-	memset(&sh->cmng, 0, sizeof(sh->cmng));
-	TAILQ_INIT(&sh->cmng.flow_counters);
-	sh->cmng.min_id = MLX5_CNT_BATCH_OFFSET;
-	sh->cmng.max_id = -1;
-	sh->cmng.last_pool_idx = POOL_IDX_INVALID;
-	rte_spinlock_init(&sh->cmng.pool_update_sl);
-	for (i = 0; i < MLX5_COUNTER_TYPE_MAX; i++) {
-		TAILQ_INIT(&sh->cmng.counters[i]);
-		rte_spinlock_init(&sh->cmng.csl[i]);
+	if (sh->config.dv_flow_en < 2) {
+		void *pools;
+
+		pools = mlx5_malloc(MLX5_MEM_ZERO,
+				    sizeof(struct mlx5_flow_counter_pool *) *
+				    MLX5_COUNTER_POOLS_MAX_NUM,
+				    0, SOCKET_ID_ANY);
+		if (!pools) {
+			DRV_LOG(ERR,
+				"Counter management allocation was failed.");
+			rte_errno = ENOMEM;
+			return -rte_errno;
+		}
+		memset(&sh->sws_cmng, 0, sizeof(sh->sws_cmng));
+		TAILQ_INIT(&sh->sws_cmng.flow_counters);
+		sh->sws_cmng.min_id = MLX5_CNT_BATCH_OFFSET;
+		sh->sws_cmng.max_id = -1;
+		sh->sws_cmng.last_pool_idx = POOL_IDX_INVALID;
+		sh->sws_cmng.pools = pools;
+		rte_spinlock_init(&sh->sws_cmng.pool_update_sl);
+		for (i = 0; i < MLX5_COUNTER_TYPE_MAX; i++) {
+			TAILQ_INIT(&sh->sws_cmng.counters[i]);
+			rte_spinlock_init(&sh->sws_cmng.csl[i]);
+		}
+	} else {
+		struct mlx5_hca_attr *attr = &sh->cdev->config.hca_attr;
+		uint32_t fw_max_nb_cnts = attr->max_flow_counter;
+		uint8_t log_dcs = log2above(fw_max_nb_cnts) - 1;
+		uint32_t max_nb_cnts = 0;
+
+		for (i = 0, j = 0; j < MLX5_HWS_CNT_DCS_NUM; ++i) {
+			int log_dcs_i = log_dcs - i;
+
+			if (log_dcs_i < 0)
+				break;
+			if ((max_nb_cnts | RTE_BIT32(log_dcs_i)) >
+			    fw_max_nb_cnts)
+				continue;
+			max_nb_cnts |= RTE_BIT32(log_dcs_i);
+			j++;
+		}
+		sh->hws_max_log_bulk_sz = log_dcs;
+		sh->hws_max_nb_counters = max_nb_cnts;
 	}
+	return 0;
 }
 
 /**
@@ -598,13 +654,13 @@ mlx5_flow_counters_mng_close(struct mlx5_dev_ctx_shared *sh)
 		rte_pause();
 	}
 
-	if (sh->cmng.pools) {
+	if (sh->sws_cmng.pools) {
 		struct mlx5_flow_counter_pool *pool;
-		uint16_t n_valid = sh->cmng.n_valid;
-		bool fallback = sh->cmng.counter_fallback;
+		uint16_t n_valid = sh->sws_cmng.n_valid;
+		bool fallback = sh->sws_cmng.counter_fallback;
 
 		for (i = 0; i < n_valid; ++i) {
-			pool = sh->cmng.pools[i];
+			pool = sh->sws_cmng.pools[i];
 			if (!fallback && pool->min_dcs)
 				claim_zero(mlx5_devx_cmd_destroy
 							       (pool->min_dcs));
@@ -616,21 +672,20 @@ mlx5_flow_counters_mng_close(struct mlx5_dev_ctx_shared *sh)
 					claim_zero
 					 (mlx5_flow_os_destroy_flow_action
 					  (cnt->action));
-				if (fallback && MLX5_POOL_GET_CNT
-				    (pool, j)->dcs_when_free)
+				if (fallback && cnt->dcs_when_free)
 					claim_zero(mlx5_devx_cmd_destroy
 						   (cnt->dcs_when_free));
 			}
 			mlx5_free(pool);
 		}
-		mlx5_free(sh->cmng.pools);
+		mlx5_free(sh->sws_cmng.pools);
 	}
-	mng = LIST_FIRST(&sh->cmng.mem_mngs);
+	mng = LIST_FIRST(&sh->sws_cmng.mem_mngs);
 	while (mng) {
 		mlx5_flow_destroy_counter_stat_mem_mng(mng);
-		mng = LIST_FIRST(&sh->cmng.mem_mngs);
+		mng = LIST_FIRST(&sh->sws_cmng.mem_mngs);
 	}
-	memset(&sh->cmng, 0, sizeof(sh->cmng));
+	memset(&sh->sws_cmng, 0, sizeof(sh->sws_cmng));
 }
 
 /**
@@ -746,14 +801,15 @@ mlx5_flow_aso_ct_mng_init(struct mlx5_dev_ctx_shared *sh)
 
 	if (sh->ct_mng)
 		return 0;
-	sh->ct_mng = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*sh->ct_mng),
+	sh->ct_mng = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*sh->ct_mng) +
+				 sizeof(struct mlx5_aso_sq) * MLX5_ASO_CT_SQ_NUM,
 				 RTE_CACHE_LINE_SIZE, SOCKET_ID_ANY);
 	if (!sh->ct_mng) {
 		DRV_LOG(ERR, "ASO CT management allocation failed.");
 		rte_errno = ENOMEM;
 		return -rte_errno;
 	}
-	err = mlx5_aso_queue_init(sh, ASO_OPC_MOD_CONNECTION_TRACKING);
+	err = mlx5_aso_queue_init(sh, ASO_OPC_MOD_CONNECTION_TRACKING, MLX5_ASO_CT_SQ_NUM);
 	if (err) {
 		mlx5_free(sh->ct_mng);
 		/* rte_errno should be extracted from the failure. */
@@ -1215,7 +1271,8 @@ mlx5_dev_args_check_handler(const char *key, const char *val, void *opaque)
 		if (tmp != MLX5_XMETA_MODE_LEGACY &&
 		    tmp != MLX5_XMETA_MODE_META16 &&
 		    tmp != MLX5_XMETA_MODE_META32 &&
-		    tmp != MLX5_XMETA_MODE_MISS_INFO) {
+		    tmp != MLX5_XMETA_MODE_MISS_INFO &&
+		    tmp != MLX5_XMETA_MODE_META32_HWS) {
 			DRV_LOG(ERR, "Invalid extensive metadata parameter.");
 			rte_errno = EINVAL;
 			return -rte_errno;
@@ -1239,6 +1296,14 @@ mlx5_dev_args_check_handler(const char *key, const char *val, void *opaque)
 		config->decap_en = !!tmp;
 	} else if (strcmp(MLX5_ALLOW_DUPLICATE_PATTERN, key) == 0) {
 		config->allow_duplicate_pattern = !!tmp;
+	} else if (strcmp(MLX5_FDB_DEFAULT_RULE_EN, key) == 0) {
+		config->fdb_def_rule = !!tmp;
+	} else if (strcmp(MLX5_HWS_CNT_SERVICE_CORE, key) == 0) {
+		config->cnt_svc.service_core = tmp;
+	} else if (strcmp(MLX5_HWS_CNT_CYCLE_TIME, key) == 0) {
+		config->cnt_svc.cycle_time = tmp;
+	} else if (strcmp(MLX5_REPR_MATCHING_EN, key) == 0) {
+		config->repr_matching = !!tmp;
 	}
 	return 0;
 }
@@ -1274,6 +1339,10 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 		MLX5_RECLAIM_MEM,
 		MLX5_DECAP_EN,
 		MLX5_ALLOW_DUPLICATE_PATTERN,
+		MLX5_FDB_DEFAULT_RULE_EN,
+		MLX5_HWS_CNT_SERVICE_CORE,
+		MLX5_HWS_CNT_CYCLE_TIME,
+		MLX5_REPR_MATCHING_EN,
 		NULL,
 	};
 	int ret = 0;
@@ -1285,6 +1354,10 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	config->dv_flow_en = 1;
 	config->decap_en = 1;
 	config->allow_duplicate_pattern = 1;
+	config->fdb_def_rule = 1;
+	config->cnt_svc.cycle_time = MLX5_CNT_SVC_CYCLE_TIME_DEFAULT;
+	config->cnt_svc.service_core = rte_get_main_lcore();
+	config->repr_matching = 1;
 	if (mkvlist != NULL) {
 		/* Process parameters. */
 		ret = mlx5_kvargs_process(mkvlist, params,
@@ -1317,6 +1390,11 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 			"Metadata mode %u is not supported (no E-Switch).",
 			config->dv_xmeta_en);
 		config->dv_xmeta_en = MLX5_XMETA_MODE_LEGACY;
+	}
+	if (config->dv_flow_en != 2 && !config->repr_matching) {
+		DRV_LOG(DEBUG, "Disabling representor matching is valid only "
+			       "when HW Steering is enabled.");
+		config->repr_matching = 1;
 	}
 	if (config->tx_pp && !sh->dev_cap.txpp_en) {
 		DRV_LOG(ERR, "Packet pacing is not supported.");
@@ -1360,6 +1438,8 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	DRV_LOG(DEBUG, "\"decap_en\" is %u.", config->decap_en);
 	DRV_LOG(DEBUG, "\"allow_duplicate_pattern\" is %u.",
 		config->allow_duplicate_pattern);
+	DRV_LOG(DEBUG, "\"fdb_def_rule_en\" is %u.", config->fdb_def_rule);
+	DRV_LOG(DEBUG, "\"repr_matching_en\" is %u.", config->repr_matching);
 	return 0;
 }
 
@@ -1508,8 +1588,12 @@ mlx5_alloc_shared_dev_ctx(const struct mlx5_dev_spawn_data *spawn,
 		if (err)
 			goto error;
 	}
+	err = mlx5_flow_counters_mng_init(sh);
+	if (err) {
+		DRV_LOG(ERR, "Fail to initialize counters manage.");
+		goto error;
+	}
 	mlx5_flow_aging_init(sh);
-	mlx5_flow_counters_mng_init(sh);
 	mlx5_flow_ipool_create(sh);
 	/* Add context to the global device list. */
 	LIST_INSERT_HEAD(&mlx5_dev_ctx_list, sh, next);
@@ -1673,7 +1757,13 @@ mlx5_free_shared_dev_ctx(struct mlx5_dev_ctx_shared *sh)
 	} while (++i < sh->bond.n_port);
 	if (sh->td)
 		claim_zero(mlx5_devx_cmd_destroy(sh->td));
-	MLX5_ASSERT(sh->geneve_tlv_option_resource == NULL);
+#ifdef HAVE_MLX5_HWS_SUPPORT
+	/* HWS manages geneve_tlv_option resource as global. */
+	if (sh->config.dv_flow_en == 2)
+		flow_dev_geneve_tlv_option_resource_release(sh);
+	else
+#endif
+		MLX5_ASSERT(sh->geneve_tlv_option_resource == NULL);
 	pthread_mutex_destroy(&sh->txpp.mutex);
 	mlx5_lwm_unset(sh);
 	mlx5_free(sh);
@@ -1700,7 +1790,7 @@ mlx5_free_table_hash_list(struct mlx5_priv *priv)
 	*tbls = NULL;
 }
 
-#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
+#ifdef HAVE_MLX5_HWS_SUPPORT
 /**
  * Allocate HW steering group hash list.
  *
@@ -1753,8 +1843,10 @@ mlx5_alloc_table_hash_list(struct mlx5_priv *priv __rte_unused)
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
 	char s[MLX5_NAME_SIZE];
 
+#ifdef HAVE_MLX5_HWS_SUPPORT
 	if (priv->sh->config.dv_flow_en == 2)
 		return mlx5_alloc_hw_group_hash_list(priv);
+#endif
 	MLX5_ASSERT(sh);
 	snprintf(s, sizeof(s), "%s_flow_table", priv->sh->ibdev_name);
 	sh->flow_tbls = mlx5_hlist_create(s, MLX5_FLOW_TABLE_HLIST_ARRAY_SIZE,
@@ -1924,7 +2016,8 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	 * If default mreg copy action is removed at the stop stage,
 	 * the search will return none and nothing will be done anymore.
 	 */
-	mlx5_flow_stop_default(dev);
+	if (priv->sh->config.dv_flow_en != 2)
+		mlx5_flow_stop_default(dev);
 	mlx5_traffic_disable(dev);
 	/*
 	 * If all the flows are already flushed in the device stop stage,
@@ -1942,8 +2035,14 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	/* Free the eCPRI flex parser resource. */
 	mlx5_flex_parser_ecpri_release(dev);
 	mlx5_flex_item_port_cleanup(dev);
-#if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
+#ifdef HAVE_MLX5_HWS_SUPPORT
+	flow_hw_destroy_vport_action(dev);
 	flow_hw_resource_release(dev);
+	flow_hw_clear_port_info(dev);
+	if (priv->sh->config.dv_flow_en == 2) {
+		flow_hw_clear_flow_metadata_config();
+		flow_hw_clear_tags_set(dev);
+	}
 #endif
 	if (priv->rxq_privs != NULL) {
 		/* XXX race condition if mlx5_rx_burst() is still running. */
@@ -2020,6 +2119,12 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	if (priv->hrxqs)
 		mlx5_list_destroy(priv->hrxqs);
 	mlx5_free(priv->ext_rxqs);
+	priv->sh->port[priv->dev_port - 1].nl_ih_port_id = RTE_MAX_ETHPORTS;
+	/*
+	 * The interrupt handler port id must be reset before priv is reset
+	 * since 'mlx5_dev_interrupt_nl_cb' uses priv.
+	 */
+	rte_io_wmb();
 	/*
 	 * Free the shared context in last turn, because the cleanup
 	 * routines above may use some shared fields, like
@@ -2641,6 +2746,11 @@ mlx5_probe_again_args_validate(struct mlx5_common_device *cdev,
 			sh->ibdev_name);
 		goto error;
 	}
+	if (sh->config.fdb_def_rule ^ config->fdb_def_rule) {
+		DRV_LOG(ERR, "\"fdb_def_rule_en\" configuration mismatch for shared %s context.",
+			sh->ibdev_name);
+		goto error;
+	}
 	if (sh->config.l3_vxlan_en ^ config->l3_vxlan_en) {
 		DRV_LOG(ERR, "\"l3_vxlan_en\" "
 			"configuration mismatch for shared %s context.",
@@ -2831,6 +2941,10 @@ mlx5_set_metadata_mask(struct rte_eth_dev *dev)
 	case MLX5_XMETA_MODE_META32:
 		meta = UINT32_MAX;
 		mark = (reg_c0 >> rte_bsf32(reg_c0)) & MLX5_FLOW_MARK_MASK;
+		break;
+	case MLX5_XMETA_MODE_META32_HWS:
+		meta = UINT32_MAX;
+		mark = MLX5_FLOW_MARK_MASK;
 		break;
 	default:
 		meta = 0;

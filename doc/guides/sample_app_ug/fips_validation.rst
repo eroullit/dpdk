@@ -61,11 +61,15 @@ ACVP
     * AES-CBC (128,192,256) - AFT, MCT
     * AES-GCM (128,192,256) - AFT
     * AES-CMAC (128,192,256) - AFT
+    * AES-CTR (128,192,256) - AFT, CTR
+    * AES-GMAC (128,192,256) - AFT
     * AES-XTS (128,256) - AFT
     * HMAC (SHA1, SHA224, SHA256, SHA384, SHA512)
     * SHA (1, 256, 384, 512) - AFT, MCT
     * TDES-CBC - AFT, MCT
     * TDES-ECB - AFT, MCT
+    * RSA
+    * ECDSA
 
 
 Application Information

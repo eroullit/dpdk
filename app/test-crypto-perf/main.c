@@ -263,19 +263,15 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 		opts->segment_sz += (opts->headroom_sz + opts->tailroom_sz);
 
 		uint32_t dev_max_nb_sess = cdev_info.sym.max_nb_sessions;
-		/*
-		 * Two sessions objects are required for each session
-		 * (one for the header, one for the private data)
-		 */
 		if (!strcmp((const char *)opts->device_type,
 					"crypto_scheduler")) {
 #ifdef RTE_CRYPTO_SCHEDULER
-			uint32_t nb_slaves =
+			uint32_t nb_workers =
 				rte_cryptodev_scheduler_workers_get(cdev_id,
 								NULL);
-
-			sessions_needed = enabled_cdev_count *
-				opts->nb_qps * nb_slaves;
+			/* scheduler session header per lcore + 1 session per worker qp */
+			sessions_needed = nb_lcores + enabled_cdev_count *
+				opts->nb_qps * nb_workers;
 #endif
 		} else
 			sessions_needed = enabled_cdev_count * opts->nb_qps;

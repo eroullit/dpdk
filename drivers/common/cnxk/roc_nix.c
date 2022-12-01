@@ -127,8 +127,11 @@ roc_nix_max_pkt_len(struct roc_nix *roc_nix)
 {
 	struct nix *nix = roc_nix_to_nix_priv(roc_nix);
 
-	if (roc_nix_is_sdp(roc_nix))
+	if (roc_nix_is_sdp(roc_nix)) {
+		if (roc_errata_nix_sdp_send_has_mtu_size_16k())
+			return NIX_SDP_16K_HW_FRS;
 		return NIX_SDP_MAX_HW_FRS;
+	}
 
 	if (roc_model_is_cn9k())
 		return NIX_CN9K_MAX_HW_FRS;
@@ -300,8 +303,15 @@ roc_nix_get_hw_info(struct roc_nix *roc_nix)
 
 	mbox_alloc_msg_nix_get_hw_info(mbox);
 	rc = mbox_process_msg(mbox, (void *)&hw_info);
-	if (rc == 0)
+	if (rc == 0) {
 		nix->vwqe_interval = hw_info->vwqe_delay;
+		if (nix->lbk_link)
+			roc_nix->dwrr_mtu = hw_info->lbk_dwrr_mtu;
+		else if (nix->sdp_link)
+			roc_nix->dwrr_mtu = hw_info->sdp_dwrr_mtu;
+		else
+			roc_nix->dwrr_mtu = hw_info->rpm_dwrr_mtu;
+	}
 
 	return rc;
 }

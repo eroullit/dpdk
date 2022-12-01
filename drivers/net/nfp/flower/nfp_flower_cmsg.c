@@ -6,6 +6,7 @@
 #include "../nfpcore/nfp_nsp.h"
 #include "../nfp_logs.h"
 #include "../nfp_common.h"
+#include "../nfp_flow.h"
 #include "nfp_flower.h"
 #include "nfp_flower_cmsg.h"
 #include "nfp_flower_ctrl.h"
@@ -167,6 +168,296 @@ nfp_flower_cmsg_port_mod(struct nfp_app_fw_flower *app_fw_flower,
 	msg->reserved = 0;
 	msg->info     = carrier_ok;
 	msg->mtu      = 9000;
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_flow_delete(struct nfp_app_fw_flower *app_fw_flower,
+		struct rte_flow *flow)
+{
+	char *msg;
+	uint16_t cnt;
+	uint32_t msg_len;
+	struct rte_mbuf *mbuf;
+	struct nfp_fl_rule_metadata *nfp_flow_meta;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for flow delete.");
+		return -ENOMEM;
+	}
+
+	/* Copy the flow to mbuf */
+	nfp_flow_meta = flow->payload.meta;
+	msg_len = (nfp_flow_meta->key_len + nfp_flow_meta->mask_len +
+			nfp_flow_meta->act_len) << NFP_FL_LW_SIZ;
+	msg_len += sizeof(struct nfp_fl_rule_metadata);
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_FLOW_DEL, msg_len);
+	rte_memcpy(msg, flow->payload.meta, msg_len);
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_flow_add(struct nfp_app_fw_flower *app_fw_flower,
+		struct rte_flow *flow)
+{
+	char *msg;
+	uint16_t cnt;
+	uint32_t msg_len;
+	struct rte_mbuf *mbuf;
+	struct nfp_fl_rule_metadata *nfp_flow_meta;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for flow add.");
+		return -ENOMEM;
+	}
+
+	/* copy the flow to mbuf */
+	nfp_flow_meta = flow->payload.meta;
+	msg_len = (nfp_flow_meta->key_len + nfp_flow_meta->mask_len +
+			nfp_flow_meta->act_len) << NFP_FL_LW_SIZ;
+	msg_len += sizeof(struct nfp_fl_rule_metadata);
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_FLOW_ADD, msg_len);
+	rte_memcpy(msg, flow->payload.meta, msg_len);
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_tun_neigh_v4_rule(struct nfp_app_fw_flower *app_fw_flower,
+		struct nfp_flower_cmsg_tun_neigh_v4 *payload)
+{
+	uint16_t cnt;
+	size_t msg_len;
+	struct rte_mbuf *mbuf;
+	struct nfp_flower_cmsg_tun_neigh_v4 *msg;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for v4 tun neigh");
+		return -ENOMEM;
+	}
+
+	msg_len = sizeof(struct nfp_flower_cmsg_tun_neigh_v4);
+	if (!nfp_flower_support_decap_v2(app_fw_flower))
+		msg_len -= sizeof(struct nfp_flower_tun_neigh_ext);
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_TUN_NEIGH, msg_len);
+	memcpy(msg, payload, msg_len);
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_tun_neigh_v6_rule(struct nfp_app_fw_flower *app_fw_flower,
+		struct nfp_flower_cmsg_tun_neigh_v6 *payload)
+{
+	uint16_t cnt;
+	size_t msg_len;
+	struct rte_mbuf *mbuf;
+	struct nfp_flower_cmsg_tun_neigh_v6 *msg;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for v6 tun neigh");
+		return -ENOMEM;
+	}
+
+	msg_len = sizeof(struct nfp_flower_cmsg_tun_neigh_v6);
+	if (!nfp_flower_support_decap_v2(app_fw_flower))
+		msg_len -= sizeof(struct nfp_flower_tun_neigh_ext);
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_TUN_NEIGH_V6, msg_len);
+	memcpy(msg, payload, msg_len);
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_tun_off_v4(struct nfp_app_fw_flower *app_fw_flower)
+{
+	uint16_t cnt;
+	uint32_t count = 0;
+	struct rte_mbuf *mbuf;
+	struct nfp_flow_priv *priv;
+	struct nfp_ipv4_addr_entry *entry;
+	struct nfp_flower_cmsg_tun_ipv4_addr *msg;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for v4 tun addr");
+		return -ENOMEM;
+	}
+
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_TUN_IPS, sizeof(*msg));
+
+	priv = app_fw_flower->flow_priv;
+	rte_spinlock_lock(&priv->ipv4_off_lock);
+	LIST_FOREACH(entry, &priv->ipv4_off_list, next) {
+		if (count >= NFP_FL_IPV4_ADDRS_MAX) {
+			rte_spinlock_unlock(&priv->ipv4_off_lock);
+			PMD_DRV_LOG(ERR, "IPv4 offload exceeds limit.");
+			return -ERANGE;
+		}
+		msg->ipv4_addr[count] = entry->ipv4_addr;
+		count++;
+	}
+	msg->count = rte_cpu_to_be_32(count);
+	rte_spinlock_unlock(&priv->ipv4_off_lock);
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_tun_off_v6(struct nfp_app_fw_flower *app_fw_flower)
+{
+	uint16_t cnt;
+	uint32_t count = 0;
+	struct rte_mbuf *mbuf;
+	struct nfp_flow_priv *priv;
+	struct nfp_ipv6_addr_entry *entry;
+	struct nfp_flower_cmsg_tun_ipv6_addr *msg;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for v6 tun addr");
+		return -ENOMEM;
+	}
+
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_TUN_IPS_V6, sizeof(*msg));
+
+	priv = app_fw_flower->flow_priv;
+	rte_spinlock_lock(&priv->ipv6_off_lock);
+	LIST_FOREACH(entry, &priv->ipv6_off_list, next) {
+		if (count >= NFP_FL_IPV6_ADDRS_MAX) {
+			rte_spinlock_unlock(&priv->ipv6_off_lock);
+			PMD_DRV_LOG(ERR, "IPv6 offload exceeds limit.");
+			return -ERANGE;
+		}
+		memcpy(&msg->ipv6_addr[count * 16], entry->ipv6_addr, 16UL);
+		count++;
+	}
+	msg->count = rte_cpu_to_be_32(count);
+	rte_spinlock_unlock(&priv->ipv6_off_lock);
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_pre_tunnel_rule(struct nfp_app_fw_flower *app_fw_flower,
+		struct nfp_fl_rule_metadata *nfp_flow_meta,
+		uint16_t mac_idx,
+		bool is_del)
+{
+	uint16_t cnt;
+	struct rte_mbuf *mbuf;
+	struct nfp_flower_meta_tci *meta_tci;
+	struct nfp_flower_cmsg_pre_tun_rule *msg;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for pre tunnel rule");
+		return -ENOMEM;
+	}
+
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_PRE_TUN_RULE, sizeof(*msg));
+
+	meta_tci = (struct nfp_flower_meta_tci *)((char *)nfp_flow_meta +
+			sizeof(struct nfp_fl_rule_metadata));
+	if (meta_tci->tci)
+		msg->vlan_tci = meta_tci->tci;
+	else
+		msg->vlan_tci = 0xffff;
+
+	if (is_del)
+		msg->flags = rte_cpu_to_be_32(NFP_TUN_PRE_TUN_RULE_DEL);
+
+	msg->port_idx = rte_cpu_to_be_16(mac_idx);
+	msg->host_ctx_id = nfp_flow_meta->host_ctx_id;
+
+	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
+	if (cnt == 0) {
+		PMD_DRV_LOG(ERR, "Send cmsg through ctrl vnic failed.");
+		rte_pktmbuf_free(mbuf);
+		return -EIO;
+	}
+
+	return 0;
+}
+
+int
+nfp_flower_cmsg_tun_mac_rule(struct nfp_app_fw_flower *app_fw_flower,
+		struct rte_ether_addr *mac,
+		uint16_t mac_idx,
+		bool is_del)
+{
+	uint16_t cnt;
+	struct rte_mbuf *mbuf;
+	struct nfp_flower_cmsg_tun_mac *msg;
+
+	mbuf = rte_pktmbuf_alloc(app_fw_flower->ctrl_pktmbuf_pool);
+	if (mbuf == NULL) {
+		PMD_DRV_LOG(DEBUG, "Failed to alloc mbuf for tunnel mac");
+		return -ENOMEM;
+	}
+
+	msg = nfp_flower_cmsg_init(mbuf, NFP_FLOWER_CMSG_TYPE_TUN_MAC, sizeof(*msg));
+
+	msg->count = rte_cpu_to_be_16(1);
+	msg->index = rte_cpu_to_be_16(mac_idx);
+	rte_ether_addr_copy(mac, &msg->addr);
+	if (is_del)
+		msg->flags = rte_cpu_to_be_16(NFP_TUN_MAC_OFFLOAD_DEL_FLAG);
 
 	cnt = nfp_flower_ctrl_vnic_xmit(app_fw_flower, mbuf);
 	if (cnt == 0) {

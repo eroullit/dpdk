@@ -129,6 +129,7 @@ enum index {
 	/* Queue arguments. */
 	QUEUE_CREATE,
 	QUEUE_DESTROY,
+	QUEUE_AGED,
 	QUEUE_INDIRECT_ACTION,
 
 	/* Queue create arguments. */
@@ -226,6 +227,7 @@ enum index {
 	CONFIG_AGING_OBJECTS_NUMBER,
 	CONFIG_METERS_NUMBER,
 	CONFIG_CONN_TRACK_NUMBER,
+	CONFIG_FLAGS,
 
 	/* Indirect action arguments */
 	INDIRECT_ACTION_CREATE,
@@ -584,6 +586,9 @@ enum index {
 	ACTION_SET_IPV6_DSCP_VALUE,
 	ACTION_AGE,
 	ACTION_AGE_TIMEOUT,
+	ACTION_AGE_UPDATE,
+	ACTION_AGE_UPDATE_TIMEOUT,
+	ACTION_AGE_UPDATE_TOUCH,
 	ACTION_SAMPLE,
 	ACTION_SAMPLE_RATIO,
 	ACTION_SAMPLE_INDEX,
@@ -1092,6 +1097,7 @@ static const enum index next_config_attr[] = {
 	CONFIG_AGING_OBJECTS_NUMBER,
 	CONFIG_METERS_NUMBER,
 	CONFIG_CONN_TRACK_NUMBER,
+	CONFIG_FLAGS,
 	END,
 	ZERO,
 };
@@ -1168,6 +1174,7 @@ static const enum index next_table_destroy_attr[] = {
 static const enum index next_queue_subcmd[] = {
 	QUEUE_CREATE,
 	QUEUE_DESTROY,
+	QUEUE_AGED,
 	QUEUE_INDIRECT_ACTION,
 	ZERO,
 };
@@ -1870,6 +1877,7 @@ static const enum index next_action[] = {
 	ACTION_SET_IPV4_DSCP,
 	ACTION_SET_IPV6_DSCP,
 	ACTION_AGE,
+	ACTION_AGE_UPDATE,
 	ACTION_SAMPLE,
 	ACTION_INDIRECT,
 	ACTION_MODIFY_FIELD,
@@ -2106,6 +2114,14 @@ static const enum index action_age[] = {
 	ZERO,
 };
 
+static const enum index action_age_update[] = {
+	ACTION_AGE_UPDATE,
+	ACTION_AGE_UPDATE_TIMEOUT,
+	ACTION_AGE_UPDATE_TOUCH,
+	ACTION_NEXT,
+	ZERO,
+};
+
 static const enum index action_sample[] = {
 	ACTION_SAMPLE,
 	ACTION_SAMPLE_RATIO,
@@ -2184,6 +2200,9 @@ static int parse_vc_spec(struct context *, const struct token *,
 			 const char *, unsigned int, void *, unsigned int);
 static int parse_vc_conf(struct context *, const struct token *,
 			 const char *, unsigned int, void *, unsigned int);
+static int parse_vc_conf_timeout(struct context *, const struct token *,
+				 const char *, unsigned int, void *,
+				 unsigned int);
 static int parse_vc_item_ecpri_type(struct context *, const struct token *,
 				    const char *, unsigned int,
 				    void *, unsigned int);
@@ -2692,6 +2711,14 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY(struct buffer,
 					args.configure.port_attr.nb_conn_tracks)),
 	},
+	[CONFIG_FLAGS] = {
+		.name = "flags",
+		.help = "configuration flags",
+		.next = NEXT(next_config_attr,
+			     NEXT_ENTRY(COMMON_UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct buffer,
+					args.configure.port_attr.flags)),
+	},
 	/* Top-level command. */
 	[PATTERN_TEMPLATE] = {
 		.name = "pattern_template",
@@ -2957,6 +2984,13 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY(struct buffer, queue)),
 		.call = parse_qo_destroy,
 	},
+	[QUEUE_AGED] = {
+		.name = "aged",
+		.help = "list and destroy aged flows",
+		.next = NEXT(next_aged_attr, NEXT_ENTRY(COMMON_QUEUE_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, queue)),
+		.call = parse_aged,
+	},
 	[QUEUE_INDIRECT_ACTION] = {
 		.name = "indirect_action",
 		.help = "queue indirect actions",
@@ -2966,7 +3000,7 @@ static const struct token token_list[] = {
 	},
 	/* Queue  arguments. */
 	[QUEUE_TEMPLATE_TABLE] = {
-		.name = "template table",
+		.name = "template_table",
 		.help = "specify table id",
 		.next = NEXT(NEXT_ENTRY(QUEUE_PATTERN_TEMPLATE),
 			     NEXT_ENTRY(COMMON_TABLE_ID)),
@@ -6187,6 +6221,30 @@ static const struct token token_list[] = {
 		.next = NEXT(action_age, NEXT_ENTRY(COMMON_UNSIGNED)),
 		.call = parse_vc_conf,
 	},
+	[ACTION_AGE_UPDATE] = {
+		.name = "age_update",
+		.help = "update aging parameter",
+		.next = NEXT(action_age_update),
+		.priv = PRIV_ACTION(AGE,
+				    sizeof(struct rte_flow_update_age)),
+		.call = parse_vc,
+	},
+	[ACTION_AGE_UPDATE_TIMEOUT] = {
+		.name = "timeout",
+		.help = "age timeout update value",
+		.args = ARGS(ARGS_ENTRY_BF(struct rte_flow_update_age,
+					   timeout, 24)),
+		.next = NEXT(action_age_update, NEXT_ENTRY(COMMON_UNSIGNED)),
+		.call = parse_vc_conf_timeout,
+	},
+	[ACTION_AGE_UPDATE_TOUCH] = {
+		.name = "touch",
+		.help = "this flow is touched",
+		.next = NEXT(action_age_update, NEXT_ENTRY(COMMON_BOOLEAN)),
+		.args = ARGS(ARGS_ENTRY_BF(struct rte_flow_update_age,
+					   touch, 1)),
+		.call = parse_vc_conf,
+	},
 	[ACTION_SAMPLE] = {
 		.name = "sample",
 		.help = "set a sample action",
@@ -7023,6 +7081,33 @@ parse_vc_conf(struct context *ctx, const struct token *token,
 	/* Point to selected object. */
 	ctx->object = out->args.vc.data;
 	ctx->objmask = NULL;
+	return len;
+}
+
+/** Parse action configuration field. */
+static int
+parse_vc_conf_timeout(struct context *ctx, const struct token *token,
+		      const char *str, unsigned int len,
+		      void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+	struct rte_flow_update_age *update;
+
+	(void)size;
+	if (ctx->curr != ACTION_AGE_UPDATE_TIMEOUT)
+		return -1;
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	/* Point to selected object. */
+	ctx->object = out->args.vc.data;
+	ctx->objmask = NULL;
+	/* Update the timeout is valid. */
+	update = (struct rte_flow_update_age *)out->args.vc.data;
+	update->timeout_valid = 1;
 	return len;
 }
 
@@ -8644,8 +8729,8 @@ parse_aged(struct context *ctx, const struct token *token,
 	/* Nothing else to do if there is no buffer. */
 	if (!out)
 		return len;
-	if (!out->command) {
-		if (ctx->curr != AGED)
+	if (!out->command || out->command == QUEUE) {
+		if (ctx->curr != AGED && ctx->curr != QUEUE_AGED)
 			return -1;
 		if (sizeof(*out) > size)
 			return -1;
@@ -10599,6 +10684,10 @@ cmd_flow_parsed(const struct buffer *in)
 		break;
 	case PULL:
 		port_queue_flow_pull(in->port, in->queue);
+		break;
+	case QUEUE_AGED:
+		port_queue_flow_aged(in->port, in->queue,
+				     in->args.aged.destroy);
 		break;
 	case QUEUE_INDIRECT_ACTION_CREATE:
 		port_queue_action_handle_create(

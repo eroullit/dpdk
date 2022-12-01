@@ -324,13 +324,6 @@ ice_program_hw_rx_queue(struct ice_rx_queue *rxq)
 			goto set_hsplit_finish;
 		}
 
-		switch (proto_hdr & RTE_PTYPE_TUNNEL_MASK) {
-		case RTE_PTYPE_TUNNEL_GRENAT:
-			rx_ctx.dtype = ICE_RX_DTYPE_HEADER_SPLIT;
-			rx_ctx.hsplit_1 = ICE_RLAN_RX_HSPLIT_1_SPLIT_ALWAYS;
-			goto set_hsplit_finish;
-		}
-
 		switch (proto_hdr & RTE_PTYPE_INNER_L4_MASK) {
 		case RTE_PTYPE_INNER_L4_TCP:
 		case RTE_PTYPE_INNER_L4_UDP:
@@ -355,6 +348,13 @@ ice_program_hw_rx_queue(struct ice_rx_queue *rxq)
 		case RTE_PTYPE_INNER_L2_ETHER:
 			rx_ctx.dtype = ICE_RX_DTYPE_HEADER_SPLIT;
 			rx_ctx.hsplit_0 = ICE_RLAN_RX_HSPLIT_0_SPLIT_L2;
+			goto set_hsplit_finish;
+		}
+
+		switch (proto_hdr & RTE_PTYPE_TUNNEL_MASK) {
+		case RTE_PTYPE_TUNNEL_GRENAT:
+			rx_ctx.dtype = ICE_RX_DTYPE_HEADER_SPLIT;
+			rx_ctx.hsplit_1 = ICE_RLAN_RX_HSPLIT_1_SPLIT_ALWAYS;
 			goto set_hsplit_finish;
 		}
 
@@ -1302,7 +1302,8 @@ ice_rx_queue_release(void *rxq)
 		return;
 	}
 
-	q->rx_rel_mbufs(q);
+	if (q->rx_rel_mbufs != NULL)
+		q->rx_rel_mbufs(q);
 	rte_free(q->sw_ring);
 	rte_memzone_free(q->mz);
 	rte_free(q);
@@ -1512,7 +1513,8 @@ ice_tx_queue_release(void *txq)
 		return;
 	}
 
-	q->tx_rel_mbufs(q);
+	if (q->tx_rel_mbufs != NULL)
+		q->tx_rel_mbufs(q);
 	rte_free(q->sw_ring);
 	rte_memzone_free(q->mz);
 	rte_free(q);
@@ -2111,6 +2113,10 @@ ice_recv_scattered_pkts(void *rx_queue,
 			} else
 				rxm->data_len = (uint16_t)(rx_packet_len -
 							   RTE_ETHER_CRC_LEN);
+		} else if (rx_packet_len == 0) {
+			rte_pktmbuf_free_seg(rxm);
+			first_seg->nb_segs--;
+			last_seg->next = NULL;
 		}
 
 		first_seg->port = rxq->port_id;
@@ -2690,6 +2696,7 @@ ice_parse_tunneling_params(uint64_t ol_flags,
 		/* for non UDP / GRE tunneling, set to 00b */
 		break;
 	case RTE_MBUF_F_TX_TUNNEL_VXLAN:
+	case RTE_MBUF_F_TX_TUNNEL_VXLAN_GPE:
 	case RTE_MBUF_F_TX_TUNNEL_GTP:
 	case RTE_MBUF_F_TX_TUNNEL_GENEVE:
 		*cd_tunneling |= ICE_TXD_CTX_UDP_TUNNELING;
@@ -3638,6 +3645,22 @@ ice_set_tx_function_flag(struct rte_eth_dev *dev, struct ice_tx_queue *txq)
 #define ICE_MIN_TSO_MSS            64
 #define ICE_MAX_TSO_MSS            9728
 #define ICE_MAX_TSO_FRAME_SIZE     262144
+
+/*Check for empty mbuf*/
+static inline uint16_t
+ice_check_empty_mbuf(struct rte_mbuf *tx_pkt)
+{
+	struct rte_mbuf *txd = tx_pkt;
+
+	while (txd != NULL) {
+		if (txd->data_len == 0)
+			return -1;
+		txd = txd->next;
+	}
+
+	return 0;
+}
+
 uint16_t
 ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 	      uint16_t nb_pkts)
@@ -3682,6 +3705,12 @@ ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 		ret = rte_net_intel_cksum_prepare(m);
 		if (ret != 0) {
 			rte_errno = -ret;
+			return i;
+		}
+
+		if (ice_check_empty_mbuf(m) != 0) {
+			rte_errno = EINVAL;
+			PMD_DRV_LOG(ERR, "INVALID mbuf:	last mbuf data_len=[0]");
 			return i;
 		}
 	}
