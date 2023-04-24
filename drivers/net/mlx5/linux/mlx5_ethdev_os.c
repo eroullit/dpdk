@@ -1033,8 +1033,8 @@ mlx5_sysfs_check_switch_info(bool device_dir,
 int
 mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 {
-	char ifname[IF_NAMESIZE];
-	char port_name[IF_NAMESIZE];
+	char ifname[IF_NAMESIZE + 1];
+	char port_name[IF_NAMESIZE + 1];
 	FILE *file;
 	struct mlx5_switch_info data = {
 		.master = 0,
