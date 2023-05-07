@@ -384,6 +384,8 @@ static const struct mlx5_indexed_pool_config mlx5_ipool_cfg[] = {
 
 #define MLX5_FLOW_TABLE_HLIST_ARRAY_SIZE 1024
 
+#define MLX5_RXQ_ENH_CQE_COMP_MASK 0x80
+
 /**
  * Decide whether representor ID is a HPF(host PF) port on BF2.
  *
@@ -1004,16 +1006,19 @@ mlx5_flex_parser_ecpri_alloc(struct rte_eth_dev *dev)
 		return (rte_errno == 0) ? -ENODEV : -rte_errno;
 	}
 	prf->num = 2;
-	ret = mlx5_devx_cmd_query_parse_samples(prf->obj, ids, prf->num);
+	ret = mlx5_devx_cmd_query_parse_samples(prf->obj, ids, prf->num, NULL);
 	if (ret) {
 		DRV_LOG(ERR, "Failed to query sample IDs.");
-		return (rte_errno == 0) ? -ENODEV : -rte_errno;
+		goto error;
 	}
 	prf->offset[0] = 0x0;
 	prf->offset[1] = sizeof(uint32_t);
 	prf->ids[0] = ids[0];
 	prf->ids[1] = ids[1];
 	return 0;
+error:
+	mlx5_devx_cmd_destroy(prf->obj);
+	return (rte_errno == 0) ? -ENODEV : -rte_errno;
 }
 
 /*
@@ -1027,11 +1032,116 @@ static void
 mlx5_flex_parser_ecpri_release(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_ecpri_parser_profile *prf =	&priv->sh->ecpri_parser;
+	struct mlx5_ecpri_parser_profile *prf = &priv->sh->ecpri_parser;
 
 	if (prf->obj)
 		mlx5_devx_cmd_destroy(prf->obj);
 	prf->obj = NULL;
+}
+
+/*
+ * Allocation of a flex parser for srh. Once refcnt is zero, the resources held
+ * by this parser will be freed.
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
+{
+	struct mlx5_devx_graph_node_attr node = {
+		.modify_field_select = 0,
+	};
+	uint32_t ids[MLX5_GRAPH_NODE_SAMPLE_NUM];
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_common_dev_config *config = &priv->sh->cdev->config;
+	void *fp = NULL, *ibv_ctx = priv->sh->cdev->ctx;
+	int ret;
+
+	memset(ids, 0xff, sizeof(ids));
+	if (!config->hca_attr.parse_graph_flex_node ||
+	    !config->hca_attr.flex.query_match_sample_info) {
+		DRV_LOG(ERR, "Dynamic flex parser is not supported on HWS");
+		return -ENOTSUP;
+	}
+	if (__atomic_fetch_add(&priv->sh->srh_flex_parser.refcnt, 1, __ATOMIC_RELAXED) + 1 > 1)
+		return 0;
+	priv->sh->srh_flex_parser.flex.devx_fp = mlx5_malloc(MLX5_MEM_ZERO,
+			sizeof(struct mlx5_flex_parser_devx), 0, SOCKET_ID_ANY);
+	if (!priv->sh->srh_flex_parser.flex.devx_fp)
+		return -ENOMEM;
+	node.header_length_mode = MLX5_GRAPH_NODE_LEN_FIELD;
+	/* Srv6 first two DW are not counted in. */
+	node.header_length_base_value = 0x8;
+	/* The unit is uint64_t. */
+	node.header_length_field_shift = 0x3;
+	/* Header length is the 2nd byte. */
+	node.header_length_field_offset = 0x8;
+	node.header_length_field_mask = 0xF;
+	/* One byte next header protocol. */
+	node.next_header_field_size = 0x8;
+	node.in[0].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_IP;
+	node.in[0].compare_condition_value = IPPROTO_ROUTING;
+	node.sample[0].flow_match_sample_en = 1;
+	/* First come first serve no matter inner or outer. */
+	node.sample[0].flow_match_sample_tunnel_mode = MLX5_GRAPH_SAMPLE_TUNNEL_FIRST;
+	node.sample[0].flow_match_sample_offset_mode = MLX5_GRAPH_SAMPLE_OFFSET_FIXED;
+	node.out[0].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_TCP;
+	node.out[0].compare_condition_value = IPPROTO_TCP;
+	node.out[1].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_UDP;
+	node.out[1].compare_condition_value = IPPROTO_UDP;
+	node.out[2].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_IPV6;
+	node.out[2].compare_condition_value = IPPROTO_IPV6;
+	fp = mlx5_devx_cmd_create_flex_parser(ibv_ctx, &node);
+	if (!fp) {
+		DRV_LOG(ERR, "Failed to create flex parser node object.");
+		goto error;
+	}
+	priv->sh->srh_flex_parser.flex.devx_fp->devx_obj = fp;
+	priv->sh->srh_flex_parser.flex.mapnum = 1;
+	priv->sh->srh_flex_parser.flex.devx_fp->num_samples = 1;
+
+	ret = mlx5_devx_cmd_query_parse_samples(fp, ids, priv->sh->srh_flex_parser.flex.mapnum,
+						&priv->sh->srh_flex_parser.flex.devx_fp->anchor_id);
+	if (ret) {
+		DRV_LOG(ERR, "Failed to query sample IDs.");
+		goto error;
+	}
+	ret = mlx5_devx_cmd_match_sample_info_query(ibv_ctx, ids[0],
+				&priv->sh->srh_flex_parser.flex.devx_fp->sample_info[0]);
+	if (ret) {
+		DRV_LOG(ERR, "Failed to query sample id information.");
+		goto error;
+	}
+	return 0;
+error:
+	if (fp)
+		mlx5_devx_cmd_destroy(fp);
+	if (priv->sh->srh_flex_parser.flex.devx_fp)
+		mlx5_free(priv->sh->srh_flex_parser.flex.devx_fp);
+	return (rte_errno == 0) ? -ENODEV : -rte_errno;
+}
+
+/*
+ * Destroy the flex parser node, including the parser itself, input / output
+ * arcs and DW samples. Resources could be reused then.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure
+ */
+void
+mlx5_free_srh_flex_parser(struct rte_eth_dev *dev)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_internal_flex_parser_profile *fp = &priv->sh->srh_flex_parser;
+
+	if (__atomic_fetch_sub(&fp->refcnt, 1, __ATOMIC_RELAXED) - 1)
+		return;
+	mlx5_devx_cmd_destroy(fp->flex.devx_fp->devx_obj);
+	mlx5_free(fp->flex.devx_fp);
+	fp->flex.devx_fp = NULL;
 }
 
 uint32_t
@@ -1162,9 +1272,9 @@ mlx5_dev_ctx_shared_mempool_subscribe(struct rte_eth_dev *dev)
 static int
 mlx5_setup_tis(struct mlx5_dev_ctx_shared *sh)
 {
-	int i;
 	struct mlx5_devx_lag_context lag_ctx = { 0 };
 	struct mlx5_devx_tis_attr tis_attr = { 0 };
+	int i;
 
 	tis_attr.transport_domain = sh->td->id;
 	if (sh->bond.n_port) {
@@ -1178,35 +1288,30 @@ mlx5_setup_tis(struct mlx5_dev_ctx_shared *sh)
 			DRV_LOG(ERR, "Failed to query lag affinity.");
 			return -1;
 		}
-		if (sh->lag.affinity_mode == MLX5_LAG_MODE_TIS) {
-			for (i = 0; i < sh->bond.n_port; i++) {
-				tis_attr.lag_tx_port_affinity =
-					MLX5_IFC_LAG_MAP_TIS_AFFINITY(i,
-							sh->bond.n_port);
-				sh->tis[i] = mlx5_devx_cmd_create_tis(sh->cdev->ctx,
-						&tis_attr);
-				if (!sh->tis[i]) {
-					DRV_LOG(ERR, "Failed to TIS %d/%d for bonding device"
-						" %s.", i, sh->bond.n_port,
-						sh->ibdev_name);
-					return -1;
-				}
-			}
+		if (sh->lag.affinity_mode == MLX5_LAG_MODE_TIS)
 			DRV_LOG(DEBUG, "LAG number of ports : %d, affinity_1 & 2 : pf%d & %d.\n",
 				sh->bond.n_port, lag_ctx.tx_remap_affinity_1,
 				lag_ctx.tx_remap_affinity_2);
-			return 0;
-		}
-		if (sh->lag.affinity_mode == MLX5_LAG_MODE_HASH)
+		else if (sh->lag.affinity_mode == MLX5_LAG_MODE_HASH)
 			DRV_LOG(INFO, "Device %s enabled HW hash based LAG.",
 					sh->ibdev_name);
 	}
-	tis_attr.lag_tx_port_affinity = 0;
-	sh->tis[0] = mlx5_devx_cmd_create_tis(sh->cdev->ctx, &tis_attr);
-	if (!sh->tis[0]) {
-		DRV_LOG(ERR, "Failed to TIS 0 for bonding device"
-			" %s.", sh->ibdev_name);
-		return -1;
+	for (i = 0; i <= sh->bond.n_port; i++) {
+		/*
+		 * lag_tx_port_affinity: 0 auto-selection, 1 PF1, 2 PF2 vice versa.
+		 * Each TIS binds to one PF by setting lag_tx_port_affinity (> 0).
+		 * Once LAG enabled, we create multiple TISs and bind each one to
+		 * different PFs, then TIS[i+1] gets affinity i+1 and goes to PF i+1.
+		 * TIS[0] is reserved for HW Hash mode.
+		 */
+		tis_attr.lag_tx_port_affinity = i;
+		sh->tis[i] = mlx5_devx_cmd_create_tis(sh->cdev->ctx, &tis_attr);
+		if (!sh->tis[i]) {
+			DRV_LOG(ERR, "Failed to create TIS %d/%d for [bonding] device"
+				" %s.", i, sh->bond.n_port,
+				sh->ibdev_name);
+			return -1;
+		}
 	}
 	return 0;
 }
@@ -1401,7 +1506,8 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 		rte_errno = ENODEV;
 		return -rte_errno;
 	}
-	if (!config->tx_pp && config->tx_skew) {
+	if (!config->tx_pp && config->tx_skew &&
+	    !sh->cdev->config.hca_attr.wait_on_time) {
 		DRV_LOG(WARNING,
 			"\"tx_skew\" doesn't affect without \"tx_pp\".");
 	}
@@ -1976,8 +2082,12 @@ mlx5_proc_priv_init(struct rte_eth_dev *dev)
 void
 mlx5_proc_priv_uninit(struct rte_eth_dev *dev)
 {
-	if (!dev->process_private)
+	struct mlx5_proc_priv *ppriv = dev->process_private;
+
+	if (!ppriv)
 		return;
+	if (ppriv->hca_bar)
+		mlx5_txpp_unmap_hca_bar(dev);
 	mlx5_free(dev->process_private);
 	dev->process_private = NULL;
 }
@@ -2008,6 +2118,12 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	}
 	if (!priv->sh)
 		return 0;
+	if (priv->shared_refcnt) {
+		DRV_LOG(ERR, "port %u is shared host in use (%u)",
+			dev->data->port_id, priv->shared_refcnt);
+		rte_errno = EBUSY;
+		return -EBUSY;
+	}
 	DRV_LOG(DEBUG, "port %u closing device \"%s\"",
 		dev->data->port_id,
 		((priv->sh->cdev->ctx != NULL) ?
@@ -2229,6 +2345,8 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.hairpin_queue_peer_bind = mlx5_hairpin_queue_peer_bind,
 	.hairpin_queue_peer_unbind = mlx5_hairpin_queue_peer_unbind,
 	.get_monitor_addr = mlx5_get_monitor_addr,
+	.count_aggr_ports = mlx5_count_aggr_ports,
+	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
 };
 
 /* Available operations from secondary process. */
@@ -2252,6 +2370,8 @@ const struct eth_dev_ops mlx5_dev_sec_ops = {
 	.tx_burst_mode_get = mlx5_tx_burst_mode_get,
 	.get_module_info = mlx5_get_module_info,
 	.get_module_eeprom = mlx5_get_module_eeprom,
+	.count_aggr_ports = mlx5_count_aggr_ports,
+	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
 };
 
 /* Available operations in flow isolated mode. */
@@ -2316,6 +2436,8 @@ const struct eth_dev_ops mlx5_dev_ops_isolate = {
 	.hairpin_queue_peer_bind = mlx5_hairpin_queue_peer_bind,
 	.hairpin_queue_peer_unbind = mlx5_hairpin_queue_peer_unbind,
 	.get_monitor_addr = mlx5_get_monitor_addr,
+	.count_aggr_ports = mlx5_count_aggr_ports,
+	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
 };
 
 /**
@@ -2354,14 +2476,16 @@ mlx5_port_args_check_handler(const char *key, const char *val, void *opaque)
 		return -rte_errno;
 	}
 	if (strcmp(MLX5_RXQ_CQE_COMP_EN, key) == 0) {
-		if (tmp > MLX5_CQE_RESP_FORMAT_L34H_STRIDX) {
+		if ((tmp & ~MLX5_RXQ_ENH_CQE_COMP_MASK) >
+		    MLX5_CQE_RESP_FORMAT_L34H_STRIDX) {
 			DRV_LOG(ERR, "invalid CQE compression "
 				     "format parameter");
 			rte_errno = EINVAL;
 			return -rte_errno;
 		}
 		config->cqe_comp = !!tmp;
-		config->cqe_comp_fmt = tmp;
+		config->cqe_comp_fmt = tmp & ~MLX5_RXQ_ENH_CQE_COMP_MASK;
+		config->enh_cqe_comp = !!(tmp & MLX5_RXQ_ENH_CQE_COMP_MASK);
 	} else if (strcmp(MLX5_RXQ_PKT_PAD_EN, key) == 0) {
 		config->hw_padding = !!tmp;
 	} else if (strcmp(MLX5_RX_MPRQ_EN, key) == 0) {
@@ -2533,7 +2657,13 @@ mlx5_port_args_config(struct mlx5_priv *priv, struct mlx5_kvargs_ctrl *mkvlist,
 			"L3/L4 Header CQE compression format isn't supported.");
 		config->cqe_comp = 0;
 	}
-	DRV_LOG(DEBUG, "Rx CQE compression is %ssupported.",
+	if (config->enh_cqe_comp && !hca_attr->enhanced_cqe_compression) {
+		DRV_LOG(WARNING,
+			"Enhanced CQE compression isn't supported.");
+		config->enh_cqe_comp = 0;
+	}
+	DRV_LOG(DEBUG, "%sRx CQE compression is %ssupported.",
+		config->enh_cqe_comp ? "Enhanced " : "",
 		config->cqe_comp ? "" : "not ");
 	if ((config->std_delay_drop || config->hp_delay_drop) &&
 	    !dev_cap->rq_delay_drop_en) {
@@ -2555,6 +2685,7 @@ mlx5_port_args_config(struct mlx5_priv *priv, struct mlx5_kvargs_ctrl *mkvlist,
 	DRV_LOG(DEBUG, "\"rxq_pkt_pad_en\" is %u.", config->hw_padding);
 	DRV_LOG(DEBUG, "\"rxq_cqe_comp_en\" is %u.", config->cqe_comp);
 	DRV_LOG(DEBUG, "\"cqe_comp_fmt\" is %u.", config->cqe_comp_fmt);
+	DRV_LOG(DEBUG, "\"enh_cqe_comp\" is %u.", config->enh_cqe_comp);
 	DRV_LOG(DEBUG, "\"rx_vec_en\" is %u.", config->rx_vec_en);
 	DRV_LOG(DEBUG, "Standard \"delay_drop\" is %u.",
 		config->std_delay_drop);
@@ -3096,11 +3227,11 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
-			       PCI_DEVICE_ID_MELLANOX_CONNECTX5BF)
+			       PCI_DEVICE_ID_MELLANOX_BLUEFIELD)
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
-			       PCI_DEVICE_ID_MELLANOX_CONNECTX5BFVF)
+			       PCI_DEVICE_ID_MELLANOX_BLUEFIELDVF)
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
@@ -3120,7 +3251,7 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
-				PCI_DEVICE_ID_MELLANOX_CONNECTX6DXBF)
+				PCI_DEVICE_ID_MELLANOX_BLUEFIELD2)
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
@@ -3132,7 +3263,7 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 	},
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
-				PCI_DEVICE_ID_MELLANOX_CONNECTX7BF)
+				PCI_DEVICE_ID_MELLANOX_BLUEFIELD3)
 	},
 	{
 		.vendor_id = 0

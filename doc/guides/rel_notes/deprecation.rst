@@ -14,9 +14,19 @@ Deprecation Notices
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
 
+* telemetry: The functions ``rte_tel_data_add_array_u64`` and ``rte_tel_data_add_dict_u64``,
+  used by telemetry callbacks for adding unsigned integer values to be returned to the user,
+  are renamed to ``rte_tel_data_add_array_uint`` and ``rte_tel_data_add_dict_uint`` respectively.
+  As such, the old function names are deprecated and will be removed in a future release.
+
 * eal: RTE_FUNC_PTR_OR_* macros have been marked deprecated and will be removed
   in the future. Applications can use ``devtools/cocci/func_or_ret.cocci``
   to update their code.
+
+* eal: The functions ``rte_thread_setname`` and ``rte_ctrl_thread_create``
+  are planned to be deprecated starting with the 23.07 release, subject to
+  the replacement API rte_thread_set_name and rte_thread_create_control being
+  marked as stable, and planned to be removed by the 23.11 release.
 
 * rte_atomicNN_xxx: These APIs do not take memory order parameter. This does
   not allow for writing optimized code for all the CPU architectures supported
@@ -58,16 +68,16 @@ Deprecation Notices
   should start with relevant protocol header structure from lib/net/.
   The individual protocol header fields and the protocol header struct
   may be kept together in a union as a first migration step.
+  In future (target is DPDK 23.11), the protocol header fields will be cleaned
+  and only protocol header struct will remain.
 
   These items are not compliant (not including struct from lib/net/):
 
   - ``rte_flow_item_ah``
-  - ``rte_flow_item_arp_eth_ipv4``
   - ``rte_flow_item_e_tag``
   - ``rte_flow_item_geneve``
   - ``rte_flow_item_geneve_opt``
   - ``rte_flow_item_gre``
-  - ``rte_flow_item_gtp``
   - ``rte_flow_item_icmp6``
   - ``rte_flow_item_icmp6_nd_na``
   - ``rte_flow_item_icmp6_nd_ns``
@@ -83,7 +93,6 @@ Deprecation Notices
   - ``rte_flow_item_pfcp``
   - ``rte_flow_item_pppoe``
   - ``rte_flow_item_pppoe_proto_id``
-  - ``rte_flow_item_vxlan_gpe``
 
 * ethdev: Queue specific stats fields will be removed from ``struct rte_eth_stats``.
   Mentioned fields are: ``q_ipackets``, ``q_opackets``, ``q_ibytes``, ``q_obytes``,
@@ -109,13 +118,48 @@ Deprecation Notices
   The legacy actions should be removed
   once ``MODIFY_FIELD`` alternative is implemented in drivers.
 
+* net/bnx2x: Starting from DPDK 23.07, the Marvell QLogic bnx2x driver will be removed.
+  This decision has been made to alleviate the burden of maintaining a discontinued product.
+
+* net/liquidio: Remove LiquidIO ethdev driver.
+  The LiquidIO product line has been substituted
+  with CN9K/CN10K OCTEON product line smart NICs located in ``drivers/net/octeon_ep/``.
+  DPDK 20.08 has categorized the LiquidIO driver as UNMAINTAINED
+  because of the absence of updates in the driver.
+  Due to the above reasons, the driver will be unavailable from DPDK 23.07.
+
 * cryptodev: The function ``rte_cryptodev_cb_fn`` will be updated
   to have another parameter ``qp_id`` to return the queue pair ID
   which got error interrupt to the application,
   so that application can reset that particular queue pair.
+
+* cryptodev: The arrays of algorithm strings ``rte_crypto_cipher_algorithm_strings``,
+  ``rte_crypto_auth_algorithm_strings``, ``rte_crypto_aead_algorithm_strings`` and
+  ``rte_crypto_asym_xform_strings`` are deprecated and will be removed in DPDK 23.11.
+  Application can use the new APIs ``rte_cryptodev_get_cipher_algo_string``,
+  ``rte_cryptodev_get_auth_algo_string``, ``rte_cryptodev_get_aead_algo_string`` and
+  ``rte_cryptodev_asym_get_xform_string`` respectively.
 
 * flow_classify: The flow_classify library and example have no maintainer.
   The library is experimental and, as such, it could be removed from DPDK.
   Its removal has been postponed to let potential users report interest
   in maintaining it.
   In the absence of such interest, this library will be removed in DPDK 23.11.
+
+* pipeline: The pipeline library legacy API (functions rte_pipeline_*)
+  will be deprecated in DPDK 23.07 release and removed in DPDK 23.11 release.
+  The new pipeline library API (functions rte_swx_pipeline_*)
+  will gradually transition from experimental to stable status
+  starting with DPDK 23.07 release.
+
+* table: The table library legacy API (functions rte_table_*)
+  will be deprecated in DPDK 23.07 release and removed in DPDK 23.11 release.
+  The new table library API (functions rte_swx_table_*)
+  will gradually transition from experimental to stable status
+  starting with DPDK 23.07 release.
+
+* port: The port library legacy API (functions rte_port_*)
+  will be deprecated in DPDK 23.07 release and removed in DPDK 23.11 release.
+  The new port library API (functions rte_swx_port_*)
+  will gradually transition from experimental to stable status
+  starting with DPDK 23.07 release.

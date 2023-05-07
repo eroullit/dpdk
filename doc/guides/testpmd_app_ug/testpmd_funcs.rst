@@ -591,6 +591,13 @@ Dumps the user device list::
 
    testpmd> dump_devargs
 
+dump lcores
+~~~~~~~~~~~
+
+Dumps the logical cores list::
+
+   testpmd> dump_lcores
+
 dump log types
 ~~~~~~~~~~~~~~
 
@@ -1605,6 +1612,20 @@ Enable or disable a per queue Tx offloading only on a specific Tx queue::
 
 This command should be run when the port is stopped, or else it will fail.
 
+config per queue Tx affinity mapping
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Map a Tx queue with an aggregated port of the DPDK port (specified with port_id)::
+
+   testpmd> port (port_id) txq (queue_id) affinity (value)
+
+* ``affinity``: the number of the aggregated port.
+                When multiple ports are aggregated into a single one,
+                it allows to choose which port to use for Tx via a queue.
+
+This command should be run when the port is stopped, otherwise it fails.
+
+
 Config VXLAN Encap outer layers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2027,7 +2048,7 @@ port config - speed
 
 Set the speed and duplex mode for all ports or a specific port::
 
-   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|200000|auto) \
+   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|200000|400000|auto) \
             duplex (half|full|auto)
 
 port config - queues/descriptors
@@ -2843,6 +2864,35 @@ where:
 * ``red`` enable 1, disable 0 marking IP ecn for yellow marked packets with ecn of 2'b01  or 2'b10
   to ecn of 2'b11 when IP is caring TCP or SCTP
 
+Congestion Management
+---------------------
+
+Get capabilities
+~~~~~~~~~~~~~~~~
+
+Retrieve congestion management capabilities supported by driver for given port.
+Below example command retrieves capabilities for port 0::
+
+   testpmd> show port cman capa 0
+
+Get configuration
+~~~~~~~~~~~~~~~~~
+
+Retrieve congestion management configuration for given port.
+Below example command retrieves configuration for port 0::
+
+   testpmd> show port cman config 0
+
+Set configuration
+~~~~~~~~~~~~~~~~~
+
+Configures congestion management settings on given queue
+or mempool associated with queue.
+Below example command configures RED as congestion management algorithm
+for port 0 and queue 0::
+
+   testpmd> set port cman config 0 0 obj queue mode red 10 100 1
+
 Filter Functions
 ----------------
 
@@ -3047,7 +3097,9 @@ for asynchronous flow creation/destruction operations. It is bound to
        [queues_number {number}] [queues_size {size}]
        [counters_number {number}]
        [aging_counters_number {number}]
-       [meters_number {number}] [flags {number}]
+       [host_port {number}]
+       [meters_number {number}]
+       [flags {number}]
 
 If successful, it will show::
 
@@ -3146,7 +3198,8 @@ It is bound to ``rte_flow_template_table_create()``::
 
    flow template_table {port_id} create
        [table_id {id}] [group {group_id}]
-       [priority {level}] [ingress] [egress] [transfer]
+       [priority {level}] [ingress] [egress]
+       [transfer [vport_orig] [wire_orig]]
        rules_number {number}
        pattern_template {pattern_template_id}
        actions_template {actions_template_id}
@@ -3622,6 +3675,16 @@ This section lists supported pattern items and their attributes, if any.
   - ``type {unsigned}``: ICMPv6 type.
   - ``code {unsigned}``: ICMPv6 code.
 
+- ``icmp6_echo_request``: match ICMPv6 echo request.
+
+  - ``ident {unsigned}``: ICMPv6 echo request identifier.
+  - ``seq {unsigned}``: ICMPv6 echo request sequence number.
+
+- ``icmp6_echo_reply``: match ICMPv6 echo reply.
+
+  - ``ident {unsigned}``: ICMPv6 echo reply identifier.
+  - ``seq {unsigned}``: ICMPv6 echo reply sequence number.
+
 - ``icmp6_nd_ns``: match ICMPv6 neighbor discovery solicitation.
 
   - ``target_addr {ipv6 address}``: target address.
@@ -3711,6 +3774,10 @@ This section lists supported pattern items and their attributes, if any.
 - ``meter``: match meter color.
 
   - ``color {value}``: meter color value (green/yellow/red).
+
+- ``aggr_affinity``: match aggregated port.
+
+  - ``affinity {value}``: aggregated port (starts from 1).
 
 - ``send_to_kernel``: send packets to kernel.
 

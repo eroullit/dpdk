@@ -1385,8 +1385,10 @@ malloc_heap_destroy(struct malloc_heap *heap)
 	if (heap->total_size != 0)
 		RTE_LOG(ERR, EAL, "Total size not zero, heap is likely corrupt\n");
 
-	/* after this, the lock will be dropped */
-	memset(heap, 0, sizeof(*heap));
+	/* Reset all of the heap but the (hold) lock so caller can release it. */
+	RTE_BUILD_BUG_ON(offsetof(struct malloc_heap, lock) != 0);
+	memset(RTE_PTR_ADD(heap, sizeof(heap->lock)), 0,
+		sizeof(*heap) - sizeof(heap->lock));
 
 	return 0;
 }
@@ -1419,18 +1421,20 @@ rte_eal_malloc_heap_init(void)
 		}
 	}
 
-
 	if (register_mp_requests()) {
 		RTE_LOG(ERR, EAL, "Couldn't register malloc multiprocess actions\n");
-		rte_mcfg_mem_read_unlock();
 		return -1;
 	}
 
-	/* unlock mem hotplug here. it's safe for primary as no requests can
+	return 0;
+}
+
+int rte_eal_malloc_heap_populate(void)
+{
+	/* mem hotplug is unlocked here. it's safe for primary as no requests can
 	 * even come before primary itself is fully initialized, and secondaries
 	 * do not need to initialize the heap.
 	 */
-	rte_mcfg_mem_read_unlock();
 
 	/* secondary process does not need to initialize anything */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)

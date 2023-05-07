@@ -47,6 +47,7 @@ libraries = [
         'power',
         'rawdev',
         'regexdev',
+        'mldev',
         'dmadev',
         'rib',
         'reorder',
@@ -93,7 +94,7 @@ dpdk_libs_deprecated += [
 disabled_libs = []
 opt_disabled_libs = run_command(list_dir_globs, get_option('disable_libs'),
         check: true).stdout().split()
-if dpdk_conf.get('RTE_IOVA_AS_PA') == 0
+if dpdk_conf.get('RTE_IOVA_IN_MBUF') == 0
     opt_disabled_libs += ['kni']
 endif
 foreach l:opt_disabled_libs
@@ -120,6 +121,7 @@ foreach l:libraries
     reason = '<unknown reason>' # set if build == false to explain why
     name = l
     use_function_versioning = false
+    annotate_locks = true
     sources = []
     headers = []
     indirect_headers = [] # public headers not directly included by apps
@@ -202,6 +204,10 @@ foreach l:libraries
         cflags += '-DRTE_USE_FUNCTION_VERSIONING'
     endif
     cflags += '-DRTE_LOG_DEFAULT_LOGTYPE=lib.' + l
+    if annotate_locks and cc.get_id() == 'clang' and cc.version().version_compare('>=3.5.0')
+        cflags += '-DRTE_ANNOTATE_LOCKS'
+        cflags += '-Wthread-safety'
+    endif
 
     # first build static lib
     static_lib = static_library(libname,

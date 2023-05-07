@@ -25,15 +25,73 @@
 #define RTE_MBUF_DMA_ADDR_DEFAULT(mb) \
 	((uint64_t)((mb)->buf_iova + RTE_PKTMBUF_HEADROOM))
 
+/* Maximum number of supported VLANs in parsed form packet metadata. */
+#define NFP_META_MAX_VLANS       2
+/* Maximum number of NFP packet metadata fields. */
+#define NFP_META_MAX_FIELDS      8
+
+/*
+ * struct nfp_net_meta_raw - Raw memory representation of packet metadata
+ *
+ * Describe the raw metadata format, useful when preparing metadata for a
+ * transmission mbuf.
+ *
+ * @header: NFD3 or NFDk field type header (see format in nfp.rst)
+ * @data: Array of each fields data member
+ * @length: Keep track of number of valid fields in @header and data. Not part
+ *          of the raw metadata.
+ */
+struct nfp_net_meta_raw {
+	uint32_t header;
+	uint32_t data[NFP_META_MAX_FIELDS];
+	uint8_t length;
+};
+
+/*
+ * struct nfp_meta_parsed - Record metadata parsed from packet
+ *
+ * Parsed NFP packet metadata are recorded in this struct. The content is
+ * read-only after it have been recorded during parsing by nfp_net_parse_meta().
+ *
+ * @hash: RSS hash value
+ * @hash_type: RSS hash type
+ * @vlan_layer: The layers of VLAN info which are passed from nic.
+ *              Only this number of entries of the @vlan array are valid.
+ *
+ * @vlan: Holds information parses from NFP_NET_META_VLAN. The inner most vlan
+ *        starts at position 0 and only @vlan_layer entries contain valid
+ *        information.
+ *
+ *        Currently only 2 layers of vlan are supported,
+ *        vlan[0] - vlan strip info
+ *        vlan[1] - qinq strip info
+ *
+ * @vlan.offload:  Flag indicates whether VLAN is offloaded
+ * @vlan.tpid: Vlan TPID
+ * @vlan.tci: Vlan TCI including PCP + Priority + VID
+ */
+struct nfp_meta_parsed {
+	uint32_t hash;
+	uint8_t hash_type;
+	uint8_t vlan_layer;
+	struct {
+		uint8_t offload;
+		uint8_t tpid;
+		uint16_t tci;
+	} vlan[NFP_META_MAX_VLANS];
+};
+
 /*
  * The maximum number of descriptors is limited by design as
  * DPDK uses uint16_t variables for these values
  */
 #define NFP_NET_MAX_TX_DESC (32 * 1024)
 #define NFP_NET_MIN_TX_DESC 256
+#define NFP3800_NET_MIN_TX_DESC 512
 
 #define NFP_NET_MAX_RX_DESC (32 * 1024)
 #define NFP_NET_MIN_RX_DESC 256
+#define NFP3800_NET_MIN_RX_DESC 512
 
 /* Descriptor alignment */
 #define NFP_ALIGN_RING_DESC 128
@@ -50,18 +108,21 @@
 #define PCIE_DESC_TX_VLAN               (1 << 3)
 #define PCIE_DESC_TX_LSO                (1 << 2)
 #define PCIE_DESC_TX_ENCAP_NONE         (0)
-#define PCIE_DESC_TX_ENCAP_VXLAN        (1 << 1)
-#define PCIE_DESC_TX_ENCAP_GRE          (1 << 0)
+#define PCIE_DESC_TX_ENCAP              (1 << 1)
+#define PCIE_DESC_TX_O_IP4_CSUM         (1 << 0)
 
 #define NFDK_TX_MAX_DATA_PER_HEAD       0x00001000
 #define NFDK_DESC_TX_DMA_LEN_HEAD       0x0fff
 #define NFDK_DESC_TX_TYPE_HEAD          0xf000
 #define NFDK_DESC_TX_DMA_LEN            0x3fff
+#define NFD3_TX_DESC_PER_SIMPLE_PKT     1
 #define NFDK_TX_DESC_PER_SIMPLE_PKT     2
 #define NFDK_DESC_TX_TYPE_TSO           2
 #define NFDK_DESC_TX_TYPE_SIMPLE        8
 #define NFDK_DESC_TX_TYPE_GATHER        1
 #define NFDK_DESC_TX_EOP                BIT(14)
+#define NFDK_DESC_TX_CHAIN_META         BIT(3)
+#define NFDK_DESC_TX_ENCAP              BIT(2)
 #define NFDK_DESC_TX_L4_CSUM            BIT(1)
 #define NFDK_DESC_TX_L3_CSUM            BIT(0)
 
@@ -84,7 +145,7 @@ struct nfp_net_nfd3_tx_desc {
 			uint8_t dma_addr_hi; /* High bits of host buf address */
 			__le16 dma_len;     /* Length to DMA for this desc */
 			uint8_t offset_eop; /* Offset in buf where pkt starts +
-					     * highest bit is eop flag.
+					     * highest bit is eop flag, low 7bit is meta_len.
 					     */
 			__le32 dma_addr_lo; /* Low 32bit of host buf addr */
 
@@ -227,8 +288,8 @@ struct nfp_net_rx_desc {
 	union {
 		/* Freelist descriptor */
 		struct {
-			uint8_t dma_addr_hi;
-			__le16 spare;
+			__le16 dma_addr_hi;
+			uint8_t spare;
 			uint8_t dd;
 
 			__le32 dma_addr_lo;
@@ -347,12 +408,12 @@ nfp_net_nfd3_free_tx_desc(struct nfp_net_txq *txq)
 }
 
 /*
- * nfp_net_nfd3_txq_full - Check if the TX queue free descriptors
- * is below tx_free_threshold
+ * nfp_net_nfd3_txq_full() - Check if the TX queue free descriptors
+ * is below tx_free_threshold for firmware of nfd3
  *
  * @txq: TX queue to check
  *
- * This function uses the host copy* of read/write pointers
+ * This function uses the host copy* of read/write pointers.
  */
 static inline uint32_t
 nfp_net_nfd3_txq_full(struct nfp_net_txq *txq)
@@ -388,7 +449,7 @@ nfp_net_rx_cksum(struct nfp_net_rxq *rxq, struct nfp_net_rx_desc *rxd,
 		mb->ol_flags |= RTE_MBUF_F_RX_L4_CKSUM_BAD;
 }
 
-/* Set NFD3 TX descriptor for TSO */
+/* nfp_net_nfd3_tx_tso() - Set NFD3 TX descriptor for TSO */
 static inline void
 nfp_net_nfd3_tx_tso(struct nfp_net_txq *txq,
 		struct nfp_net_nfd3_tx_desc *txd,
@@ -408,6 +469,13 @@ nfp_net_nfd3_tx_tso(struct nfp_net_txq *txq,
 	txd->l3_offset = mb->l2_len;
 	txd->l4_offset = mb->l2_len + mb->l3_len;
 	txd->lso_hdrlen = mb->l2_len + mb->l3_len + mb->l4_len;
+
+	if (ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) {
+		txd->l3_offset += mb->outer_l2_len + mb->outer_l3_len;
+		txd->l4_offset += mb->outer_l2_len + mb->outer_l3_len;
+		txd->lso_hdrlen += mb->outer_l2_len + mb->outer_l3_len;
+	}
+
 	txd->mss = rte_cpu_to_le_16(mb->tso_segsz);
 	txd->flags = PCIE_DESC_TX_LSO;
 	return;
@@ -420,7 +488,7 @@ clean_txd:
 	txd->mss = 0;
 }
 
-/* Set TX CSUM offload flags in NFD3 TX descriptor */
+/* nfp_net_nfd3_tx_cksum() - Set TX CSUM offload flags in NFD3 TX descriptor */
 static inline void
 nfp_net_nfd3_tx_cksum(struct nfp_net_txq *txq, struct nfp_net_nfd3_tx_desc *txd,
 		 struct rte_mbuf *mb)
@@ -433,9 +501,16 @@ nfp_net_nfd3_tx_cksum(struct nfp_net_txq *txq, struct nfp_net_nfd3_tx_desc *txd,
 
 	ol_flags = mb->ol_flags;
 
+	/* Set TCP csum offload if TSO enabled. */
+	if (ol_flags & RTE_MBUF_F_TX_TCP_SEG)
+		txd->flags |= PCIE_DESC_TX_TCP_CSUM;
+
 	/* IPv6 does not need checksum */
 	if (ol_flags & RTE_MBUF_F_TX_IP_CKSUM)
 		txd->flags |= PCIE_DESC_TX_IP4_CSUM;
+
+	if (ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK)
+		txd->flags |= PCIE_DESC_TX_ENCAP;
 
 	switch (ol_flags & RTE_MBUF_F_TX_L4_MASK) {
 	case RTE_MBUF_F_TX_UDP_CKSUM:

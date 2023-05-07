@@ -46,6 +46,18 @@ static struct rte_cryptodev_capabilities qat_sym_crypto_caps_gen3[] = {
 		CAP_SET(block_size, 128),
 		CAP_RNG_ZERO(key_size), CAP_RNG(digest_size, 1, 64, 1),
 		CAP_RNG_ZERO(aad_size), CAP_RNG_ZERO(iv_size)),
+	QAT_SYM_PLAIN_AUTH_CAP(SHA3_224,
+		CAP_SET(block_size, 144),
+		CAP_RNG(digest_size, 28, 28, 0)),
+	QAT_SYM_PLAIN_AUTH_CAP(SHA3_256,
+		CAP_SET(block_size, 136),
+		CAP_RNG(digest_size, 32, 32, 0)),
+	QAT_SYM_PLAIN_AUTH_CAP(SHA3_384,
+		CAP_SET(block_size, 104),
+		CAP_RNG(digest_size, 48, 48, 0)),
+	QAT_SYM_PLAIN_AUTH_CAP(SHA3_512,
+		CAP_SET(block_size, 72),
+		CAP_RNG(digest_size, 64, 64, 0)),
 	QAT_SYM_AUTH_CAP(SHA1_HMAC,
 		CAP_SET(block_size, 64),
 		CAP_RNG(key_size, 1, 64, 1), CAP_RNG(digest_size, 1, 20, 1),
@@ -140,6 +152,9 @@ static struct rte_cryptodev_capabilities qat_sym_crypto_caps_gen3[] = {
 	QAT_SYM_CIPHER_CAP(SM4_CTR,
 		CAP_SET(block_size, 16),
 		CAP_RNG(key_size, 16, 16, 0), CAP_RNG(iv_size, 16, 16, 0)),
+	QAT_SYM_PLAIN_AUTH_CAP(SM3,
+		CAP_SET(block_size, 64),
+		CAP_RNG(digest_size, 32, 32, 0)),
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
@@ -725,8 +740,12 @@ RTE_INIT(qat_sym_crypto_gen3_init)
 
 RTE_INIT(qat_asym_crypto_gen3_init)
 {
-	qat_asym_gen_dev_ops[QAT_GEN3].cryptodev_ops = NULL;
-	qat_asym_gen_dev_ops[QAT_GEN3].get_capabilities = NULL;
-	qat_asym_gen_dev_ops[QAT_GEN3].get_feature_flags = NULL;
-	qat_asym_gen_dev_ops[QAT_GEN3].set_session = NULL;
+	qat_asym_gen_dev_ops[QAT_GEN3].cryptodev_ops =
+			&qat_asym_crypto_ops_gen1;
+	qat_asym_gen_dev_ops[QAT_GEN3].get_capabilities =
+			qat_asym_crypto_cap_get_gen1;
+	qat_asym_gen_dev_ops[QAT_GEN3].get_feature_flags =
+			qat_asym_crypto_feature_flags_get_gen1;
+	qat_asym_gen_dev_ops[QAT_GEN3].set_session =
+			qat_asym_crypto_set_session_gen1;
 }

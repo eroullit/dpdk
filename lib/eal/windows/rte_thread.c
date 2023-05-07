@@ -4,7 +4,9 @@
  */
 
 #include <errno.h>
+#include <wchar.h>
 
+#include <rte_eal.h>
 #include <rte_common.h>
 #include <rte_errno.h>
 #include <rte_thread.h>
@@ -17,6 +19,7 @@ struct eal_tls_key {
 
 struct thread_routine_ctx {
 	rte_thread_func thread_func;
+	bool thread_init_failed;
 	void *routine_args;
 };
 
@@ -165,8 +168,12 @@ static DWORD
 thread_func_wrapper(void *arg)
 {
 	struct thread_routine_ctx ctx = *(struct thread_routine_ctx *)arg;
+	const bool thread_exit = __atomic_load_n(&ctx.thread_init_failed, __ATOMIC_ACQUIRE);
 
 	free(arg);
+
+	if (thread_exit)
+		return 0;
 
 	return (DWORD)ctx.thread_func(ctx.routine_args);
 }
@@ -181,6 +188,7 @@ rte_thread_create(rte_thread_t *thread_id,
 	HANDLE thread_handle = NULL;
 	GROUP_AFFINITY thread_affinity;
 	struct thread_routine_ctx *ctx;
+	bool thread_exit = false;
 
 	ctx = calloc(1, sizeof(*ctx));
 	if (ctx == NULL) {
@@ -190,6 +198,7 @@ rte_thread_create(rte_thread_t *thread_id,
 	}
 	ctx->routine_args = args;
 	ctx->thread_func = thread_func;
+	ctx->thread_init_failed = false;
 
 	thread_handle = CreateThread(NULL, 0, thread_func_wrapper, ctx,
 		CREATE_SUSPENDED, &tid);
@@ -207,22 +216,28 @@ rte_thread_create(rte_thread_t *thread_id,
 							);
 			if (ret != 0) {
 				RTE_LOG(DEBUG, EAL, "Unable to convert cpuset to thread affinity\n");
-				goto cleanup;
+				thread_exit = true;
+				goto resume_thread;
 			}
 
 			if (!SetThreadGroupAffinity(thread_handle,
 						    &thread_affinity, NULL)) {
 				ret = thread_log_last_error("SetThreadGroupAffinity()");
-				goto cleanup;
+				thread_exit = true;
+				goto resume_thread;
 			}
 		}
 		ret = rte_thread_set_priority(*thread_id,
 				thread_attr->priority);
 		if (ret != 0) {
 			RTE_LOG(DEBUG, EAL, "Unable to set thread priority\n");
-			goto cleanup;
+			thread_exit = true;
+			goto resume_thread;
 		}
 	}
+
+resume_thread:
+	__atomic_store_n(&ctx->thread_init_failed, thread_exit, __ATOMIC_RELEASE);
 
 	if (ResumeThread(thread_handle) == (DWORD)-1) {
 		ret = thread_log_last_error("ResumeThread()");
@@ -303,6 +318,47 @@ rte_thread_self(void)
 	thread_id.opaque_id = GetCurrentThreadId();
 
 	return thread_id;
+}
+
+void
+rte_thread_set_name(rte_thread_t thread_id, const char *thread_name)
+{
+	int ret = 0;
+	wchar_t wname[RTE_MAX_THREAD_NAME_LEN];
+	mbstate_t state = {0};
+	size_t rv;
+	HANDLE thread_handle;
+
+	thread_handle = OpenThread(THREAD_ALL_ACCESS, FALSE,
+		thread_id.opaque_id);
+	if (thread_handle == NULL) {
+		ret = thread_log_last_error("OpenThread()");
+		goto cleanup;
+	}
+
+	memset(wname, 0, sizeof(wname));
+	rv = mbsrtowcs(wname, &thread_name, RTE_DIM(wname) - 1, &state);
+	if (rv == (size_t)-1) {
+		ret = EILSEQ;
+		goto cleanup;
+	}
+
+#ifndef RTE_TOOLCHAIN_GCC
+	if (FAILED(SetThreadDescription(thread_handle, wname))) {
+		ret = EINVAL;
+		goto cleanup;
+	}
+#else
+	ret = ENOTSUP;
+	goto cleanup;
+#endif
+
+cleanup:
+	if (thread_handle != NULL)
+		CloseHandle(thread_handle);
+
+	if (ret != 0)
+		RTE_LOG(DEBUG, EAL, "Failed to set thread name\n");
 }
 
 int

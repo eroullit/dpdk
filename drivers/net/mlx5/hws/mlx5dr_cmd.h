@@ -11,6 +11,8 @@ struct mlx5dr_cmd_ft_create_attr {
 	bool rtc_valid;
 };
 
+#define ACCESS_KEY_LEN	32
+
 struct mlx5dr_cmd_ft_modify_attr {
 	uint8_t type;
 	uint32_t rtc_id_0;
@@ -21,8 +23,8 @@ struct mlx5dr_cmd_ft_modify_attr {
 };
 
 struct mlx5dr_cmd_fg_attr {
-	uint32_t	table_id;
-	uint32_t	table_type;
+	uint32_t table_id;
+	uint32_t table_type;
 };
 
 struct mlx5dr_cmd_forward_tbl {
@@ -38,12 +40,24 @@ struct mlx5dr_cmd_rtc_create_attr {
 	uint32_t ste_base;
 	uint32_t ste_offset;
 	uint32_t miss_ft_id;
+	bool fw_gen_wqe;
 	uint8_t update_index_mode;
+	uint8_t access_index_mode;
+	uint8_t num_hash_definer;
 	uint8_t log_depth;
 	uint8_t log_size;
 	uint8_t table_type;
-	uint8_t definer_id;
-	bool is_jumbo;
+	uint8_t match_definer_0;
+	uint8_t match_definer_1;
+	bool is_frst_jumbo;
+	bool is_scnd_range;
+};
+
+struct mlx5dr_cmd_alias_obj_create_attr {
+	uint32_t obj_id;
+	uint16_t vhca_id;
+	uint16_t obj_type;
+	uint8_t access_key[ACCESS_KEY_LEN];
 };
 
 struct mlx5dr_cmd_stc_create_attr {
@@ -124,6 +138,12 @@ struct mlx5dr_cmd_sq_create_attr {
 	uint32_t ts_format;
 };
 
+struct mlx5dr_cmd_allow_other_vhca_access_attr {
+	uint16_t obj_type;
+	uint32_t obj_id;
+	uint8_t access_key[ACCESS_KEY_LEN];
+};
+
 struct mlx5dr_cmd_query_ft_caps {
 	uint8_t max_level;
 	uint8_t reparse;
@@ -134,6 +154,14 @@ struct mlx5dr_cmd_query_vport_caps {
 	uint16_t esw_owner_vhca_id;
 	uint32_t metadata_c;
 	uint32_t metadata_c_mask;
+};
+
+struct mlx5dr_cmd_generate_wqe_attr {
+	uint8_t *wqe_ctrl;
+	uint8_t *gta_ctrl;
+	uint8_t *gta_data_0;
+	uint8_t *gta_data_1;
+	uint32_t pdn;
 };
 
 struct mlx5dr_cmd_query_caps {
@@ -153,7 +181,14 @@ struct mlx5dr_cmd_query_caps {
 	uint8_t format_select_gtpu_dw_1;
 	uint8_t format_select_gtpu_dw_2;
 	uint8_t format_select_gtpu_ext_dw_0;
+	uint32_t linear_match_definer;
+	uint8_t access_index_mode;
 	bool full_dw_jumbo_support;
+	bool rtc_hash_split_table;
+	bool rtc_linear_lookup_table;
+	uint32_t supp_type_gen_wqe;
+	uint8_t rtc_max_hash_def_gen_wqe;
+	uint16_t supp_ste_format_gen_wqe;
 	struct mlx5dr_cmd_query_ft_caps nic_ft;
 	struct mlx5dr_cmd_query_ft_caps fdb_ft;
 	bool eswitch_manager;
@@ -163,7 +198,11 @@ struct mlx5dr_cmd_query_caps {
 	uint8_t sq_ts_format;
 	uint64_t definer_format_sup;
 	uint32_t trivial_match_definer;
+	uint32_t vhca_id;
+	bool cross_vhca_resources;
+	uint32_t shared_vhca_id;
 	char fw_ver[64];
+	bool ipsec_offload;
 };
 
 int mlx5dr_cmd_destroy_obj(struct mlx5dr_devx_obj *devx_obj);
@@ -188,6 +227,11 @@ int
 mlx5dr_cmd_stc_modify(struct mlx5dr_devx_obj *devx_obj,
 		      struct mlx5dr_cmd_stc_modify_attr *stc_attr);
 
+int
+mlx5dr_cmd_generate_wqe(struct ibv_context *ctx,
+			struct mlx5dr_cmd_generate_wqe_attr *attr,
+			struct mlx5_cqe64 *ret_cqe);
+
 struct mlx5dr_devx_obj *
 mlx5dr_cmd_ste_create(struct ibv_context *ctx,
 		      struct mlx5dr_cmd_ste_create_attr *ste_attr);
@@ -210,6 +254,10 @@ mlx5dr_cmd_header_modify_pattern_create(struct ibv_context *ctx,
 					uint32_t pattern_length,
 					uint8_t *actions);
 
+struct mlx5dr_devx_obj *
+mlx5dr_cmd_alias_obj_create(struct ibv_context *ctx,
+			    struct mlx5dr_cmd_alias_obj_create_attr *alias_attr);
+
 int mlx5dr_cmd_sq_modify_rdy(struct mlx5dr_devx_obj *devx_obj);
 
 int mlx5dr_cmd_query_ib_port(struct ibv_context *ctx,
@@ -229,4 +277,7 @@ void mlx5dr_cmd_set_attr_connect_miss_tbl(struct mlx5dr_context *ctx,
 					  uint32_t fw_ft_type,
 					  enum mlx5dr_table_type type,
 					  struct mlx5dr_cmd_ft_modify_attr *ft_attr);
+
+int mlx5dr_cmd_allow_other_vhca_access(struct ibv_context *ctx,
+				       struct mlx5dr_cmd_allow_other_vhca_access_attr *attr);
 #endif /* MLX5DR_CMD_H_ */

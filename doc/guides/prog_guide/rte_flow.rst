@@ -840,9 +840,7 @@ instead of using the ``type`` field.
 If the ``type`` and ``has_vlan`` fields are not specified, then both tagged
 and untagged packets will match the pattern.
 
-- ``dst``: destination MAC.
-- ``src``: source MAC.
-- ``type``: EtherType or TPID.
+- ``hdr``:  header definition (``rte_ether.h``).
 - ``has_vlan``: packet header contains at least one VLAN.
 - Default ``mask`` matches destination and source addresses only.
 
@@ -861,8 +859,7 @@ instead of using the ``inner_type field``.
 If the ``inner_type`` and ``has_more_vlan`` fields are not specified,
 then any tagged packets will match the pattern.
 
-- ``tci``: tag control information.
-- ``inner_type``: inner EtherType or TPID.
+- ``hdr``:  header definition (``rte_ether.h``).
 - ``has_more_vlan``: packet header contains at least one more VLAN, after this VLAN.
 - Default ``mask`` matches the VID part of TCI only (lower 12 bits).
 
@@ -938,10 +935,7 @@ Item: ``VXLAN``
 
 Matches a VXLAN header (RFC 7348).
 
-- ``flags``: normally 0x08 (I flag).
-- ``rsvd0``: reserved, normally 0x000000.
-- ``vni``: VXLAN network identifier.
-- ``rsvd1``: reserved, normally 0x00.
+- ``hdr``:  header definition (``rte_vxlan.h``).
 - Default ``mask`` matches VNI only.
 
 Item: ``E_TAG``
@@ -1074,12 +1068,7 @@ Note: GTP, GTPC and GTPU use the same structure. GTPC and GTPU item
 are defined for a user-friendly API when creating GTP-C and GTP-U
 flow rules.
 
-- ``v_pt_rsv_flags``: version (3b), protocol type (1b), reserved (1b),
-  extension header flag (1b), sequence number flag (1b), N-PDU number
-  flag (1b).
-- ``msg_type``: message type.
-- ``msg_len``: message length.
-- ``teid``: tunnel endpoint identifier.
+- ``hdr``:  header definition (``rte_gtp.h``).
 - Default ``mask`` matches teid only.
 
 Item: ``ESP``
@@ -1107,11 +1096,7 @@ Item: ``VXLAN-GPE``
 
 Matches a VXLAN-GPE header (draft-ietf-nvo3-vxlan-gpe-05).
 
-- ``flags``: normally 0x0C (I and P flags).
-- ``rsvd0``: reserved, normally 0x0000.
-- ``protocol``: protocol type.
-- ``vni``: VXLAN network identifier.
-- ``rsvd1``: reserved, normally 0x00.
+- ``hdr``:  header definition (``rte_vxlan.h``).
 - Default ``mask`` matches VNI only.
 
 Item: ``ARP_ETH_IPV4``
@@ -1119,15 +1104,7 @@ Item: ``ARP_ETH_IPV4``
 
 Matches an ARP header for Ethernet/IPv4.
 
-- ``hdr``: hardware type, normally 1.
-- ``pro``: protocol type, normally 0x0800.
-- ``hln``: hardware address length, normally 6.
-- ``pln``: protocol address length, normally 4.
-- ``op``: opcode (1 for request, 2 for reply).
-- ``sha``: sender hardware address.
-- ``spa``: sender IPv4 address.
-- ``tha``: target hardware address.
-- ``tpa``: target IPv4 address.
+- ``hdr``:  header definition (``rte_arp.h``).
 - Default ``mask`` matches SHA, SPA, THA and TPA.
 
 Item: ``IPV6_EXT``
@@ -1155,6 +1132,15 @@ Normally preceded by any of:
 - `Item: IPV6`_
 - `Item: IPV6_EXT`_
 
+Item: ``IPV6_ROUTING_EXT``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches IPv6 routing extension header.
+
+- ``next_hdr``: Next layer header type.
+- ``type``: IPv6 routing extension header type.
+- ``segments_left``: How many IPv6 destination addresses carries on.
+
 Item: ``ICMP6``
 ^^^^^^^^^^^^^^^
 
@@ -1164,6 +1150,20 @@ Matches any ICMPv6 header.
 - ``code``: ICMPv6 code.
 - ``checksum``: ICMPv6 checksum.
 - Default ``mask`` matches ``type`` and ``code``.
+
+Item: ``ICMP6_ECHO_REQUEST``
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches an ICMPv6 echo request.
+
+- ``hdr``: ICMP6 echo header definition (``rte_icmp.h``).
+
+Item: ``ICMP6_ECHO_REPLY``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches an ICMPv6 echo reply.
+
+- ``hdr``: ICMP6 echo header definition (``rte_icmp.h``).
 
 Item: ``ICMP6_ND_NS``
 ^^^^^^^^^^^^^^^^^^^^^
@@ -1249,8 +1249,7 @@ Item: ``GTP_PSC``
 
 Matches a GTP PDU extension header with type 0x85.
 
-- ``pdu_type``: PDU type.
-- ``qfi``: QoS flow identifier.
+- ``hdr``:  header definition (``rte_gtp.h``).
 - Default ``mask`` matches QFI only.
 
 Item: ``PPPOES``, ``PPPOED``
@@ -1487,6 +1486,14 @@ This item is meant to use the same structure as `Item: PORT_REPRESENTOR`_.
 
 See also `Action: REPRESENTED_PORT`_.
 
+Item: ``AGGR_AFFINITY``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Matches on the aggregated port of the received packet.
+In case of multiple aggregated ports, the affinity numbering starts from 1.
+
+- ``affinity``: Aggregated affinity.
+
 Item: ``FLEX``
 ^^^^^^^^^^^^^^
 
@@ -1513,22 +1520,15 @@ rte_flow_flex_item_create() routine.
   value and mask.
 
 Item: ``L2TPV2``
-^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^
 
 Matches a L2TPv2 header.
 
-- ``flags_version``: flags(12b), version(4b).
-- ``length``: total length of the message.
-- ``tunnel_id``: identifier for the control connection.
-- ``session_id``: identifier for a session within a tunnel.
-- ``ns``: sequence number for this date or control message.
-- ``nr``: sequence number expected in the next control message to be received.
-- ``offset_size``: offset of payload data.
-- ``offset_padding``: offset padding, variable length.
+- ``hdr``:  header definition (``rte_l2tpv2.h``).
 - Default ``mask`` matches flags_version only.
 
 Item: ``PPP``
-^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^
 
 Matches a PPP header.
 
@@ -1543,6 +1543,13 @@ Item: ``METER_COLOR``
 Matches Color Marker set by a Meter.
 
 - ``color``: Metering color marker.
+
+Item: ``QUOTA``
+^^^^^^^^^^^^^^^
+
+Matches flow quota state set by quota action.
+
+- ``state``: Flow quota state
 
 Actions
 ~~~~~~~
@@ -1839,6 +1846,28 @@ Drop packets.
    +===============+
    | no properties |
    +---------------+
+
+
+Action: ``SKIP_CMAN``
+^^^^^^^^^^^^^^^^^^^^^
+
+Skip congestion management on received packets.
+
+- Using ``rte_eth_cman_config_set()``,
+  an application can configure ethdev Rx queue's congestion mechanism.
+  Once applied, packets congestion configuration is bypassed
+  on that particular ethdev Rx queue for all packets directed to that queue.
+
+.. _table_rte_flow_action_skip_cman:
+
+.. table:: SKIP_CMAN
+
+   +---------------+
+   | Field         |
+   +===============+
+   | no properties |
+   +---------------+
+
 
 Action: ``COUNT``
 ^^^^^^^^^^^^^^^^^
@@ -2905,6 +2934,9 @@ encapsulation level, from outermost to innermost (lower to higher values).
 For the tag array (in case of multiple tags are supported and present)
 ``level`` translates directly into the array index.
 
+``flex_handle`` is used to specify the flex item pointer which is being
+modified. ``flex_handle`` and ``level`` are mutually exclusive.
+
 ``offset`` specifies the number of bits to skip from a field's start.
 That allows performing a partial copy of the needed part or to divide a big
 packet field into multiple smaller fields. Alternatively, ``offset`` allows
@@ -2952,23 +2984,27 @@ value as sequence of bytes {xxx, xxx, 0x85, xxx, xxx, xxx}.
 
 .. table:: destination/source field definition
 
-   +---------------+----------------------------------------------------------+
-   | Field         | Value                                                    |
-   +===============+==========================================================+
-   | ``field``     | ID: packet field, mark, meta, tag, immediate, pointer    |
-   +---------------+----------------------------------------------------------+
-   | ``level``     | encapsulation level of a packet field or tag array index |
-   +---------------+----------------------------------------------------------+
-   | ``offset``    | number of bits to skip at the beginning                  |
-   +---------------+----------------------------------------------------------+
-   | ``value``     | immediate value buffer (source field only, not           |
-   |               | applicable to destination) for RTE_FLOW_FIELD_VALUE      |
-   |               | field type                                               |
-   +---------------+----------------------------------------------------------+
-   | ``pvalue``    | pointer to immediate value data (source field only, not  |
-   |               | applicable to destination) for RTE_FLOW_FIELD_POINTER    |
-   |               | field type                                               |
-   +---------------+----------------------------------------------------------+
+   +-----------------+----------------------------------------------------------+
+   | Field           | Value                                                    |
+   +=================+==========================================================+
+   | ``field``       | ID: packet field, mark, meta, tag, immediate, pointer    |
+   +-----------------+----------------------------------------------------------+
+   | ``level``       | encapsulation level of a packet field or tag array index |
+   +-----------------+----------------------------------------------------------+
+   | ``flex_handle`` | flex item handle of a packet field                       |
+   +-----------------+----------------------------------------------------------+
+   | ``offset``      | number of bits to skip at the beginning                  |
+   +-----------------+----------------------------------------------------------+
+   | ``value``       | immediate value buffer (source field only, not           |
+   |                 | applicable to destination) for RTE_FLOW_FIELD_VALUE      |
+   |                 | field type                                               |
+   |                 | This field is only 16 bytes, maybe not big enough for    |
+   |                 | all NICs' flex item                                      |
+   +-----------------+----------------------------------------------------------+
+   | ``pvalue``      | pointer to immediate value data (source field only, not  |
+   |                 | applicable to destination) for RTE_FLOW_FIELD_POINTER    |
+   |                 | field type                                               |
+   +-----------------+----------------------------------------------------------+
 
 Action: ``CONNTRACK``
 ^^^^^^^^^^^^^^^^^^^^^
@@ -3226,6 +3262,43 @@ and rte_mtr_policy_get() API respectively.
    +------------------+----------------------+
    | ``policy``       | Meter policy object  |
    +------------------+----------------------+
+
+Action: ``QUOTA``
+^^^^^^^^^^^^^^^^^
+
+Update ``quota`` value and set packet quota state.
+
+If the ``quota`` value after update is non-negative,
+the packet quota state is set to ``RTE_FLOW_QUOTA_STATE_PASS``.
+Otherwise, the packet quota state is set to ``RTE_FLOW_QUOTA_STATE_BLOCK``.
+
+The ``quota`` value is reduced according to ``mode`` setting.
+
+.. _table_rte_flow_action_quota:
+
+.. table:: QUOTA
+
+   +------------------+------------------------+
+   | Field            | Value                  |
+   +==================+========================+
+   | ``mode``         | Quota operational mode |
+   +------------------+------------------------+
+   | ``quota``        | Quota value            |
+   +------------------+------------------------+
+
+.. _rte_flow_quota_mode:
+
+.. table:: Quota update modes
+
+   +---------------------------------+-------------------------------------+
+   | Value                           | Description                         |
+   +=================================+=====================================+
+   | ``RTE_FLOW_QUOTA_MODE_PACKET``  | Count packets                       |
+   +---------------------------------+-------------------------------------+
+   | ``RTE_FLOW_QUOTA_MODE_L2``      | Count packet bytes starting from L2 |
+   +------------------+----------------------------------------------------+
+   | ``RTE_FLOW_QUOTA_MODE_L3``      | Count packet bytes starting from L3 |
+   +------------------+----------------------------------------------------+
 
 Negative types
 ~~~~~~~~~~~~~~
@@ -3605,6 +3678,23 @@ and pattern and actions templates are created.
                    &actions_templates, nb_actions_templ,
                    &error);
 
+Table Attribute: Specialize
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Application can help optimizing underlayer resources and insertion rate
+by specializing template table.
+Specialization is done by providing hints
+in the template table attribute ``specialize``.
+
+This attribute is not mandatory for driver to implement.
+If a hint is not supported, it will be silently ignored,
+and no special optimization is done.
+
+If a table is specialized, the application should make sure the rules
+comply with the table attribute.
+The application functionality must not rely on the hints,
+they are not replacing the matching criteria of flow rules.
+
 Asynchronous operations
 -----------------------
 
@@ -3665,6 +3755,27 @@ Enqueueing a flow rule creation operation is similar to simple creation.
                          uint8_t actions_template_index,
                          void *user_data,
                          struct rte_flow_error *error);
+
+A valid handle in case of success is returned. It must be destroyed later
+by calling ``rte_flow_async_destroy()`` even if the rule is rejected by HW.
+
+Enqueue creation by index operation
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Enqueueing a flow rule creation operation to insert a rule at a table index.
+
+.. code-block:: c
+
+   struct rte_flow *
+   rte_flow_async_create_by_index(uint16_t port_id,
+                                  uint32_t queue_id,
+                                  const struct rte_flow_op_attr *op_attr,
+                                  struct rte_flow_template_table *template_table,
+                                  uint32_t rule_index,
+                                  const struct rte_flow_action actions[],
+                                  uint8_t actions_template_index,
+                                  void *user_data,
+                                  struct rte_flow_error *error);
 
 A valid handle in case of success is returned. It must be destroyed later
 by calling ``rte_flow_async_destroy()`` even if the rule is rejected by HW.

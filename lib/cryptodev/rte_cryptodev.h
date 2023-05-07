@@ -406,6 +406,58 @@ int
 rte_cryptodev_asym_get_xform_enum(enum rte_crypto_asym_xform_type *xform_enum,
 		const char *xform_string);
 
+/**
+ * Provide the cipher algorithm string, given an algorithm enum.
+ *
+ * @param	algo_enum	cipher algorithm enum
+ *
+ * @return
+ * - Return NULL if enum is not valid
+ * - Return algo_string corresponding to enum
+ */
+__rte_experimental
+const char *
+rte_cryptodev_get_cipher_algo_string(enum rte_crypto_cipher_algorithm algo_enum);
+
+/**
+ * Provide the authentication algorithm string, given an algorithm enum.
+ *
+ * @param	algo_enum	auth algorithm enum
+ *
+ * @return
+ * - Return NULL if enum is not valid
+ * - Return algo_string corresponding to enum
+ */
+__rte_experimental
+const char *
+rte_cryptodev_get_auth_algo_string(enum rte_crypto_auth_algorithm algo_enum);
+
+/**
+ * Provide the AEAD algorithm string, given an algorithm enum.
+ *
+ * @param	algo_enum	AEAD algorithm enum
+ *
+ * @return
+ * - Return NULL if enum is not valid
+ * - Return algo_string corresponding to enum
+ */
+__rte_experimental
+const char *
+rte_cryptodev_get_aead_algo_string(enum rte_crypto_aead_algorithm algo_enum);
+
+/**
+ * Provide the Asymmetric xform string, given an xform enum.
+ *
+ * @param	xform_enum	xform type enum
+ *
+ * @return
+ * - Return NULL, if enum is not valid.
+ * - Return xform string, for valid enum.
+ */
+__rte_experimental
+const char *
+rte_cryptodev_asym_get_xform_string(enum rte_crypto_asym_xform_type xform_enum);
+
 
 /** Macro used at end of crypto PMD list */
 #define RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST() \
@@ -501,6 +553,7 @@ extern const char *
 rte_cryptodev_get_feature_name(uint64_t flag);
 
 /**  Crypto device information */
+/* Structure rte_cryptodev_info 8< */
 struct rte_cryptodev_info {
 	const char *driver_name;	/**< Driver name. */
 	uint8_t driver_id;		/**< Driver identifier */
@@ -529,6 +582,7 @@ struct rte_cryptodev_info {
 		 */
 	} sym;
 };
+/* >8 End of structure rte_cryptodev_info. */
 
 #define RTE_CRYPTODEV_DETACHED  (0)
 #define RTE_CRYPTODEV_ATTACHED  (1)
@@ -541,11 +595,13 @@ enum rte_cryptodev_event_type {
 };
 
 /** Crypto device queue pair configuration structure. */
+/* Structure rte_cryptodev_qp_conf 8<*/
 struct rte_cryptodev_qp_conf {
 	uint32_t nb_descriptors; /**< Number of descriptors per queue pair */
 	struct rte_mempool *mp_session;
 	/**< The mempool for creating session in sessionless mode */
 };
+/* >8 End of structure rte_cryptodev_qp_conf. */
 
 /**
  * Function type used for processing crypto ops when enqueue/dequeue burst is
@@ -674,6 +730,7 @@ extern int
 rte_cryptodev_socket_id(uint8_t dev_id);
 
 /** Crypto device configuration structure */
+/* Structure rte_cryptodev_config 8< */
 struct rte_cryptodev_config {
 	int socket_id;			/**< Socket to allocate resources on */
 	uint16_t nb_queue_pairs;
@@ -686,6 +743,7 @@ struct rte_cryptodev_config {
 	 *  - RTE_CRYTPODEV_FF_SECURITY
 	 */
 };
+/* >8 End of structure rte_cryptodev_config. */
 
 /**
  * Configure a device.
@@ -871,6 +929,25 @@ rte_cryptodev_callback_unregister(uint8_t dev_id,
 		enum rte_cryptodev_event_type event,
 		rte_cryptodev_cb_fn cb_fn, void *cb_arg);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Query a cryptodev queue pair if there are pending RTE_CRYPTODEV_EVENT_ERROR
+ * events.
+ *
+ * @param          dev_id	The device identifier.
+ * @param          qp_id	Queue pair index to be queried.
+ *
+ * @return
+ *   - 1 if requested queue has a pending event.
+ *   - 0 if no pending event is found.
+ *   - a negative value on failure
+ */
+__rte_experimental
+int
+rte_cryptodev_queue_pair_event_error_query(uint8_t dev_id, uint16_t qp_id);
+
 struct rte_cryptodev_callback;
 
 /** Structure to keep track of registered callbacks */
@@ -911,11 +988,14 @@ rte_cryptodev_get_sec_ctx(uint8_t dev_id);
  * @param nb_elts
  *   The number of elements in the mempool.
  * @param elt_size
- *   The size of the element. This value will be ignored if it is smaller than
- *   the minimum session header size required for the system. For the user who
- *   want to use the same mempool for sym session and session private data it
- *   can be the maximum value of all existing devices' private data and session
- *   header sizes.
+ *   The size of the element. This should be the size of the cryptodev PMD
+ *   session private data obtained through
+ *   rte_cryptodev_sym_get_private_session_size() function call.
+ *   For the user who wants to use the same mempool for heterogeneous PMDs
+ *   this value should be the maximum value of their private session sizes.
+ *   Please note the created mempool will have bigger elt size than this
+ *   value as necessary session header and the possible padding are filled
+ *   into each elt.
  * @param cache_size
  *   The number of per-lcore cache elements
  * @param priv_size
@@ -926,8 +1006,8 @@ rte_cryptodev_get_sec_ctx(uint8_t dev_id);
  *   constraint for the reserved zone.
  *
  * @return
- *  - On success return size of the session
- *  - On failure returns 0
+ *  - On success returns the created session mempool pointer
+ *  - On failure returns NULL
  */
 __rte_experimental
 struct rte_mempool *

@@ -24,12 +24,8 @@
 static void
 __hws_cnt_id_load(struct mlx5_hws_cnt_pool *cpool)
 {
-	uint32_t preload;
-	uint32_t q_num = cpool->cache->q_num;
 	uint32_t cnt_num = mlx5_hws_cnt_pool_get_size(cpool);
-	cnt_id_t cnt_id;
-	uint32_t qidx, iidx = 0;
-	struct rte_ring *qcache = NULL;
+	uint32_t iidx;
 
 	/*
 	 * Counter ID order is important for tracking the max number of in used
@@ -39,18 +35,9 @@ __hws_cnt_id_load(struct mlx5_hws_cnt_pool *cpool)
 	 * and then the global free list.
 	 * In the end, user fetch the counter from minimal to the maximum.
 	 */
-	preload = RTE_MIN(cpool->cache->preload_sz, cnt_num / q_num);
-	for (qidx = 0; qidx < q_num; qidx++) {
-		for (; iidx < preload * (qidx + 1); iidx++) {
-			cnt_id = mlx5_hws_cnt_id_gen(cpool, iidx);
-			qcache = cpool->cache->qcache[qidx];
-			if (qcache)
-				rte_ring_enqueue_elem(qcache, &cnt_id,
-						sizeof(cnt_id));
-		}
-	}
-	for (; iidx < cnt_num; iidx++) {
-		cnt_id = mlx5_hws_cnt_id_gen(cpool, iidx);
+	for (iidx = 0; iidx < cnt_num; iidx++) {
+		cnt_id_t cnt_id  = mlx5_hws_cnt_id_gen(cpool, iidx);
+
 		rte_ring_enqueue_elem(cpool->free_list, &cnt_id,
 				sizeof(cnt_id));
 	}
@@ -205,8 +192,8 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 			}
 			param->accumulator_hits = 0;
 		}
-		if (__atomic_add_fetch(&param->sec_since_last_hit, time_delta,
-				       __ATOMIC_RELAXED) <=
+		if (__atomic_fetch_add(&param->sec_since_last_hit, time_delta,
+				       __ATOMIC_RELAXED) + time_delta <=
 		   __atomic_load_n(&param->timeout, __ATOMIC_RELAXED))
 			continue;
 		/* Prepare the relevant ring for this AGE parameter */
@@ -334,7 +321,26 @@ mlx5_hws_cnt_svc(void *opaque)
 	return NULL;
 }
 
-struct mlx5_hws_cnt_pool *
+static void
+mlx5_hws_cnt_pool_deinit(struct mlx5_hws_cnt_pool * const cntp)
+{
+	uint32_t qidx = 0;
+	if (cntp == NULL)
+		return;
+	rte_ring_free(cntp->free_list);
+	rte_ring_free(cntp->wait_reset_list);
+	rte_ring_free(cntp->reuse_list);
+	if (cntp->cache) {
+		for (qidx = 0; qidx < cntp->cache->q_num; qidx++)
+			rte_ring_free(cntp->cache->qcache[qidx]);
+	}
+	mlx5_free(cntp->cache);
+	mlx5_free(cntp->raw_mng);
+	mlx5_free(cntp->pool);
+	mlx5_free(cntp);
+}
+
+static struct mlx5_hws_cnt_pool *
 mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 		       const struct mlx5_hws_cnt_pool_cfg *pcfg,
 		       const struct mlx5_hws_cache_param *ccfg)
@@ -352,6 +358,8 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 		return NULL;
 
 	cntp->cfg = *pcfg;
+	if (cntp->cfg.host_cpool)
+		return cntp;
 	cntp->cache = mlx5_malloc(MLX5_MEM_ANY | MLX5_MEM_ZERO,
 			sizeof(*cntp->cache) +
 			sizeof(((struct mlx5_hws_cnt_pool_caches *)0)->qcache[0])
@@ -387,8 +395,9 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 		goto error;
 	snprintf(mz_name, sizeof(mz_name), "%s_F_RING", pcfg->name);
 	cntp->free_list = rte_ring_create_elem(mz_name, sizeof(cnt_id_t),
-			(uint32_t)cnt_num, SOCKET_ID_ANY,
-			RING_F_SP_ENQ | RING_F_MC_HTS_DEQ | RING_F_EXACT_SZ);
+				(uint32_t)cnt_num, SOCKET_ID_ANY,
+				RING_F_MP_HTS_ENQ | RING_F_MC_HTS_DEQ |
+				RING_F_EXACT_SZ);
 	if (cntp->free_list == NULL) {
 		DRV_LOG(ERR, "failed to create free list ring");
 		goto error;
@@ -404,7 +413,7 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 	snprintf(mz_name, sizeof(mz_name), "%s_U_RING", pcfg->name);
 	cntp->reuse_list = rte_ring_create_elem(mz_name, sizeof(cnt_id_t),
 			(uint32_t)cnt_num, SOCKET_ID_ANY,
-			RING_F_SP_ENQ | RING_F_MC_HTS_DEQ | RING_F_EXACT_SZ);
+			RING_F_MP_HTS_ENQ | RING_F_MC_HTS_DEQ | RING_F_EXACT_SZ);
 	if (cntp->reuse_list == NULL) {
 		DRV_LOG(ERR, "failed to create reuse list ring");
 		goto error;
@@ -427,25 +436,6 @@ error:
 	return NULL;
 }
 
-void
-mlx5_hws_cnt_pool_deinit(struct mlx5_hws_cnt_pool * const cntp)
-{
-	uint32_t qidx = 0;
-	if (cntp == NULL)
-		return;
-	rte_ring_free(cntp->free_list);
-	rte_ring_free(cntp->wait_reset_list);
-	rte_ring_free(cntp->reuse_list);
-	if (cntp->cache) {
-		for (qidx = 0; qidx < cntp->cache->q_num; qidx++)
-			rte_ring_free(cntp->cache->qcache[qidx]);
-	}
-	mlx5_free(cntp->cache);
-	mlx5_free(cntp->raw_mng);
-	mlx5_free(cntp->pool);
-	mlx5_free(cntp);
-}
-
 int
 mlx5_hws_cnt_service_thread_create(struct mlx5_dev_ctx_shared *sh)
 {
@@ -465,7 +455,8 @@ mlx5_hws_cnt_service_thread_create(struct mlx5_dev_ctx_shared *sh)
 	}
 	snprintf(name, CNT_THREAD_NAME_MAX - 1, "%s/svc@%d",
 		 sh->ibdev_name, service_core);
-	rte_thread_setname(sh->cnt_svc->service_thread, name);
+	rte_thread_set_name((rte_thread_t){(uintptr_t)sh->cnt_svc->service_thread},
+		name);
 	CPU_SET(service_core, &cpuset);
 	pthread_setaffinity_np(sh->cnt_svc->service_thread, sizeof(cpuset),
 				&cpuset);
@@ -482,7 +473,7 @@ mlx5_hws_cnt_service_thread_destroy(struct mlx5_dev_ctx_shared *sh)
 	sh->cnt_svc->service_thread = 0;
 }
 
-int
+static int
 mlx5_hws_cnt_pool_dcs_alloc(struct mlx5_dev_ctx_shared *sh,
 			    struct mlx5_hws_cnt_pool *cpool)
 {
@@ -494,6 +485,7 @@ mlx5_hws_cnt_pool_dcs_alloc(struct mlx5_dev_ctx_shared *sh,
 	struct mlx5_devx_counter_attr attr = {0};
 	struct mlx5_devx_obj *dcs;
 
+	MLX5_ASSERT(cpool->cfg.host_cpool == NULL);
 	if (hca_attr->flow_counter_bulk_log_max_alloc == 0) {
 		DRV_LOG(ERR, "Fw doesn't support bulk log max alloc");
 		return -1;
@@ -549,7 +541,7 @@ error:
 	return -1;
 }
 
-void
+static void
 mlx5_hws_cnt_pool_dcs_free(struct mlx5_dev_ctx_shared *sh,
 			   struct mlx5_hws_cnt_pool *cpool)
 {
@@ -565,22 +557,39 @@ mlx5_hws_cnt_pool_dcs_free(struct mlx5_dev_ctx_shared *sh,
 	}
 }
 
-int
+static void
+mlx5_hws_cnt_pool_action_destroy(struct mlx5_hws_cnt_pool *cpool)
+{
+	uint32_t idx;
+
+	for (idx = 0; idx < cpool->dcs_mng.batch_total; idx++) {
+		struct mlx5_hws_cnt_dcs *dcs = &cpool->dcs_mng.dcs[idx];
+
+		if (dcs->dr_action != NULL) {
+			mlx5dr_action_destroy(dcs->dr_action);
+			dcs->dr_action = NULL;
+		}
+	}
+}
+
+static int
 mlx5_hws_cnt_pool_action_create(struct mlx5_priv *priv,
 		struct mlx5_hws_cnt_pool *cpool)
 {
+	struct mlx5_hws_cnt_pool *hpool = mlx5_hws_cnt_host_pool(cpool);
 	uint32_t idx;
 	int ret = 0;
-	struct mlx5_hws_cnt_dcs *dcs;
 	uint32_t flags;
 
 	flags = MLX5DR_ACTION_FLAG_HWS_RX | MLX5DR_ACTION_FLAG_HWS_TX;
 	if (priv->sh->config.dv_esw_en && priv->master)
 		flags |= MLX5DR_ACTION_FLAG_HWS_FDB;
-	for (idx = 0; idx < cpool->dcs_mng.batch_total; idx++) {
-		dcs = &cpool->dcs_mng.dcs[idx];
+	for (idx = 0; idx < hpool->dcs_mng.batch_total; idx++) {
+		struct mlx5_hws_cnt_dcs *hdcs = &hpool->dcs_mng.dcs[idx];
+		struct mlx5_hws_cnt_dcs *dcs = &cpool->dcs_mng.dcs[idx];
+
 		dcs->dr_action = mlx5dr_action_create_counter(priv->dr_ctx,
-					(struct mlx5dr_devx_obj *)dcs->obj,
+					(struct mlx5dr_devx_obj *)hdcs->obj,
 					flags);
 		if (dcs->dr_action == NULL) {
 			mlx5_hws_cnt_pool_action_destroy(cpool);
@@ -589,21 +598,6 @@ mlx5_hws_cnt_pool_action_create(struct mlx5_priv *priv,
 		}
 	}
 	return ret;
-}
-
-void
-mlx5_hws_cnt_pool_action_destroy(struct mlx5_hws_cnt_pool *cpool)
-{
-	uint32_t idx;
-	struct mlx5_hws_cnt_dcs *dcs;
-
-	for (idx = 0; idx < cpool->dcs_mng.batch_total; idx++) {
-		dcs = &cpool->dcs_mng.dcs[idx];
-		if (dcs->dr_action != NULL) {
-			mlx5dr_action_destroy(dcs->dr_action);
-			dcs->dr_action = NULL;
-		}
-	}
 }
 
 struct mlx5_hws_cnt_pool *
@@ -618,6 +612,29 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 	int ret = 0;
 	size_t sz;
 
+	mp_name = mlx5_malloc(MLX5_MEM_ZERO, RTE_MEMZONE_NAMESIZE, 0,
+			SOCKET_ID_ANY);
+	if (mp_name == NULL)
+		goto error;
+	snprintf(mp_name, RTE_MEMZONE_NAMESIZE, "MLX5_HWS_CNT_POOL_%u",
+			dev->data->port_id);
+	pcfg.name = mp_name;
+	pcfg.request_num = pattr->nb_counters;
+	pcfg.alloc_factor = HWS_CNT_ALLOC_FACTOR_DEFAULT;
+	if (pattr->flags & RTE_FLOW_PORT_FLAG_SHARE_INDIRECT) {
+		struct mlx5_priv *host_priv =
+				priv->shared_host->data->dev_private;
+		struct mlx5_hws_cnt_pool *chost = host_priv->hws_cpool;
+
+		pcfg.host_cpool = chost;
+		cpool = mlx5_hws_cnt_pool_init(priv->sh, &pcfg, &cparam);
+		if (cpool == NULL)
+			goto error;
+		ret = mlx5_hws_cnt_pool_action_create(priv, cpool);
+		if (ret != 0)
+			goto error;
+		return cpool;
+	}
 	/* init cnt service if not. */
 	if (priv->sh->cnt_svc == NULL) {
 		ret = mlx5_hws_cnt_svc_init(priv->sh);
@@ -629,15 +646,6 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 	cparam.q_num = nb_queue;
 	cparam.threshold = HWS_CNT_CACHE_THRESHOLD_DEFAULT;
 	cparam.size = HWS_CNT_CACHE_SZ_DEFAULT;
-	pcfg.alloc_factor = HWS_CNT_ALLOC_FACTOR_DEFAULT;
-	mp_name = mlx5_malloc(MLX5_MEM_ZERO, RTE_MEMZONE_NAMESIZE, 0,
-			SOCKET_ID_ANY);
-	if (mp_name == NULL)
-		goto error;
-	snprintf(mp_name, RTE_MEMZONE_NAMESIZE, "MLX5_HWS_CNT_POOL_%u",
-			dev->data->port_id);
-	pcfg.name = mp_name;
-	pcfg.request_num = pattr->nb_counters;
 	cpool = mlx5_hws_cnt_pool_init(priv->sh, &pcfg, &cparam);
 	if (cpool == NULL)
 		goto error;
@@ -672,11 +680,15 @@ mlx5_hws_cnt_pool_destroy(struct mlx5_dev_ctx_shared *sh,
 {
 	if (cpool == NULL)
 		return;
-	if (--sh->cnt_svc->refcnt == 0)
-		mlx5_hws_cnt_svc_deinit(sh);
+	if (cpool->cfg.host_cpool == NULL) {
+		if (--sh->cnt_svc->refcnt == 0)
+			mlx5_hws_cnt_svc_deinit(sh);
+	}
 	mlx5_hws_cnt_pool_action_destroy(cpool);
-	mlx5_hws_cnt_pool_dcs_free(sh, cpool);
-	mlx5_hws_cnt_raw_data_free(sh, cpool->raw_mng);
+	if (cpool->cfg.host_cpool == NULL) {
+		mlx5_hws_cnt_pool_dcs_free(sh, cpool);
+		mlx5_hws_cnt_raw_data_free(sh, cpool->raw_mng);
+	}
 	mlx5_free((void *)cpool->cfg.name);
 	mlx5_hws_cnt_pool_deinit(cpool);
 }
@@ -1189,6 +1201,12 @@ mlx5_hws_age_pool_init(struct rte_eth_dev *dev,
 
 	strict_queue = !!(attr->flags & RTE_FLOW_PORT_FLAG_STRICT_QUEUE);
 	MLX5_ASSERT(priv->hws_cpool);
+	if (attr->flags & RTE_FLOW_PORT_FLAG_SHARE_INDIRECT) {
+		DRV_LOG(ERR, "Aging sn not supported "
+			     "in cross vHCA sharing mode");
+		rte_errno = ENOTSUP;
+		return -ENOTSUP;
+	}
 	nb_alloc_cnts = mlx5_hws_cnt_pool_get_size(priv->hws_cpool);
 	if (strict_queue) {
 		rsize = mlx5_hws_aged_out_q_ring_size_get(nb_alloc_cnts,

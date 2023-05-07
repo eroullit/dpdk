@@ -10,7 +10,6 @@
 #include "../nfp_logs.h"
 #include "../nfp_ctrl.h"
 #include "../nfp_rxtx.h"
-#include "../nfp_flow.h"
 #include "../nfpcore/nfp_mip.h"
 #include "../nfpcore/nfp_rtsym.h"
 #include "../nfpcore/nfp_nsp.h"
@@ -554,6 +553,7 @@ static const struct eth_dev_ops nfp_flower_repr_dev_ops = {
 	.mac_addr_set         = nfp_flower_repr_mac_addr_set,
 
 	.flow_ops_get         = nfp_net_flow_ops_get,
+	.mtr_ops_get          = nfp_net_mtr_ops_get,
 };
 
 static uint32_t

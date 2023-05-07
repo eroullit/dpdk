@@ -8,6 +8,10 @@ if is_windows
     subdir_done()
 endif
 
+if dpdk_conf.get('RTE_IOVA_IN_MBUF') == 0
+    subdir_done()
+endif
+
 headers = files('rte_pmd_bnxt.h')
 cflags_options = [
         '-DSUPPORT_CFA_HW_ALL=1',
@@ -68,3 +72,5 @@ if arch_subdir == 'x86'
 elif arch_subdir == 'arm' and dpdk_conf.get('RTE_ARCH_64')
     sources += files('bnxt_rxtx_vec_neon.c')
 endif
+
+annotate_locks = false

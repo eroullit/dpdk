@@ -144,6 +144,7 @@ struct mlx5_txq_data {
 	uint16_t inlen_send; /* Ordinary send data inline size. */
 	uint16_t inlen_empw; /* eMPW max packet size to inline. */
 	uint16_t inlen_mode; /* Minimal data length to inline. */
+	uint8_t tx_aggr_affinity; /* TxQ affinity configuration. */
 	uint32_t qp_num_8s; /* QP number shifted by 8. */
 	uint64_t offloads; /* Offloads for Tx Queue. */
 	struct mlx5_mr_ctrl mr_ctrl; /* MR control descriptor. */
@@ -218,6 +219,9 @@ void txq_alloc_elts(struct mlx5_txq_ctrl *txq_ctrl);
 void txq_free_elts(struct mlx5_txq_ctrl *txq_ctrl);
 uint64_t mlx5_get_tx_port_offloads(struct rte_eth_dev *dev);
 void mlx5_txq_dynf_timestamp_set(struct rte_eth_dev *dev);
+int mlx5_count_aggr_ports(struct rte_eth_dev *dev);
+int mlx5_map_aggr_tx_affinity(struct rte_eth_dev *dev, uint16_t tx_queue_id,
+			      uint8_t affinity);
 
 /* mlx5_tx.c */
 
@@ -817,7 +821,7 @@ mlx5_tx_wseg_init(struct mlx5_txq_data *restrict txq,
 	struct mlx5_wqe_wseg *ws;
 
 	ws = RTE_PTR_ADD(wqe, MLX5_WSEG_SIZE);
-	ws->operation = rte_cpu_to_be_32(MLX5_WAIT_COND_CYCLIC_BIGGER);
+	ws->operation = rte_cpu_to_be_32(MLX5_WAIT_COND_CYCLIC_SMALLER);
 	ws->lkey = RTE_BE32(0);
 	ws->va_high = RTE_BE32(0);
 	ws->va_low = RTE_BE32(0);

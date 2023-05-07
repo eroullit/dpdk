@@ -394,6 +394,7 @@ The command line options are:
        50000 - 50Gbps
        100000 - 100Gbps
        200000 - 200Gbps
+       400000 - 400Gbps
        ...
 
 *   ``--disable-link-check``
@@ -435,6 +436,11 @@ The command line options are:
     configured flow rules only (see flow command).
 
     Ports that do not support this mode are automatically discarded.
+
+*   ``--disable-flow-flush``
+
+    Disable port flow flush when stopping port.
+    This allows testing keep flow rules or shared flow objects across restart.
 
 *   ``--tx-offloads=0xXXXXXXXX``
 

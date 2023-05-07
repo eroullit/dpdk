@@ -33,7 +33,7 @@ VOLATILE,PREFER_PACKED,PREFER_ALIGNED,PREFER_PRINTF,STRLCPY,\
 PREFER_KERNEL_TYPES,PREFER_FALLTHROUGH,BIT_MACRO,CONST_STRUCT,\
 SPLIT_STRING,LONG_LINE_STRING,C99_COMMENT_TOLERANCE,\
 LINE_SPACING,PARENTHESIS_ALIGNMENT,NETWORKING_BLOCK_COMMENT_STYLE,\
-NEW_TYPEDEFS,COMPARISON_TO_NULL"
+NEW_TYPEDEFS,COMPARISON_TO_NULL,AVOID_BUG"
 options="$options $DPDK_CHECKPATCH_OPTIONS"
 
 print_usage () {
@@ -116,6 +116,14 @@ check_forbidden_additions() { # <patch>
 		-v EXPRESSIONS="__atomic_thread_fence\\\(" \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using __atomic_thread_fence' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
+	# refrain from using compiler __atomic_{add,and,nand,or,sub,xor}_fetch()
+	awk -v FOLDERS="lib drivers app examples" \
+		-v EXPRESSIONS="__atomic_(add|and|nand|or|sub|xor)_fetch\\\(" \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Using __atomic_op_fetch, prefer __atomic_fetch_op' \
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
@@ -248,28 +256,6 @@ check_release_notes() { # <patch>
 		grep -v $current_rel_notes
 }
 
-check_names() { # <patch>
-	res=0
-
-	old_IFS=$IFS
-	IFS='
-'
-	for contributor in $(sed -rn '/^$/,/^--- / {s/.*: (.*<.*@.*>)/\1/p}' $1); do
-		! grep -qE "^$contributor($| <)" .mailmap || continue
-		name=${contributor%% <*}
-		if grep -q "^$name <" .mailmap; then
-			reason="$name mail differs from primary mail"
-		else
-			reason="$contributor is unknown"
-		fi
-		echo "$reason, please fix the commit message or update .mailmap."
-		res=1
-	done
-	IFS=$old_IFS
-
-	return $res
-}
-
 number=0
 range='origin/main..'
 quiet=false
@@ -372,14 +358,6 @@ check () { # <patch-file> <commit>
 
 	! $verbose || printf '\nChecking release notes updates:\n'
 	report=$(check_release_notes "$tmpinput")
-	if [ $? -ne 0 ] ; then
-		$headline_printed || print_headline "$subject"
-		printf '%s\n' "$report"
-		ret=1
-	fi
-
-	! $verbose || printf '\nChecking names in commit log:\n'
-	report=$(check_names "$tmpinput")
 	if [ $? -ne 0 ] ; then
 		$headline_printed || print_headline "$subject"
 		printf '%s\n' "$report"

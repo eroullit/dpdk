@@ -33,6 +33,7 @@
 #include "mlx5_utils.h"
 #include "mlx5_os.h"
 #include "mlx5_autoconf.h"
+#include "rte_pmd_mlx5.h"
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 #ifndef RTE_EXEC_ENV_WINDOWS
 #define HAVE_MLX5_HWS_SUPPORT 1
@@ -270,6 +271,7 @@ struct mlx5_port_config {
 	unsigned int hw_vlan_insert:1; /* VLAN insertion in WQE is supported. */
 	unsigned int hw_padding:1; /* End alignment padding is supported. */
 	unsigned int cqe_comp:1; /* CQE compression is enabled. */
+	unsigned int enh_cqe_comp:1; /* Enhanced CQE compression is enabled. */
 	unsigned int cqe_comp_fmt:3; /* CQE compression format. */
 	unsigned int rx_vec_en:1; /* Rx vector is enabled. */
 	unsigned int std_delay_drop:1; /* Enable standard Rxq delay drop. */
@@ -1307,9 +1309,11 @@ struct mlx5_lag {
 struct mlx5_flex_parser_devx {
 	struct mlx5_list_entry entry;  /* List element at the beginning. */
 	uint32_t num_samples;
+	uint8_t anchor_id;
 	void *devx_obj;
 	struct mlx5_devx_graph_node_attr devx_conf;
 	uint32_t sample_ids[MLX5_GRAPH_NODE_SAMPLE_NUM];
+	struct mlx5_devx_match_sample_info_query_attr sample_info[MLX5_GRAPH_NODE_SAMPLE_NUM];
 };
 
 /* Pattern field descriptor - how to translate flex pattern into samples. */
@@ -1328,6 +1332,12 @@ struct mlx5_flex_item {
 	enum rte_flow_item_flex_tunnel_mode tunnel_mode; /* Tunnel mode. */
 	uint32_t mapnum; /* Number of pattern translation entries. */
 	struct mlx5_flex_pattern_field map[MLX5_FLEX_ITEM_MAPPING_NUM];
+};
+
+/* Mlx5 internal flex parser profile structure. */
+struct mlx5_internal_flex_parser_profile {
+	uint32_t refcnt;
+	struct mlx5_flex_item flex; /* Hold map info for modify field. */
 };
 
 struct mlx5_send_to_kernel_action {
@@ -1374,6 +1384,8 @@ struct mlx5_dev_ctx_shared {
 	uint32_t hws_tags:1; /* Check if tags info for HWS initialized. */
 	uint32_t shared_mark_enabled:1;
 	/* If mark action is enabled on Rxqs (shared E-Switch domain). */
+	uint32_t lag_rx_port_affinity_en:1;
+	/* lag_rx_port_affinity is supported. */
 	uint32_t hws_max_log_bulk_sz:5;
 	/* Log of minimal HWS counters created hard coded. */
 	uint32_t hws_max_nb_counters; /* Maximal number for HWS counters. */
@@ -1435,6 +1447,7 @@ struct mlx5_dev_ctx_shared {
 	struct mlx5_uar rx_uar; /* DevX UAR for Rx. */
 	struct mlx5_proc_priv *pppriv; /* Pointer to primary private process. */
 	struct mlx5_ecpri_parser_profile ecpri_parser;
+	struct mlx5_internal_flex_parser_profile srh_flex_parser; /* srh flex parser structure. */
 	/* Flex parser profiles information. */
 	LIST_HEAD(shared_rxqs, mlx5_rxq_ctrl) shared_rxqs; /* Shared RXQs. */
 	struct mlx5_aso_age_mng *aso_age_mng;
@@ -1463,6 +1476,8 @@ struct mlx5_dev_ctx_shared {
  * Caution, secondary process may rebuild the struct during port start.
  */
 struct mlx5_proc_priv {
+	void *hca_bar;
+	/* Mapped HCA PCI BAR area. */
 	size_t uar_table_sz;
 	/* Size of UAR register table. */
 	struct mlx5_uar_data uar_table[];
@@ -1641,6 +1656,34 @@ struct mlx5_hw_ctrl_flow {
 	struct rte_flow *flow;
 };
 
+/*
+ * Flow rule structure for flow engine mode control, focus on group 0.
+ * Apply to all supported domains.
+ */
+struct mlx5_dv_flow_info {
+	LIST_ENTRY(mlx5_dv_flow_info) next;
+	uint32_t orig_prio; /* prio set by user */
+	uint32_t flow_idx_high_prio;
+	/* flow index owned by standby mode. priority is lower unless DUP flags. */
+	uint32_t flow_idx_low_prio;
+	struct rte_flow_item *items;
+	struct rte_flow_action *actions;
+	struct rte_flow_attr attr;
+};
+
+struct mlx5_flow_engine_mode_info {
+	enum mlx5_flow_engine_mode mode;
+	uint32_t mode_flag;
+	/* The list is maintained in insertion order. */
+	LIST_HEAD(hot_up_info, mlx5_dv_flow_info) hot_upgrade;
+};
+/* HW Steering port configuration passed to rte_flow_configure(). */
+struct mlx5_flow_hw_attr {
+	struct rte_flow_port_attr port_attr;
+	uint16_t nb_queue;
+	struct rte_flow_queue_attr *queue_attr;
+};
+
 struct mlx5_flow_hw_ctrl_rx;
 
 struct mlx5_priv {
@@ -1664,6 +1707,7 @@ struct mlx5_priv {
 	unsigned int mtr_reg_share:1; /* Whether support meter REG_C share. */
 	unsigned int lb_used:1; /* Loopback queue is referred to. */
 	uint32_t mark_enabled:1; /* If mark action is enabled on rxqs. */
+	uint32_t num_lag_ports:4; /* Number of ports can be bonded. */
 	uint16_t domain_id; /* Switch domain identifier. */
 	uint16_t vport_id; /* Associated VF vport index (if any). */
 	uint32_t vport_meta_tag; /* Used for vport index match ove VF LAG. */
@@ -1748,6 +1792,8 @@ struct mlx5_priv {
 	uint32_t nb_queue; /* HW steering queue number. */
 	struct mlx5_hws_cnt_pool *hws_cpool; /* HW steering's counter pool. */
 	uint32_t hws_mark_refcnt; /* HWS mark action reference counter. */
+	struct mlx5_flow_engine_mode_info mode_info; /* Process set flow engine info. */
+	struct mlx5_flow_hw_attr *hw_attr; /* HW Steering port configuration. */
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	/* Item template list. */
 	LIST_HEAD(flow_hw_itt, rte_flow_pattern_template) flow_hw_itt;
@@ -1778,6 +1824,8 @@ struct mlx5_priv {
 	struct mlx5_flow_hw_ctrl_rx *hw_ctrl_rx;
 	/**< HW steering templates used to create control flow rules. */
 #endif
+	struct rte_eth_dev *shared_host; /* Host device for HW steering. */
+	uint16_t shared_refcnt; /* HW steering host reference counter. */
 };
 
 #define PORT_ID(priv) ((priv)->dev_data->port_id)
@@ -2163,6 +2211,8 @@ int mlx5_txpp_xstats_get_names(struct rte_eth_dev *dev,
 			       struct rte_eth_xstat_name *xstats_names,
 			       unsigned int n, unsigned int n_used);
 void mlx5_txpp_interrupt_handler(void *cb_arg);
+int mlx5_txpp_map_hca_bar(struct rte_eth_dev *dev);
+void mlx5_txpp_unmap_hca_bar(struct rte_eth_dev *dev);
 
 /* mlx5_rxtx.c */
 
@@ -2238,6 +2288,12 @@ void mlx5_flex_item_port_cleanup(struct rte_eth_dev *dev);
 void mlx5_flex_flow_translate_item(struct rte_eth_dev *dev, void *matcher,
 				   void *key, const struct rte_flow_item *item,
 				   bool is_inner);
+int mlx5_flex_get_sample_id(const struct mlx5_flex_item *tp,
+			    uint32_t idx, uint32_t *pos,
+			    bool is_inner, uint32_t *def);
+int mlx5_flex_get_parser_value_per_byte_off(const struct rte_flow_item_flex *item,
+					    void *flex, uint32_t byte_off,
+					    bool is_mask, bool tunnel, uint32_t *value);
 int mlx5_flex_acquire_index(struct rte_eth_dev *dev,
 			    struct rte_flow_item_flex_handle *handle,
 			    bool acquire);
@@ -2253,4 +2309,8 @@ struct mlx5_list_entry *mlx5_flex_parser_clone_cb(void *list_ctx,
 						  void *ctx);
 void mlx5_flex_parser_clone_free_cb(void *tool_ctx,
 				    struct mlx5_list_entry *entry);
+
+int mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev);
+
+void mlx5_free_srh_flex_parser(struct rte_eth_dev *dev);
 #endif /* RTE_PMD_MLX5_H_ */

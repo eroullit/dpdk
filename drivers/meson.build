@@ -18,6 +18,7 @@ subdirs = [
         'crypto',         # depends on common, bus and mempool (net in future).
         'compress',       # depends on common, bus, mempool.
         'regex',          # depends on common, bus, regexdev.
+        'ml',             # depends on common, bus and mempool
         'vdpa',           # depends on common, bus and mempool.
         'event',          # depends on common, bus, mempool and net.
         'baseband',       # depends on common and bus.
@@ -91,6 +92,7 @@ foreach subpath:subdirs
         build = true # set to false to disable, e.g. missing deps
         reason = '<unknown reason>' # set if build == false to explain
         name = drv
+        annotate_locks = true
         sources = []
         headers = []
         driver_sdk_headers = [] # public headers included by drivers
@@ -108,7 +110,7 @@ foreach subpath:subdirs
         ext_deps = []
         pkgconfig_extra_libs = []
         testpmd_sources = []
-        pmd_supports_disable_iova_as_pa = false
+        require_iova_in_mbuf = true
 
         if not enable_drivers.contains(drv_path)
             build = false
@@ -126,9 +128,9 @@ foreach subpath:subdirs
             # pull in driver directory which should update all the local variables
             subdir(drv_path)
 
-            if dpdk_conf.get('RTE_IOVA_AS_PA') == 0 and not pmd_supports_disable_iova_as_pa and not always_enable.contains(drv_path)
+            if dpdk_conf.get('RTE_IOVA_IN_MBUF') == 0 and require_iova_in_mbuf
                 build = false
-                reason = 'driver does not support disabling IOVA as PA mode'
+                reason = 'requires IOVA in mbuf (set enable_iova_as_pa option)'
             endif
 
             # get dependency objs from strings
@@ -167,6 +169,10 @@ foreach subpath:subdirs
         enabled_drivers += name
         lib_name = '_'.join(['rte', class, name])
         cflags += '-DRTE_LOG_DEFAULT_LOGTYPE=' + '.'.join([log_prefix, name])
+        if annotate_locks and cc.get_id() == 'clang' and cc.version().version_compare('>=3.5.0')
+            cflags += '-DRTE_ANNOTATE_LOCKS'
+            cflags += '-Wthread-safety'
+        endif
         dpdk_conf.set(lib_name.to_upper(), 1)
 
         dpdk_extra_ldflags += pkgconfig_extra_libs

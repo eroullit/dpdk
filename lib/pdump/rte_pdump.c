@@ -122,7 +122,7 @@ pdump_copy(uint16_t port_id, uint16_t queue,
 		if (cbs->ver == V2)
 			p = rte_pcapng_copy(port_id, queue,
 					    pkts[i], mp, cbs->snaplen,
-					    ts, direction);
+					    ts, direction, NULL);
 		else
 			p = rte_pktmbuf_copy(pkts[i], mp, 0, cbs->snaplen);
 
@@ -134,7 +134,7 @@ pdump_copy(uint16_t port_id, uint16_t queue,
 
 	__atomic_fetch_add(&stats->accepted, d_pkts, __ATOMIC_RELAXED);
 
-	ring_enq = rte_ring_enqueue_burst(ring, (void *)dup_bufs, d_pkts, NULL);
+	ring_enq = rte_ring_enqueue_burst(ring, (void *)&dup_bufs[0], d_pkts, NULL);
 	if (unlikely(ring_enq < d_pkts)) {
 		unsigned int drops = d_pkts - ring_enq;
 

@@ -52,7 +52,6 @@ static const struct vhost_vq_stats_name_off vhost_vq_stat_strings[] = {
 
 #define VHOST_NB_VQ_STATS RTE_DIM(vhost_vq_stat_strings)
 
-/* Called with iotlb_lock read-locked */
 uint64_t
 __vhost_iova_to_vva(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		    uint64_t iova, uint64_t *size, uint8_t perm)
@@ -369,6 +368,7 @@ cleanup_device(struct virtio_net *dev, int destroy)
 
 static void
 vhost_free_async_mem(struct vhost_virtqueue *vq)
+	__rte_exclusive_locks_required(&vq->access_lock)
 {
 	if (!vq->async)
 		return;
@@ -393,7 +393,9 @@ free_vq(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	else
 		rte_free(vq->shadow_used_split);
 
+	rte_spinlock_lock(&vq->access_lock);
 	vhost_free_async_mem(vq);
+	rte_spinlock_unlock(&vq->access_lock);
 	rte_free(vq->batch_copy_elems);
 	vhost_user_iotlb_destroy(vq);
 	rte_free(vq->log_cache);
@@ -416,6 +418,7 @@ free_device(struct virtio_net *dev)
 
 static __rte_always_inline int
 log_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
+	__rte_shared_locks_required(&vq->iotlb_lock)
 {
 	if (likely(!(vq->ring_addrs.flags & (1 << VHOST_VRING_F_LOG))))
 		return 0;
@@ -432,8 +435,6 @@ log_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
  * Converts vring log address to GPA
  * If IOMMU is enabled, the log address is IOVA
  * If IOMMU not enabled, the log address is already GPA
- *
- * Caller should have iotlb_lock read-locked
  */
 uint64_t
 translate_log_addr(struct virtio_net *dev, struct vhost_virtqueue *vq,
@@ -464,9 +465,9 @@ translate_log_addr(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		return log_addr;
 }
 
-/* Caller should have iotlb_lock read-locked */
 static int
 vring_translate_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
+	__rte_shared_locks_required(&vq->iotlb_lock)
 {
 	uint64_t req_size, size;
 
@@ -503,9 +504,9 @@ vring_translate_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	return 0;
 }
 
-/* Caller should have iotlb_lock read-locked */
 static int
 vring_translate_packed(struct virtio_net *dev, struct vhost_virtqueue *vq)
+	__rte_shared_locks_required(&vq->iotlb_lock)
 {
 	uint64_t req_size, size;
 
@@ -560,10 +561,9 @@ vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 }
 
 void
-vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq)
+vring_invalidate(struct virtio_net *dev __rte_unused, struct vhost_virtqueue *vq)
 {
-	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
-		vhost_user_iotlb_wr_lock(vq);
+	vhost_user_iotlb_wr_lock(vq);
 
 	vq->access_ok = false;
 	vq->desc = NULL;
@@ -571,8 +571,7 @@ vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	vq->used = NULL;
 	vq->log_guest_addr = 0;
 
-	if (dev->features & (1ULL << VIRTIO_F_IOMMU_PLATFORM))
-		vhost_user_iotlb_wr_unlock(vq);
+	vhost_user_iotlb_wr_unlock(vq);
 }
 
 static void
@@ -702,9 +701,9 @@ vhost_new_device(void)
 
 	dev->vid = i;
 	dev->flags = VIRTIO_DEV_BUILTIN_VIRTIO_NET;
-	dev->slave_req_fd = -1;
+	dev->backend_req_fd = -1;
 	dev->postcopy_ufd = -1;
-	rte_spinlock_init(&dev->slave_req_lock);
+	rte_spinlock_init(&dev->backend_req_lock);
 
 	return i;
 }
@@ -1669,6 +1668,7 @@ rte_vhost_extern_callback_register(int vid,
 
 static __rte_always_inline int
 async_channel_register(struct virtio_net *dev, struct vhost_virtqueue *vq)
+	__rte_exclusive_locks_required(&vq->access_lock)
 {
 	struct vhost_async *async;
 	int node = vq->numa_node;
@@ -1754,7 +1754,7 @@ rte_vhost_async_channel_register(int vid, uint16_t queue_id)
 
 	vq = dev->virtqueue[queue_id];
 
-	if (unlikely(vq == NULL || !dev->async_copy))
+	if (unlikely(vq == NULL || !dev->async_copy || dev->vdpa_dev != NULL))
 		return -1;
 
 	rte_spinlock_lock(&vq->access_lock);
@@ -1778,14 +1778,10 @@ rte_vhost_async_channel_register_thread_unsafe(int vid, uint16_t queue_id)
 
 	vq = dev->virtqueue[queue_id];
 
-	if (unlikely(vq == NULL || !dev->async_copy))
+	if (unlikely(vq == NULL || !dev->async_copy || dev->vdpa_dev != NULL))
 		return -1;
 
-	if (unlikely(!rte_spinlock_is_locked(&vq->access_lock))) {
-		VHOST_LOG_CONFIG(dev->ifname, ERR, "%s() called without access lock taken.\n",
-			__func__);
-		return -1;
-	}
+	vq_assert_lock(dev, vq);
 
 	return async_channel_register(dev, vq);
 }
@@ -1847,11 +1843,7 @@ rte_vhost_async_channel_unregister_thread_unsafe(int vid, uint16_t queue_id)
 	if (vq == NULL)
 		return -1;
 
-	if (unlikely(!rte_spinlock_is_locked(&vq->access_lock))) {
-		VHOST_LOG_CONFIG(dev->ifname, ERR, "%s() called without access lock taken.\n",
-			__func__);
-		return -1;
-	}
+	vq_assert_lock(dev, vq);
 
 	if (!vq->async)
 		return 0;
@@ -1994,11 +1986,7 @@ rte_vhost_async_get_inflight_thread_unsafe(int vid, uint16_t queue_id)
 	if (vq == NULL)
 		return ret;
 
-	if (unlikely(!rte_spinlock_is_locked(&vq->access_lock))) {
-		VHOST_LOG_CONFIG(dev->ifname, ERR, "%s() called without access lock taken.\n",
-			__func__);
-		return -1;
-	}
+	vq_assert_lock(dev, vq);
 
 	if (!vq->async)
 		return ret;

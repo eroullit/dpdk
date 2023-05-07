@@ -9,6 +9,9 @@
 #include <rte_byteorder.h>
 #include <rte_ether.h>
 
+#include "../nfp_mtr.h"
+#include "../nfp_flow.h"
+
 struct nfp_flower_cmsg_hdr {
 	rte_be16_t pad;
 	uint8_t type;
@@ -898,6 +901,22 @@ struct nfp_fl_act_set_tun {
 	rte_be16_t tun_proto;    /* Only valid for NFP_FL_TUNNEL_GENEVE */
 } __rte_packed;
 
+/*
+ * Meter
+ *    3                   2                   1
+ *  1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * | res |  opcode |  res  | len_lw|            reserved           |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ * |                         Profile ID                            |
+ * +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ */
+struct nfp_fl_act_meter {
+	struct nfp_fl_act_head head;
+	rte_be16_t reserved;
+	rte_be32_t profile_id;
+};
+
 int nfp_flower_cmsg_mac_repr(struct nfp_app_fw_flower *app_fw_flower);
 int nfp_flower_cmsg_repr_reify(struct nfp_app_fw_flower *app_fw_flower,
 		struct nfp_flower_representor *repr);
@@ -921,5 +940,11 @@ int nfp_flower_cmsg_tun_mac_rule(struct nfp_app_fw_flower *app_fw_flower,
 		struct rte_ether_addr *mac,
 		uint16_t mac_idx,
 		bool is_del);
+int nfp_flower_cmsg_qos_add(struct nfp_app_fw_flower *app_fw_flower,
+		struct nfp_profile_conf *conf);
+int nfp_flower_cmsg_qos_delete(struct nfp_app_fw_flower *app_fw_flower,
+		struct nfp_profile_conf *conf);
+int nfp_flower_cmsg_qos_stats(struct nfp_app_fw_flower *app_fw_flower,
+		struct nfp_cfg_head *head);
 
 #endif /* _NFP_CMSG_H_ */

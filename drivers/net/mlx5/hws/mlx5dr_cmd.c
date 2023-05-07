@@ -217,18 +217,23 @@ void mlx5dr_cmd_set_attr_connect_miss_tbl(struct mlx5dr_context *ctx,
 {
 	struct mlx5dr_devx_obj *default_miss_tbl;
 
-	if (type != MLX5DR_TABLE_TYPE_FDB)
+	if (type != MLX5DR_TABLE_TYPE_FDB && !mlx5dr_context_shared_gvmi_used(ctx))
 		return;
 
-	default_miss_tbl = ctx->common_res[type].default_miss->ft;
-	if (!default_miss_tbl) {
-		assert(false);
-		return;
-	}
 	ft_attr->modify_fs = MLX5_IFC_MODIFY_FLOW_TABLE_MISS_ACTION;
 	ft_attr->type = fw_ft_type;
 	ft_attr->table_miss_action = MLX5_IFC_MODIFY_FLOW_TABLE_MISS_ACTION_GOTO_TBL;
-	ft_attr->table_miss_id = default_miss_tbl->id;
+
+	if (type == MLX5DR_TABLE_TYPE_FDB) {
+		default_miss_tbl = ctx->common_res[type].default_miss->ft;
+		if (!default_miss_tbl) {
+			assert(false);
+			return;
+		}
+		ft_attr->table_miss_id = default_miss_tbl->id;
+	} else {
+		ft_attr->table_miss_id = ctx->gvmi_res[type].aliased_end_ft->id;
+	}
 }
 
 struct mlx5dr_devx_obj *
@@ -254,15 +259,26 @@ mlx5dr_cmd_rtc_create(struct ibv_context *ctx,
 		 attr, obj_type, MLX5_GENERAL_OBJ_TYPE_RTC);
 
 	attr = MLX5_ADDR_OF(create_rtc_in, in, rtc);
-	MLX5_SET(rtc, attr, ste_format, rtc_attr->is_jumbo ?
+	MLX5_SET(rtc, attr, ste_format_0, rtc_attr->is_frst_jumbo ?
 		MLX5_IFC_RTC_STE_FORMAT_11DW :
 		MLX5_IFC_RTC_STE_FORMAT_8DW);
+
+	if (rtc_attr->is_scnd_range) {
+		MLX5_SET(rtc, attr, ste_format_1, MLX5_IFC_RTC_STE_FORMAT_RANGE);
+		MLX5_SET(rtc, attr, num_match_ste, 2);
+	}
+
 	MLX5_SET(rtc, attr, pd, rtc_attr->pd);
+	MLX5_SET(rtc, attr, update_method, rtc_attr->fw_gen_wqe);
 	MLX5_SET(rtc, attr, update_index_mode, rtc_attr->update_index_mode);
+	MLX5_SET(rtc, attr, access_index_mode, rtc_attr->access_index_mode);
+	MLX5_SET(rtc, attr, num_hash_definer, rtc_attr->num_hash_definer);
 	MLX5_SET(rtc, attr, log_depth, rtc_attr->log_depth);
 	MLX5_SET(rtc, attr, log_hash_size, rtc_attr->log_size);
 	MLX5_SET(rtc, attr, table_type, rtc_attr->table_type);
-	MLX5_SET(rtc, attr, match_definer_id, rtc_attr->definer_id);
+	MLX5_SET(rtc, attr, num_hash_definer, rtc_attr->num_hash_definer);
+	MLX5_SET(rtc, attr, match_definer_0, rtc_attr->match_definer_0);
+	MLX5_SET(rtc, attr, match_definer_1, rtc_attr->match_definer_1);
 	MLX5_SET(rtc, attr, stc_id, rtc_attr->stc_base);
 	MLX5_SET(rtc, attr, ste_table_base_id, rtc_attr->ste_base);
 	MLX5_SET(rtc, attr, ste_table_offset, rtc_attr->ste_offset);
@@ -507,9 +523,11 @@ mlx5dr_cmd_header_modify_pattern_create(struct ibv_context *ctx,
 	uint32_t in[MLX5_ST_SZ_DW(create_header_modify_pattern_in)] = {0};
 	uint32_t out[MLX5_ST_SZ_DW(general_obj_out_cmd_hdr)] = {0};
 	struct mlx5dr_devx_obj *devx_obj;
-	void *pattern_data;
+	uint64_t *pattern_data;
+	int num_of_actions;
 	void *pattern;
 	void *attr;
+	int i;
 
 	if (pattern_length > MAX_ACTIONS_DATA_IN_HEADER_MODIFY) {
 		DR_LOG(ERR, "Pattern length %d exceeds limit %d",
@@ -535,8 +553,18 @@ mlx5dr_cmd_header_modify_pattern_create(struct ibv_context *ctx,
 	/* Pattern_length is in ddwords */
 	MLX5_SET(header_modify_pattern_in, pattern, pattern_length, pattern_length / (2 * DW_SIZE));
 
-	pattern_data = MLX5_ADDR_OF(header_modify_pattern_in, pattern, pattern_data);
+	pattern_data = (uint64_t *)MLX5_ADDR_OF(header_modify_pattern_in, pattern, pattern_data);
 	memcpy(pattern_data, actions, pattern_length);
+
+	num_of_actions = pattern_length / MLX5DR_MODIFY_ACTION_SIZE;
+	for (i = 0; i < num_of_actions; i++) {
+		int type;
+
+		type = MLX5_GET(set_action_in, &pattern_data[i], action_type);
+		if (type != MLX5_MODIFICATION_TYPE_COPY)
+			/* Action typ-copy use all bytes for control */
+			MLX5_SET(set_action_in, &pattern_data[i], data, 0);
+	}
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
@@ -716,6 +744,125 @@ int mlx5dr_cmd_sq_modify_rdy(struct mlx5dr_devx_obj *devx_obj)
 	return ret;
 }
 
+int mlx5dr_cmd_allow_other_vhca_access(struct ibv_context *ctx,
+				       struct mlx5dr_cmd_allow_other_vhca_access_attr *attr)
+{
+	uint32_t out[MLX5_ST_SZ_DW(allow_other_vhca_access_out)] = {0};
+	uint32_t in[MLX5_ST_SZ_DW(allow_other_vhca_access_in)] = {0};
+	void *key;
+	int ret;
+
+	MLX5_SET(allow_other_vhca_access_in,
+		 in, opcode, MLX5_CMD_OP_ALLOW_OTHER_VHCA_ACCESS);
+	MLX5_SET(allow_other_vhca_access_in,
+		 in, object_type_to_be_accessed, attr->obj_type);
+	MLX5_SET(allow_other_vhca_access_in,
+		 in, object_id_to_be_accessed, attr->obj_id);
+
+	key = MLX5_ADDR_OF(allow_other_vhca_access_in, in, access_key);
+	memcpy(key, attr->access_key, sizeof(attr->access_key));
+
+	ret = mlx5_glue->devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
+	if (ret) {
+		DR_LOG(ERR, "Failed to execute ALLOW_OTHER_VHCA_ACCESS command");
+		rte_errno = errno;
+		return rte_errno;
+	}
+
+	return 0;
+}
+
+struct mlx5dr_devx_obj *
+mlx5dr_cmd_alias_obj_create(struct ibv_context *ctx,
+			    struct mlx5dr_cmd_alias_obj_create_attr *alias_attr)
+{
+	uint32_t out[MLX5_ST_SZ_DW(general_obj_out_cmd_hdr)] = {0};
+	uint32_t in[MLX5_ST_SZ_DW(create_alias_obj_in)] = {0};
+	struct mlx5dr_devx_obj *devx_obj;
+	void *attr;
+	void *key;
+
+	devx_obj = simple_malloc(sizeof(*devx_obj));
+	if (!devx_obj) {
+		DR_LOG(ERR, "Failed to allocate memory for ALIAS general object");
+		rte_errno = ENOMEM;
+		return NULL;
+	}
+
+	attr = MLX5_ADDR_OF(create_alias_obj_in, in, hdr);
+	MLX5_SET(general_obj_in_cmd_hdr,
+		 attr, opcode, MLX5_CMD_OP_CREATE_GENERAL_OBJECT);
+	MLX5_SET(general_obj_in_cmd_hdr,
+		 attr, obj_type, alias_attr->obj_type);
+	MLX5_SET(general_obj_in_cmd_hdr, attr, alias_object, 1);
+
+	attr = MLX5_ADDR_OF(create_alias_obj_in, in, alias_ctx);
+	MLX5_SET(alias_context, attr, vhca_id_to_be_accessed, alias_attr->vhca_id);
+	MLX5_SET(alias_context, attr, object_id_to_be_accessed, alias_attr->obj_id);
+
+	key = MLX5_ADDR_OF(alias_context, attr, access_key);
+	memcpy(key, alias_attr->access_key, sizeof(alias_attr->access_key));
+
+	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	if (!devx_obj->obj) {
+		DR_LOG(ERR, "Failed to create ALIAS OBJ");
+		simple_free(devx_obj);
+		rte_errno = errno;
+		return NULL;
+	}
+
+	devx_obj->id = MLX5_GET(general_obj_out_cmd_hdr, out, obj_id);
+
+	return devx_obj;
+}
+
+int mlx5dr_cmd_generate_wqe(struct ibv_context *ctx,
+			    struct mlx5dr_cmd_generate_wqe_attr *attr,
+			    struct mlx5_cqe64 *ret_cqe)
+{
+	uint32_t out[MLX5_ST_SZ_DW(generate_wqe_out)] = {0};
+	uint32_t in[MLX5_ST_SZ_DW(generate_wqe_in)] = {0};
+	uint8_t status;
+	void *ptr;
+	int ret;
+
+	MLX5_SET(generate_wqe_in, in, opcode, MLX5_CMD_OP_GENERATE_WQE);
+	MLX5_SET(generate_wqe_in, in, pdn, attr->pdn);
+
+	ptr = MLX5_ADDR_OF(generate_wqe_in, in, wqe_ctrl);
+	memcpy(ptr, attr->wqe_ctrl, MLX5_FLD_SZ_BYTES(generate_wqe_in, wqe_ctrl));
+
+	ptr = MLX5_ADDR_OF(generate_wqe_in, in, wqe_gta_ctrl);
+	memcpy(ptr, attr->gta_ctrl, MLX5_FLD_SZ_BYTES(generate_wqe_in, wqe_gta_ctrl));
+
+	ptr = MLX5_ADDR_OF(generate_wqe_in, in, wqe_gta_data_0);
+	memcpy(ptr, attr->gta_data_0, MLX5_FLD_SZ_BYTES(generate_wqe_in, wqe_gta_data_0));
+
+	if (attr->gta_data_1) {
+		ptr = MLX5_ADDR_OF(generate_wqe_in, in, wqe_gta_data_1);
+		memcpy(ptr, attr->gta_data_1, MLX5_FLD_SZ_BYTES(generate_wqe_in, wqe_gta_data_1));
+	}
+
+	ret = mlx5_glue->devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
+	if (ret) {
+		DR_LOG(ERR, "Failed to write GTA WQE using FW");
+		rte_errno = errno;
+		return rte_errno;
+	}
+
+	status = MLX5_GET(generate_wqe_out, out, status);
+	if (status) {
+		DR_LOG(ERR, "Invalid FW CQE status %d", status);
+		rte_errno = EINVAL;
+		return rte_errno;
+	}
+
+	ptr = MLX5_ADDR_OF(generate_wqe_out, out, cqe_data);
+	memcpy(ret_cqe, ptr, sizeof(*ret_cqe));
+
+	return 0;
+}
+
 int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 			  struct mlx5dr_cmd_query_caps *caps)
 {
@@ -723,6 +870,7 @@ int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 	uint32_t in[MLX5_ST_SZ_DW(query_hca_cap_in)] = {0};
 	const struct flow_hw_port_info *port_info;
 	struct ibv_device_attr_ex attr_ex;
+	u32 res;
 	int ret;
 
 	MLX5_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
@@ -764,8 +912,14 @@ int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 		MLX5_GET64(query_hca_cap_out, out,
 			   capability.cmd_hca_cap.match_definer_format_supported);
 
+	caps->vhca_id = MLX5_GET(query_hca_cap_out, out,
+				 capability.cmd_hca_cap.vhca_id);
+
 	caps->sq_ts_format = MLX5_GET(query_hca_cap_out, out,
 				      capability.cmd_hca_cap.sq_ts_format);
+
+	caps->ipsec_offload = MLX5_GET(query_hca_cap_out, out,
+				      capability.cmd_hca_cap.ipsec_offload);
 
 	MLX5_SET(query_hca_cap_in, in, op_mod,
 		 MLX5_GET_HCA_CAP_OP_MOD_GENERAL_DEVICE_2 |
@@ -798,6 +952,27 @@ int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 						     capability.cmd_hca_cap_2.
 						     format_select_dw_gtpu_first_ext_dw_0);
 
+	caps->supp_type_gen_wqe = MLX5_GET(query_hca_cap_out, out,
+					   capability.cmd_hca_cap_2.
+					   generate_wqe_type);
+
+	/* check cross-VHCA support in cap2 */
+	res =
+	MLX5_GET(query_hca_cap_out, out,
+		capability.cmd_hca_cap_2.cross_vhca_object_to_object_supported);
+
+	caps->cross_vhca_resources = (res & MLX5_CROSS_VHCA_OBJ_TO_OBJ_TYPE_STC_TO_TIR) &&
+				     (res & MLX5_CROSS_VHCA_OBJ_TO_OBJ_TYPE_STC_TO_FT) &&
+				     (res & MLX5_CROSS_VHCA_OBJ_TO_OBJ_TYPE_FT_TO_RTC);
+
+	res =
+	MLX5_GET(query_hca_cap_out, out,
+		capability.cmd_hca_cap_2.allowed_object_for_other_vhca_access);
+
+	caps->cross_vhca_resources &= (res & MLX5_CROSS_VHCA_ALLOWED_OBJS_TIR) &&
+				      (res & MLX5_CROSS_VHCA_ALLOWED_OBJS_FT) &&
+				      (res & MLX5_CROSS_VHCA_ALLOWED_OBJS_RTC);
+
 	MLX5_SET(query_hca_cap_in, in, op_mod,
 		 MLX5_GET_HCA_CAP_OP_MOD_NIC_FLOW_TABLE |
 		 MLX5_HCA_CAP_OPMOD_GET_CUR);
@@ -816,6 +991,12 @@ int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 	caps->nic_ft.reparse = MLX5_GET(query_hca_cap_out, out,
 					capability.flow_table_nic_cap.
 					flow_table_properties_nic_receive.reparse);
+
+	/* check cross-VHCA support in flow table properties */
+	res =
+	MLX5_GET(query_hca_cap_out, out,
+		capability.flow_table_nic_cap.flow_table_properties_nic_receive.cross_vhca_object);
+	caps->cross_vhca_resources &= res;
 
 	if (caps->wqe_based_update) {
 		MLX5_SET(query_hca_cap_in, in, op_mod,
@@ -864,6 +1045,30 @@ int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 		caps->stc_alloc_log_gran = MLX5_GET(query_hca_cap_out, out,
 						    capability.wqe_based_flow_table_cap.
 						    stc_alloc_log_granularity);
+
+		caps->rtc_hash_split_table = MLX5_GET(query_hca_cap_out, out,
+						      capability.wqe_based_flow_table_cap.
+						      rtc_hash_split_table);
+
+		caps->rtc_linear_lookup_table = MLX5_GET(query_hca_cap_out, out,
+							 capability.wqe_based_flow_table_cap.
+							 rtc_linear_lookup_table);
+
+		caps->access_index_mode = MLX5_GET(query_hca_cap_out, out,
+						   capability.wqe_based_flow_table_cap.
+						   access_index_mode);
+
+		caps->linear_match_definer = MLX5_GET(query_hca_cap_out, out,
+						      capability.wqe_based_flow_table_cap.
+						      linear_match_definer_reg_c3);
+
+		caps->rtc_max_hash_def_gen_wqe = MLX5_GET(query_hca_cap_out, out,
+							  capability.wqe_based_flow_table_cap.
+							  rtc_max_num_hash_definer_gen_wqe);
+
+		caps->supp_ste_format_gen_wqe = MLX5_GET(query_hca_cap_out, out,
+							 capability.wqe_based_flow_table_cap.
+							 ste_format_gen_wqe);
 	}
 
 	if (caps->eswitch_manager) {

@@ -13,6 +13,9 @@ static int mlx5dr_context_pools_init(struct mlx5dr_context *ctx)
 	if (mlx5dr_pat_init_pattern_cache(&ctx->pattern_cache))
 		return rte_errno;
 
+	if (mlx5dr_definer_init_cache(&ctx->definer_cache))
+		goto uninit_pat_cache;
+
 	/* Create an STC pool per FT type */
 	pool_attr.pool_type = MLX5DR_POOL_TYPE_STC;
 	pool_attr.flags = MLX5DR_POOL_FLAGS_FOR_STC_POOL;
@@ -35,8 +38,10 @@ free_stc_pools:
 		if (ctx->stc_pool[i])
 			mlx5dr_pool_destroy(ctx->stc_pool[i]);
 
-	mlx5dr_pat_uninit_pattern_cache(ctx->pattern_cache);
+	mlx5dr_definer_uninit_cache(ctx->definer_cache);
 
+uninit_pat_cache:
+	mlx5dr_pat_uninit_pattern_cache(ctx->pattern_cache);
 	return rte_errno;
 }
 
@@ -44,12 +49,13 @@ static void mlx5dr_context_pools_uninit(struct mlx5dr_context *ctx)
 {
 	int i;
 
-	mlx5dr_pat_uninit_pattern_cache(ctx->pattern_cache);
-
 	for (i = 0; i < MLX5DR_TABLE_TYPE_MAX; i++) {
 		if (ctx->stc_pool[i])
 			mlx5dr_pool_destroy(ctx->stc_pool[i]);
 	}
+
+	mlx5dr_definer_uninit_cache(ctx->definer_cache);
+	mlx5dr_pat_uninit_pattern_cache(ctx->pattern_cache);
 }
 
 static int mlx5dr_context_init_pd(struct mlx5dr_context *ctx,
@@ -178,6 +184,36 @@ static void mlx5dr_context_uninit_hws(struct mlx5dr_context *ctx)
 	mlx5dr_context_uninit_pd(ctx);
 }
 
+static int mlx5dr_context_init_shared_ctx(struct mlx5dr_context *ctx,
+					  struct ibv_context *ibv_ctx,
+					  struct mlx5dr_context_attr *attr)
+{
+	struct mlx5dr_cmd_query_caps shared_caps = {0};
+	int ret;
+
+	if (!attr->shared_ibv_ctx) {
+		ctx->ibv_ctx = ibv_ctx;
+	} else {
+		ctx->ibv_ctx = attr->shared_ibv_ctx;
+		ctx->local_ibv_ctx = ibv_ctx;
+		ret = mlx5dr_cmd_query_caps(attr->shared_ibv_ctx, &shared_caps);
+		if (ret || !shared_caps.cross_vhca_resources) {
+			DR_LOG(INFO, "No cross_vhca_resources cap for shared ibv");
+			rte_errno = ENOTSUP;
+			return rte_errno;
+		}
+		ctx->caps->shared_vhca_id = shared_caps.vhca_id;
+	}
+
+	if (ctx->local_ibv_ctx && !ctx->caps->cross_vhca_resources) {
+		DR_LOG(INFO, "No cross_vhca_resources cap for local ibv");
+		rte_errno = ENOTSUP;
+		return rte_errno;
+	}
+
+	return 0;
+}
+
 struct mlx5dr_context *mlx5dr_context_open(struct ibv_context *ibv_ctx,
 					   struct mlx5dr_context_attr *attr)
 {
@@ -190,7 +226,6 @@ struct mlx5dr_context *mlx5dr_context_open(struct ibv_context *ibv_ctx,
 		return NULL;
 	}
 
-	ctx->ibv_ctx = ibv_ctx;
 	pthread_spin_init(&ctx->ctrl_lock, PTHREAD_PROCESS_PRIVATE);
 
 	ctx->caps = simple_calloc(1, sizeof(*ctx->caps));
@@ -199,6 +234,9 @@ struct mlx5dr_context *mlx5dr_context_open(struct ibv_context *ibv_ctx,
 
 	ret = mlx5dr_cmd_query_caps(ibv_ctx, ctx->caps);
 	if (ret)
+		goto free_caps;
+
+	if (mlx5dr_context_init_shared_ctx(ctx, ibv_ctx, attr))
 		goto free_caps;
 
 	ret = mlx5dr_context_init_hws(ctx, attr);

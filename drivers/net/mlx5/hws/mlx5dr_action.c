@@ -744,7 +744,10 @@ mlx5dr_action_create_dest_table(struct mlx5dr_context *ctx,
 		return NULL;
 
 	if (mlx5dr_action_is_root_flags(flags)) {
-		action->devx_obj = tbl->ft->obj;
+		if (mlx5dr_context_shared_gvmi_used(ctx))
+			action->devx_obj = tbl->local_ft->obj;
+		else
+			action->devx_obj = tbl->ft->obj;
 	} else {
 		ret = mlx5dr_action_create_stcs(action, tbl->ft);
 		if (ret)
@@ -758,10 +761,38 @@ free_action:
 	return NULL;
 }
 
+static int mlx5dr_action_get_dest_tir_obj(struct mlx5dr_context *ctx,
+					  struct mlx5dr_action *action,
+					  struct mlx5dr_devx_obj *obj,
+					  struct mlx5dr_devx_obj **ret_obj)
+{
+	int ret;
+
+	if (mlx5dr_context_shared_gvmi_used(ctx)) {
+		ret = mlx5dr_matcher_create_aliased_obj(ctx,
+							ctx->local_ibv_ctx,
+							ctx->ibv_ctx,
+							ctx->caps->vhca_id,
+							obj->id,
+							MLX5_GENERAL_OBJ_TYPE_TIR_ALIAS,
+							&action->alias.devx_obj);
+		if (ret) {
+			DR_LOG(ERR, "Failed to create tir alias");
+			return rte_errno;
+		}
+		*ret_obj = action->alias.devx_obj;
+	} else {
+		*ret_obj = obj;
+	}
+
+	return 0;
+}
+
 struct mlx5dr_action *
 mlx5dr_action_create_dest_tir(struct mlx5dr_context *ctx,
 			      struct mlx5dr_devx_obj *obj,
-			      uint32_t flags)
+			      uint32_t flags,
+			      bool is_local)
 {
 	struct mlx5dr_action *action;
 	int ret;
@@ -773,6 +804,13 @@ mlx5dr_action_create_dest_tir(struct mlx5dr_context *ctx,
 		return NULL;
 	}
 
+	if (!is_local) {
+		DR_LOG(ERR, "TIR should be created on local ibv_device, flags: 0x%x",
+		       flags);
+		rte_errno = ENOTSUP;
+		return NULL;
+	}
+
 	action = mlx5dr_action_create_generic(ctx, flags, MLX5DR_ACTION_TYP_TIR);
 	if (!action)
 		return NULL;
@@ -780,13 +818,23 @@ mlx5dr_action_create_dest_tir(struct mlx5dr_context *ctx,
 	if (mlx5dr_action_is_root_flags(flags)) {
 		action->devx_obj = obj->obj;
 	} else {
-		ret = mlx5dr_action_create_stcs(action, obj);
-		if (ret)
+		struct mlx5dr_devx_obj *cur_obj = NULL; /*compilation warn*/
+
+		ret = mlx5dr_action_get_dest_tir_obj(ctx, action, obj, &cur_obj);
+		if (ret) {
+			DR_LOG(ERR, "Failed to create tir alias (flags: %d)", flags);
 			goto free_action;
+		}
+
+		ret = mlx5dr_action_create_stcs(action, cur_obj);
+		if (ret)
+			goto clean_obj;
 	}
 
 	return action;
 
+clean_obj:
+	mlx5dr_cmd_destroy_obj(action->alias.devx_obj);
 free_action:
 	simple_free(action);
 	return NULL;
@@ -1147,6 +1195,7 @@ mlx5dr_action_create_reformat_root(struct mlx5dr_action *action,
 {
 	enum mlx5dv_flow_table_type ft_type = 0; /*fix compilation warn*/
 	uint32_t verb_reformat_type = 0;
+	struct ibv_context *ibv_ctx;
 	int ret;
 
 	/* Convert action to FT type and verbs reformat type */
@@ -1157,8 +1206,9 @@ mlx5dr_action_create_reformat_root(struct mlx5dr_action *action,
 	mlx5dr_action_conv_reformat_to_verbs(action->type, &verb_reformat_type);
 
 	/* Create the reformat type for root table */
+	ibv_ctx = mlx5dr_context_get_local_ibv(action->ctx);
 	action->flow_action =
-		mlx5_glue->dv_create_flow_action_packet_reformat_root(action->ctx->ibv_ctx,
+		mlx5_glue->dv_create_flow_action_packet_reformat_root(ibv_ctx,
 								      data_sz,
 								      data,
 								      verb_reformat_type,
@@ -1496,14 +1546,17 @@ mlx5dr_action_create_modify_header_root(struct mlx5dr_action *action,
 					__be64 *actions)
 {
 	enum mlx5dv_flow_table_type ft_type = 0;
+	struct ibv_context *local_ibv_ctx;
 	int ret;
 
 	ret = mlx5dr_action_conv_flags_to_ft_type(action->flags, &ft_type);
 	if (ret)
 		return rte_errno;
 
+	local_ibv_ctx = mlx5dr_context_get_local_ibv(action->ctx);
+
 	action->flow_action =
-		mlx5_glue->dv_create_flow_action_modify_header_root(action->ctx->ibv_ctx,
+		mlx5_glue->dv_create_flow_action_modify_header_root(local_ibv_ctx,
 								    actions_sz,
 								    (uint64_t *)actions,
 								    ft_type);
@@ -1550,6 +1603,12 @@ mlx5dr_action_create_modify_header(struct mlx5dr_context *ctx,
 		goto free_action;
 	}
 
+	if (!mlx5dr_pat_arg_verify_actions(pattern, pattern_sz / MLX5DR_MODIFY_ACTION_SIZE)) {
+		DR_LOG(ERR, "One of the actions is not supported\n");
+		rte_errno = EINVAL;
+		goto free_action;
+	}
+
 	if (pattern_sz / MLX5DR_MODIFY_ACTION_SIZE == 1) {
 		/* Optimize single modiy action to be used inline */
 		action->modify_header.single_action = pattern[0];
@@ -1584,6 +1643,10 @@ static void mlx5dr_action_destroy_hws(struct mlx5dr_action *action)
 {
 	switch (action->type) {
 	case MLX5DR_ACTION_TYP_TIR:
+		mlx5dr_action_destroy_stcs(action);
+		if (mlx5dr_context_shared_gvmi_used(action->ctx))
+			mlx5dr_cmd_destroy_obj(action->alias.devx_obj);
+		break;
 	case MLX5DR_ACTION_TYP_MISS:
 	case MLX5DR_ACTION_TYP_TAG:
 	case MLX5DR_ACTION_TYP_DROP:
@@ -1694,8 +1757,15 @@ int mlx5dr_action_get_default_stc(struct mlx5dr_context *ctx,
 		goto free_nop_dw6;
 	}
 
-	stc_attr.action_type = MLX5_IFC_STC_ACTION_TYPE_ALLOW;
 	stc_attr.action_offset = MLX5DR_ACTION_OFFSET_HIT;
+	if (!mlx5dr_context_shared_gvmi_used(ctx)) {
+		stc_attr.action_type = MLX5_IFC_STC_ACTION_TYPE_ALLOW;
+	} else {
+		/* On shared gvmi the default hit behavior is jump to alias end ft */
+		stc_attr.action_type = MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_FT;
+		stc_attr.dest_table_id = ctx->gvmi_res[tbl_type].aliased_end_ft->id;
+	}
+
 	ret = mlx5dr_action_alloc_single_stc(ctx, &stc_attr, tbl_type,
 					     &default_stc->default_hit);
 	if (ret) {

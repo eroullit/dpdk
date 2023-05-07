@@ -66,13 +66,15 @@ The detailed information can refer to chapter Tested Platforms/Tested NICs in re
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    22.07  |     1.9.11    |      1.3.30     |  1.3.37   |    1.3.10    |    4.0    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    22.11  |     1.10.1    |      1.3.30     |  1.3.37   |    1.3.10    |    4.1    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
 
-Pre-Installation Configuration
-------------------------------
 
+Configuration
+-------------
 
-Runtime Config Options
-~~~~~~~~~~~~~~~~~~~~~~
+Runtime Configuration
+~~~~~~~~~~~~~~~~~~~~~
 
 - ``Safe Mode Support`` (default ``0``)
 
@@ -104,6 +106,16 @@ Runtime Config Options
   for example::
 
     -a 80:00.0,pipeline-mode-support=1
+
+- ``Default MAC Disable`` (default ``0``)
+
+  Disable the default MAC make the device drop all packets by default,
+  only packets hit on filter rules will pass.
+
+  Default MAC can be disabled by setting the devargs parameter ``default-mac-disable``,
+  for example::
+
+    -a 80:00.0,default-mac-disable=1
 
 - ``Protocol extraction for per queue``
 
@@ -331,18 +343,18 @@ Additional Options
 
       ip link set dev enp24s0f0 vf 0 trust on
 
-#. Bind the VF0,  and run testpmd with 'cap=dcf' devarg::
+#. Bind the VF0, and run testpmd with 'cap=dcf' with port representor for VF 1 and 2::
 
-      dpdk-testpmd -l 22-25 -n 4 -a 18:01.0,cap=dcf -- -i
+      dpdk-testpmd -l 22-25 -n 4 -a 18:01.0,cap=dcf,representor=vf[1-2] -- -i
 
 #. Monitor the VF2 interface network traffic::
 
       tcpdump -e -nn -i enp24s1f2
 
-#. Create one flow to redirect the traffic to VF2 by DCF::
+#. Create one flow to redirect the traffic to VF2 by DCF (assume the representor port ID is 5)::
 
       flow create 0 priority 0 ingress pattern eth / ipv4 src is 192.168.0.2 \
-      dst is 192.168.0.3 / end actions vf id 2 / end
+      dst is 192.168.0.3 / end actions represented_port ethdev_port_id 5 / end
 
 #. Send the packet, and it should be displayed on tcpdump::
 

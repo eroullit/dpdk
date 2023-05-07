@@ -86,8 +86,10 @@ enum mlx5dr_match_template_flags {
 };
 
 enum mlx5dr_send_queue_actions {
-	/* Start executing all pending queued rules and write to HW */
-	MLX5DR_SEND_QUEUE_ACTION_DRAIN = 1 << 0,
+	/* Start executing all pending queued rules */
+	MLX5DR_SEND_QUEUE_ACTION_DRAIN_ASYNC = 1 << 0,
+	/* Start executing all pending queued rules wait till completion */
+	MLX5DR_SEND_QUEUE_ACTION_DRAIN_SYNC = 1 << 1,
 };
 
 struct mlx5dr_context_attr {
@@ -96,6 +98,8 @@ struct mlx5dr_context_attr {
 	size_t initial_log_ste_memory; /* Currently not in use */
 	/* Optional PD used for allocating res ources */
 	struct ibv_pd *pd;
+	/* Optional other ctx for resources allocation, all objects will be created on it */
+	struct ibv_context *shared_ibv_ctx;
 };
 
 struct mlx5dr_table_attr {
@@ -109,6 +113,16 @@ enum mlx5dr_matcher_flow_src {
 	MLX5DR_MATCHER_FLOW_SRC_VPORT = 0x2,
 };
 
+enum mlx5dr_matcher_insert_mode {
+	MLX5DR_MATCHER_INSERT_BY_HASH = 0x0,
+	MLX5DR_MATCHER_INSERT_BY_INDEX = 0x1,
+};
+
+enum mlx5dr_matcher_distribute_mode {
+	MLX5DR_MATCHER_DISTRIBUTE_BY_HASH = 0x0,
+	MLX5DR_MATCHER_DISTRIBUTE_BY_LINEAR = 0x1,
+};
+
 struct mlx5dr_matcher_attr {
 	/* Processing priority inside table */
 	uint32_t priority;
@@ -118,6 +132,9 @@ struct mlx5dr_matcher_attr {
 	enum mlx5dr_matcher_resource_mode mode;
 	/* Optimize insertion in case packet origin is the same for all rules */
 	enum mlx5dr_matcher_flow_src optimize_flow_src;
+	/* Define the insertion and distribution modes for this matcher */
+	enum mlx5dr_matcher_insert_mode insert_mode;
+	enum mlx5dr_matcher_distribute_mode distribute_mode;
 	union {
 		struct {
 			uint8_t sz_row_log;
@@ -133,7 +150,9 @@ struct mlx5dr_matcher_attr {
 struct mlx5dr_rule_attr {
 	uint16_t queue_id;
 	void *user_data;
-	/* Valid if matcher optimize_using_rule_idx is set */
+	/* Valid if matcher optimize_using_rule_idx is set or
+	 * if matcher is configured to insert rules by index.
+	 */
 	uint32_t rule_idx;
 	uint32_t burst:1;
 };
@@ -408,12 +427,15 @@ mlx5dr_action_create_dest_vport(struct mlx5dr_context *ctx,
  *	Direct rule TIR devx object.
  * @param[in] flags
  *	Action creation flags. (enum mlx5dr_action_flags)
+ * @param[in] is_local
+ *	indicates where the tir object was created, local gvmi or other gvmi
  * @return pointer to mlx5dr_action on success NULL otherwise.
  */
 struct mlx5dr_action *
 mlx5dr_action_create_dest_tir(struct mlx5dr_context *ctx,
 			      struct mlx5dr_devx_obj *obj,
-			      uint32_t flags);
+			      uint32_t flags,
+			      bool is_local);
 
 /* Create direct rule TAG action.
  *

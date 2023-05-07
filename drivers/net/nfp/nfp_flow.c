@@ -285,7 +285,7 @@ nfp_check_mask_remove(struct nfp_flow_priv *priv,
 
 		rte_free(mask_entry);
 		if (meta_flags)
-			*meta_flags &= ~NFP_FL_META_FLAG_MANAGE_MASK;
+			*meta_flags |= NFP_FL_META_FLAG_MANAGE_MASK;
 	}
 
 	return true;
@@ -339,7 +339,7 @@ nfp_flow_table_search(struct nfp_flow_priv *priv,
 }
 
 static struct rte_flow *
-nfp_flow_alloc(struct nfp_fl_key_ls *key_layer)
+nfp_flow_alloc(struct nfp_fl_key_ls *key_layer, uint32_t port_id)
 {
 	char *tmp;
 	size_t len;
@@ -356,7 +356,8 @@ nfp_flow_alloc(struct nfp_fl_key_ls *key_layer)
 		goto free_flow;
 
 	nfp_flow->length = len;
-
+	nfp_flow->mtr_id       = NFP_MAX_MTR_CNT;
+	nfp_flow->port_id      = port_id;
 	payload                = &nfp_flow->payload;
 	payload->meta          = (struct nfp_fl_rule_metadata *)tmp;
 	payload->unmasked_data = tmp + sizeof(struct nfp_fl_rule_metadata);
@@ -866,6 +867,7 @@ nfp_flow_key_layers_calculate_actions(const struct rte_flow_action actions[],
 		struct nfp_fl_key_ls *key_ls)
 {
 	int ret = 0;
+	bool meter_flag = false;
 	bool tc_hl_flag = false;
 	bool mac_set_flag = false;
 	bool ip_set_flag = false;
@@ -1012,6 +1014,16 @@ nfp_flow_key_layers_calculate_actions(const struct rte_flow_action actions[],
 		case RTE_FLOW_ACTION_TYPE_RAW_DECAP:
 			PMD_DRV_LOG(DEBUG, "RTE_FLOW_ACTION_TYPE_RAW_DECAP detected");
 			break;
+		case RTE_FLOW_ACTION_TYPE_METER:
+			PMD_DRV_LOG(DEBUG, "RTE_FLOW_ACTION_TYPE_METER detected");
+			if (!meter_flag) {
+				key_ls->act_size += sizeof(struct nfp_fl_act_meter);
+				meter_flag = true;
+			} else {
+				PMD_DRV_LOG(ERR, "Only support one meter action.");
+				return -ENOTSUP;
+			}
+			break;
 		default:
 			PMD_DRV_LOG(ERR, "Action type %d not supported.", action->type);
 			return -ENOTSUP;
@@ -1088,11 +1100,11 @@ nfp_flow_merge_eth(__rte_unused struct nfp_app_fw_flower *app_fw_flower,
 	eth = (void *)*mbuf_off;
 
 	if (is_mask) {
-		memcpy(eth->mac_src, mask->src.addr_bytes, RTE_ETHER_ADDR_LEN);
-		memcpy(eth->mac_dst, mask->dst.addr_bytes, RTE_ETHER_ADDR_LEN);
+		memcpy(eth->mac_src, mask->hdr.src_addr.addr_bytes, RTE_ETHER_ADDR_LEN);
+		memcpy(eth->mac_dst, mask->hdr.dst_addr.addr_bytes, RTE_ETHER_ADDR_LEN);
 	} else {
-		memcpy(eth->mac_src, spec->src.addr_bytes, RTE_ETHER_ADDR_LEN);
-		memcpy(eth->mac_dst, spec->dst.addr_bytes, RTE_ETHER_ADDR_LEN);
+		memcpy(eth->mac_src, spec->hdr.src_addr.addr_bytes, RTE_ETHER_ADDR_LEN);
+		memcpy(eth->mac_dst, spec->hdr.dst_addr.addr_bytes, RTE_ETHER_ADDR_LEN);
 	}
 
 	eth->mpls_lse = 0;
@@ -1125,10 +1137,10 @@ nfp_flow_merge_vlan(__rte_unused struct nfp_app_fw_flower *app_fw_flower,
 	mask = item->mask ? item->mask : proc->mask_default;
 	if (is_mask) {
 		meta_tci = (struct nfp_flower_meta_tci *)nfp_flow->payload.mask_data;
-		meta_tci->tci |= mask->tci;
+		meta_tci->tci |= mask->hdr.vlan_tci;
 	} else {
 		meta_tci = (struct nfp_flower_meta_tci *)nfp_flow->payload.unmasked_data;
-		meta_tci->tci |= spec->tci;
+		meta_tci->tci |= spec->hdr.vlan_tci;
 	}
 
 	return 0;
@@ -2021,7 +2033,8 @@ nfp_flow_compile_items(struct nfp_flower_representor *representor,
 static int
 nfp_flow_action_output(char *act_data,
 		const struct rte_flow_action *action,
-		struct nfp_fl_rule_metadata *nfp_flow_meta)
+		struct nfp_fl_rule_metadata *nfp_flow_meta,
+		uint32_t output_cnt)
 {
 	size_t act_size;
 	struct rte_eth_dev *ethdev;
@@ -2040,8 +2053,9 @@ nfp_flow_action_output(char *act_data,
 	output = (struct nfp_fl_act_output *)act_data;
 	output->head.jump_id = NFP_FL_ACTION_OPCODE_OUTPUT;
 	output->head.len_lw  = act_size >> NFP_FL_LW_SIZ;
-	output->flags        = rte_cpu_to_be_16(NFP_FL_OUT_FLAGS_LAST);
 	output->port         = rte_cpu_to_be_32(representor->port_id);
+	if (output_cnt == 0)
+		output->flags = rte_cpu_to_be_16(NFP_FL_OUT_FLAGS_LAST);
 
 	nfp_flow_meta->shortcut = rte_cpu_to_be_32(representor->port_id);
 
@@ -2054,6 +2068,7 @@ nfp_flow_action_set_mac(char *act_data,
 		bool mac_src_flag,
 		bool mac_set_flag)
 {
+	uint8_t i;
 	size_t act_size;
 	struct nfp_fl_act_set_eth *set_eth;
 	const struct rte_flow_action_set_mac *set_mac;
@@ -2072,9 +2087,13 @@ nfp_flow_action_set_mac(char *act_data,
 	if (mac_src_flag) {
 		rte_memcpy(&set_eth->eth_addr[RTE_ETHER_ADDR_LEN],
 				set_mac->mac_addr, RTE_ETHER_ADDR_LEN);
+		for (i = 0; i < RTE_ETHER_ADDR_LEN; i++)
+			set_eth->eth_addr_mask[RTE_ETHER_ADDR_LEN + i] = 0xff;
 	} else {
 		rte_memcpy(&set_eth->eth_addr[0],
 				set_mac->mac_addr, RTE_ETHER_ADDR_LEN);
+		for (i = 0; i < RTE_ETHER_ADDR_LEN; i++)
+			set_eth->eth_addr_mask[i] = 0xff;
 	}
 }
 
@@ -2115,10 +2134,13 @@ nfp_flow_action_set_ip(char *act_data,
 	set_ip->reserved     = 0;
 
 	set_ipv4 = (const struct rte_flow_action_set_ipv4 *)action->conf;
-	if (ip_src_flag)
+	if (ip_src_flag) {
 		set_ip->ipv4_src = set_ipv4->ipv4_addr;
-	else
+		set_ip->ipv4_src_mask = RTE_BE32(0xffffffff);
+	} else {
 		set_ip->ipv4_dst = set_ipv4->ipv4_addr;
+		set_ip->ipv4_dst_mask = RTE_BE32(0xffffffff);
+	}
 }
 
 static void
@@ -2143,8 +2165,10 @@ nfp_flow_action_set_ipv6(char *act_data,
 	set_ip->head.len_lw = act_size >> NFP_FL_LW_SIZ;
 	set_ip->reserved = 0;
 
-	for (i = 0; i < 4; i++)
-		set_ip->ipv6[i].exact = set_ipv6->ipv6_addr[i];
+	for (i = 0; i < 4; i++) {
+		set_ip->ipv6[i].exact = set_ipv6->ipv6_addr[i * 4];
+		set_ip->ipv6[i].mask = RTE_BE32(0xffffffff);
+	}
 }
 
 static void
@@ -2168,10 +2192,13 @@ nfp_flow_action_set_tp(char *act_data,
 	set_tp->reserved     = 0;
 
 	set_tp_conf = (const struct rte_flow_action_set_tp *)action->conf;
-	if (tp_src_flag)
+	if (tp_src_flag) {
 		set_tp->src_port = set_tp_conf->port;
-	else
+		set_tp->src_port_mask = RTE_BE16(0xffff);
+	} else {
 		set_tp->dst_port = set_tp_conf->port;
+		set_tp->dst_port_mask = RTE_BE16(0xffff);
+	}
 }
 
 static int
@@ -2227,6 +2254,7 @@ nfp_flow_action_set_ttl(char *act_data,
 
 	ttl_conf = (const struct rte_flow_action_set_ttl *)action->conf;
 	ttl_tos->ipv4_ttl = ttl_conf->ttl_value;
+	ttl_tos->ipv4_ttl_mask = 0xff;
 	ttl_tos->reserved = 0;
 }
 
@@ -2250,6 +2278,7 @@ nfp_flow_action_set_hl(char *act_data,
 
 	ttl_conf = (const struct rte_flow_action_set_ttl *)action->conf;
 	tc_hl->ipv6_hop_limit = ttl_conf->ttl_value;
+	tc_hl->ipv6_hop_limit_mask = 0xff;
 	tc_hl->reserved = 0;
 }
 
@@ -2273,6 +2302,7 @@ nfp_flow_action_set_tos(char *act_data,
 
 	tos_conf = (const struct rte_flow_action_set_dscp *)action->conf;
 	ttl_tos->ipv4_tos = tos_conf->dscp;
+	ttl_tos->ipv4_tos_mask = 0xff;
 	ttl_tos->reserved = 0;
 }
 
@@ -2296,6 +2326,7 @@ nfp_flow_action_set_tc(char *act_data,
 
 	tos_conf = (const struct rte_flow_action_set_dscp *)action->conf;
 	tc_hl->ipv6_tc = tos_conf->dscp;
+	tc_hl->ipv6_tc_mask = 0xff;
 	tc_hl->reserved = 0;
 }
 
@@ -2675,6 +2706,7 @@ nfp_flow_action_vxlan_encap_v4(struct nfp_app_fw_flower *app_fw_flower,
 		struct nfp_fl_rule_metadata *nfp_flow_meta,
 		struct nfp_fl_tun *tun)
 {
+	uint64_t tun_id;
 	struct nfp_fl_act_pre_tun *pre_tun;
 	struct nfp_fl_act_set_tun *set_tun;
 	const struct rte_flow_item_eth *eth;
@@ -2693,7 +2725,8 @@ nfp_flow_action_vxlan_encap_v4(struct nfp_app_fw_flower *app_fw_flower,
 
 	set_tun = (struct nfp_fl_act_set_tun *)(act_data + act_pre_size);
 	memset(set_tun, 0, act_set_size);
-	nfp_flow_set_tun_process(set_tun, NFP_FL_TUN_VXLAN, vxlan->hdr.vx_vni,
+	tun_id = rte_be_to_cpu_32(vxlan->hdr.vx_vni);
+	nfp_flow_set_tun_process(set_tun, NFP_FL_TUN_VXLAN, tun_id,
 			ipv4->hdr.time_to_live, ipv4->hdr.type_of_service);
 	set_tun->tun_flags = vxlan->hdr.vx_flags;
 
@@ -2710,6 +2743,7 @@ nfp_flow_action_vxlan_encap_v6(struct nfp_app_fw_flower *app_fw_flower,
 		struct nfp_fl_rule_metadata *nfp_flow_meta,
 		struct nfp_fl_tun *tun)
 {
+	uint64_t tun_id;
 	struct nfp_fl_act_pre_tun *pre_tun;
 	struct nfp_fl_act_set_tun *set_tun;
 	const struct rte_flow_item_eth *eth;
@@ -2728,7 +2762,8 @@ nfp_flow_action_vxlan_encap_v6(struct nfp_app_fw_flower *app_fw_flower,
 
 	set_tun = (struct nfp_fl_act_set_tun *)(act_data + act_pre_size);
 	memset(set_tun, 0, act_set_size);
-	nfp_flow_set_tun_process(set_tun, NFP_FL_TUN_VXLAN, vxlan->hdr.vx_vni,
+	tun_id = rte_be_to_cpu_32(vxlan->hdr.vx_vni);
+	nfp_flow_set_tun_process(set_tun, NFP_FL_TUN_VXLAN, tun_id,
 			ipv6->hdr.hop_limits,
 			(ipv6->hdr.vtc_flow >> RTE_IPV6_HDR_TC_SHIFT) & 0xff);
 	set_tun->tun_flags = vxlan->hdr.vx_flags;
@@ -3233,11 +3268,68 @@ nfp_flow_action_raw_encap(struct nfp_app_fw_flower *app_fw_flower,
 }
 
 static int
+nfp_flow_action_meter(struct nfp_flower_representor *representor,
+		const struct rte_flow_action *action,
+		char *act_data,
+		uint32_t *mtr_id)
+{
+	struct nfp_mtr *mtr;
+	struct nfp_fl_act_meter *fl_meter;
+	struct nfp_app_fw_flower *app_fw_flower;
+	const struct rte_flow_action_meter *meter;
+	size_t act_size = sizeof(struct nfp_fl_act_meter);
+
+	meter = action->conf;
+	fl_meter = (struct nfp_fl_act_meter *)act_data;
+	app_fw_flower = representor->app_fw_flower;
+
+	mtr = nfp_mtr_find_by_mtr_id(app_fw_flower->mtr_priv, meter->mtr_id);
+	if (mtr == NULL) {
+		PMD_DRV_LOG(ERR, "Meter id not exist");
+		return -EINVAL;
+	}
+
+	if (!mtr->enable) {
+		PMD_DRV_LOG(ERR, "Requested meter disable");
+		return -EINVAL;
+	}
+
+	if (!mtr->shared && mtr->ref_cnt > 0) {
+		PMD_DRV_LOG(ERR, "Can't use a used unshared meter");
+		return -EINVAL;
+	}
+
+	*mtr_id = meter->mtr_id;
+
+	fl_meter->head.jump_id = NFP_FL_ACTION_OPCODE_METER;
+	fl_meter->head.len_lw = act_size >> NFP_FL_LW_SIZ;
+	fl_meter->reserved = 0;
+	fl_meter->profile_id = rte_cpu_to_be_32(mtr->mtr_profile->profile_id);
+
+	return 0;
+}
+
+static uint32_t
+nfp_flow_count_output(const struct rte_flow_action actions[])
+{
+	uint32_t count = 0;
+	const struct rte_flow_action *action;
+
+	for (action = actions; action->type != RTE_FLOW_ACTION_TYPE_END; ++action) {
+		if (action->type == RTE_FLOW_ACTION_TYPE_PORT_ID)
+			count++;
+	}
+
+	return count;
+}
+
+static int
 nfp_flow_compile_action(struct nfp_flower_representor *representor,
 		const struct rte_flow_action actions[],
 		struct rte_flow *nfp_flow)
 {
 	int ret = 0;
+	uint32_t count;
 	char *position;
 	char *action_data;
 	bool ttl_tos_flag = false;
@@ -3256,6 +3348,8 @@ nfp_flow_compile_action(struct nfp_flower_representor *representor,
 	position      = action_data;
 	meta_tci = (struct nfp_flower_meta_tci *)nfp_flow->payload.unmasked_data;
 
+	count = nfp_flow_count_output(actions);
+
 	for (action = actions; action->type != RTE_FLOW_ACTION_TYPE_END; ++action) {
 		switch (action->type) {
 		case RTE_FLOW_ACTION_TYPE_VOID:
@@ -3272,7 +3366,8 @@ nfp_flow_compile_action(struct nfp_flower_representor *representor,
 			break;
 		case RTE_FLOW_ACTION_TYPE_PORT_ID:
 			PMD_DRV_LOG(DEBUG, "Process RTE_FLOW_ACTION_TYPE_PORT_ID");
-			ret = nfp_flow_action_output(position, action, nfp_flow_meta);
+			count--;
+			ret = nfp_flow_action_output(position, action, nfp_flow_meta, count);
 			if (ret != 0) {
 				PMD_DRV_LOG(ERR, "Failed when process"
 						" RTE_FLOW_ACTION_TYPE_PORT_ID");
@@ -3435,6 +3530,14 @@ nfp_flow_compile_action(struct nfp_flower_representor *representor,
 			if (action->conf != NULL)
 				nfp_flow->tun.payload.v6_flag = 1;
 			break;
+		case RTE_FLOW_ACTION_TYPE_METER:
+			PMD_DRV_LOG(DEBUG, "Process RTE_FLOW_ACTION_TYPE_METER");
+			ret = nfp_flow_action_meter(representor, action,
+					position, &nfp_flow->mtr_id);
+			if (ret != 0)
+				return -EINVAL;
+			position += sizeof(struct nfp_fl_act_meter);
+			break;
 		default:
 			PMD_DRV_LOG(ERR, "Unsupported action type: %d", action->type);
 			return -ENOTSUP;
@@ -3484,7 +3587,7 @@ nfp_flow_process(struct nfp_flower_representor *representor,
 		return NULL;
 	}
 
-	nfp_flow = nfp_flow_alloc(&key_layer);
+	nfp_flow = nfp_flow_alloc(&key_layer, representor->port_id);
 	if (nfp_flow == NULL) {
 		PMD_DRV_LOG(ERR, "Alloc nfp flow failed.");
 		goto free_stats;
@@ -3552,7 +3655,7 @@ nfp_flow_setup(struct nfp_flower_representor *representor,
 		const struct rte_flow_attr *attr,
 		const struct rte_flow_item items[],
 		const struct rte_flow_action actions[],
-		struct rte_flow_error *error,
+		__rte_unused struct rte_flow_error *error,
 		bool validate_flag)
 {
 	if (attr->group != 0)
@@ -3563,18 +3666,6 @@ nfp_flow_setup(struct nfp_flower_representor *representor,
 
 	if (attr->transfer != 0)
 		PMD_DRV_LOG(INFO, "Pretend we support transfer attribute.");
-
-	if (attr->egress != 0) {
-		rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
-				NULL, "Egress is not supported.");
-		return NULL;
-	}
-
-	if (attr->ingress == 0) {
-		rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_INGRESS,
-				NULL, "Only ingress is supported.");
-		return NULL;
-	}
 
 	return nfp_flow_process(representor, items, actions, validate_flag);
 }
@@ -3592,6 +3683,7 @@ nfp_flow_teardown(struct nfp_flow_priv *priv,
 	nfp_flow_meta = nfp_flow->payload.meta;
 	mask_data = nfp_flow->payload.mask_data;
 	mask_len = nfp_flow_meta->mask_len << NFP_FL_LW_SIZ;
+	nfp_flow_meta->flags &= ~NFP_FL_META_FLAG_MANAGE_MASK;
 	if (!nfp_check_mask_remove(priv, mask_data, mask_len,
 			&nfp_flow_meta->flags)) {
 		PMD_DRV_LOG(ERR, "nfp mask del check failed.");
@@ -3683,6 +3775,18 @@ nfp_flow_create(struct rte_eth_dev *dev,
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
 				NULL, "Add flow to the flow table failed.");
 		goto flow_teardown;
+	}
+
+	/* Update meter object ref count */
+	if (nfp_flow->mtr_id != NFP_MAX_MTR_CNT) {
+		ret = nfp_mtr_update_ref_cnt(app_fw_flower->mtr_priv,
+				nfp_flow->mtr_id, true);
+		if (ret != 0) {
+			rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					NULL, "Update meter ref_cnt failed.");
+			goto flow_teardown;
+		}
 	}
 
 	return nfp_flow;
@@ -3777,6 +3881,17 @@ nfp_flow_destroy(struct rte_eth_dev *dev,
 		goto exit;
 	}
 
+	/* Update meter object ref count */
+	if (nfp_flow->mtr_id != NFP_MAX_MTR_CNT) {
+		ret = nfp_mtr_update_ref_cnt(app_fw_flower->mtr_priv,
+				nfp_flow->mtr_id, false);
+		if (ret != 0) {
+			rte_flow_error_set(error, EINVAL,
+					RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					NULL, "Update meter ref_cnt failed.");
+		}
+	}
+
 exit:
 	nfp_flow_free(nfp_flow);
 
@@ -3791,14 +3906,21 @@ nfp_flow_flush(struct rte_eth_dev *dev,
 	void *next_data;
 	uint32_t iter = 0;
 	const void *next_key;
+	struct rte_flow *nfp_flow;
 	struct nfp_flow_priv *priv;
+	struct nfp_flower_representor *representor;
+
+	representor = dev->data->dev_private;
 
 	priv = nfp_flow_dev_to_priv(dev);
 
 	while (rte_hash_iterate(priv->flow_table, &next_key, &next_data, &iter) >= 0) {
-		ret = nfp_flow_destroy(dev, (struct rte_flow *)next_data, error);
-		if (ret != 0)
-			break;
+		nfp_flow = next_data;
+		if (nfp_flow->port_id == representor->port_id) {
+			ret = nfp_flow_destroy(dev, nfp_flow, error);
+			if (ret != 0)
+				break;
+		}
 	}
 
 	return ret;
@@ -3809,6 +3931,7 @@ nfp_flow_stats_get(struct rte_eth_dev *dev,
 		struct rte_flow *nfp_flow,
 		void *data)
 {
+	bool reset;
 	uint32_t ctx_id;
 	struct rte_flow *flow;
 	struct nfp_flow_priv *priv;
@@ -3823,6 +3946,7 @@ nfp_flow_stats_get(struct rte_eth_dev *dev,
 	}
 
 	query = (struct rte_flow_query_count *)data;
+	reset = query->reset;
 	memset(query, 0, sizeof(*query));
 
 	ctx_id = rte_be_to_cpu_32(nfp_flow->payload.meta->host_ctx_id);
@@ -3834,7 +3958,7 @@ nfp_flow_stats_get(struct rte_eth_dev *dev,
 		query->bytes = stats->bytes;
 		query->hits_set = 1;
 		query->bytes_set = 1;
-		if (query->reset != 0) {
+		if (reset) {
 			stats->pkts = 0;
 			stats->bytes = 0;
 		}

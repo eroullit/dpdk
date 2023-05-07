@@ -7,6 +7,10 @@ if is_windows
     subdir_done()
 endif
 
+if dpdk_conf.get('RTE_IOVA_IN_MBUF') == 0
+    subdir_done()
+endif
+
 sources = files(
         'base/vnic_cq.c',
         'base/vnic_dev.c',
@@ -39,3 +43,5 @@ elif cc.has_argument('-mavx2') and dpdk_conf.get('RTE_ARCH_64')
             c_args: [cflags, '-mavx2'])
     objs += enic_avx2_lib.extract_objects('enic_rxtx_vec_avx2.c')
 endif
+
+annotate_locks = false

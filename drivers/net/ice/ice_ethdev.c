@@ -28,6 +28,7 @@
 /* devargs */
 #define ICE_SAFE_MODE_SUPPORT_ARG "safe-mode-support"
 #define ICE_PIPELINE_MODE_SUPPORT_ARG  "pipeline-mode-support"
+#define ICE_DEFAULT_MAC_DISABLE   "default-mac-disable"
 #define ICE_PROTO_XTR_ARG         "proto_xtr"
 #define ICE_FIELD_OFFS_ARG		  "field_offs"
 #define ICE_FIELD_NAME_ARG		  "field_name"
@@ -49,6 +50,7 @@ static const char * const ice_valid_args[] = {
 	ICE_HW_DEBUG_MASK_ARG,
 	ICE_ONE_PPS_OUT_ARG,
 	ICE_RX_LOW_LATENCY_ARG,
+	ICE_DEFAULT_MAC_DISABLE,
 	NULL
 };
 
@@ -916,6 +918,7 @@ static int
 ice_init_mac_address(struct rte_eth_dev *dev)
 {
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct ice_adapter *ad = (struct ice_adapter *)hw->back;
 
 	if (!rte_is_unicast_ether_addr
 		((struct rte_ether_addr *)hw->port_info[0].mac.lan_addr)) {
@@ -935,9 +938,9 @@ ice_init_mac_address(struct rte_eth_dev *dev)
 		return -ENOMEM;
 	}
 	/* store it to dev data */
-	rte_ether_addr_copy(
-		(struct rte_ether_addr *)hw->port_info[0].mac.perm_addr,
-		&dev->data->mac_addrs[0]);
+	if (ad->devargs.default_mac_disable != 1)
+		rte_ether_addr_copy((struct rte_ether_addr *)hw->port_info[0].mac.perm_addr,
+			&dev->data->mac_addrs[0]);
 	return 0;
 }
 
@@ -962,8 +965,14 @@ ice_add_mac_filter(struct ice_vsi *vsi, struct rte_ether_addr *mac_addr)
 	struct ice_mac_filter *f;
 	struct LIST_HEAD_TYPE list_head;
 	struct ice_hw *hw = ICE_VSI_TO_HW(vsi);
+	struct ice_adapter *ad = (struct ice_adapter *)hw->back;
 	int ret = 0;
 
+	if (ad->devargs.default_mac_disable == 1 && rte_is_same_ether_addr(mac_addr,
+			(struct rte_ether_addr *)hw->port_info[0].mac.perm_addr)) {
+		PMD_DRV_LOG(ERR, "This Default MAC filter is disabled.");
+		return 0;
+	}
 	/* If it's added and configured, return */
 	f = ice_find_mac_filter(vsi, mac_addr);
 	if (f) {
@@ -2075,6 +2084,11 @@ static int ice_parse_devargs(struct rte_eth_dev *dev)
 	if (ret)
 		goto bail;
 
+	ret = rte_kvargs_process(kvlist, ICE_DEFAULT_MAC_DISABLE,
+				&parse_bool, &ad->devargs.default_mac_disable);
+	if (ret)
+		goto bail;
+
 	ret = rte_kvargs_process(kvlist, ICE_HW_DEBUG_MASK_ARG,
 				 &parse_u64, &ad->hw.debug_mask);
 	if (ret)
@@ -2398,6 +2412,17 @@ ice_dev_init(struct rte_eth_dev *dev)
 
 	/* Initialize TM configuration */
 	ice_tm_conf_init(dev);
+
+	if (ice_is_e810(hw))
+		hw->phy_cfg = ICE_PHY_E810;
+	else
+		hw->phy_cfg = ICE_PHY_E822;
+
+	if (hw->phy_cfg == ICE_PHY_E822) {
+		ret = ice_start_phy_timer_e822(hw, hw->pf_id, true);
+		if (ret)
+			PMD_INIT_LOG(ERR, "Failed to start phy timer\n");
+	}
 
 	if (!ad->is_safe_mode) {
 		ret = ice_flow_init(ad);
@@ -5800,11 +5825,6 @@ ice_timesync_enable(struct rte_eth_dev *dev)
 		return -1;
 	}
 
-	if (ice_is_e810(hw))
-		hw->phy_cfg = ICE_PHY_E810;
-	else
-		hw->phy_cfg = ICE_PHY_E822;
-
 	if (hw->func_caps.ts_func_info.src_tmr_owned) {
 		ret = ice_ptp_init_phc(hw);
 		if (ret) {
@@ -5925,16 +5945,17 @@ ice_timesync_read_time(struct rte_eth_dev *dev, struct timespec *ts)
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ice_adapter *ad =
 			ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	uint8_t tmr_idx = hw->func_caps.ts_func_info.tmr_index_assoc;
 	uint32_t hi, lo, lo2;
 	uint64_t time, ns;
 
-	lo = ICE_READ_REG(hw, GLTSYN_TIME_L(0));
-	hi = ICE_READ_REG(hw, GLTSYN_TIME_H(0));
-	lo2 = ICE_READ_REG(hw, GLTSYN_TIME_L(0));
+	lo = ICE_READ_REG(hw, GLTSYN_TIME_L(tmr_idx));
+	hi = ICE_READ_REG(hw, GLTSYN_TIME_H(tmr_idx));
+	lo2 = ICE_READ_REG(hw, GLTSYN_TIME_L(tmr_idx));
 
 	if (lo2 < lo) {
-		lo = ICE_READ_REG(hw, GLTSYN_TIME_L(0));
-		hi = ICE_READ_REG(hw, GLTSYN_TIME_H(0));
+		lo = ICE_READ_REG(hw, GLTSYN_TIME_L(tmr_idx));
+		hi = ICE_READ_REG(hw, GLTSYN_TIME_H(tmr_idx));
 	}
 
 	time = ((uint64_t)hi << 32) | lo;
@@ -5950,6 +5971,7 @@ ice_timesync_disable(struct rte_eth_dev *dev)
 	struct ice_hw *hw = ICE_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct ice_adapter *ad =
 			ICE_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	uint8_t tmr_idx = hw->func_caps.ts_func_info.tmr_index_assoc;
 	uint64_t val;
 	uint8_t lport;
 
@@ -5957,12 +5979,12 @@ ice_timesync_disable(struct rte_eth_dev *dev)
 
 	ice_clear_phy_tstamp(hw, lport, 0);
 
-	val = ICE_READ_REG(hw, GLTSYN_ENA(0));
+	val = ICE_READ_REG(hw, GLTSYN_ENA(tmr_idx));
 	val &= ~GLTSYN_ENA_TSYN_ENA_M;
-	ICE_WRITE_REG(hw, GLTSYN_ENA(0), val);
+	ICE_WRITE_REG(hw, GLTSYN_ENA(tmr_idx), val);
 
-	ICE_WRITE_REG(hw, GLTSYN_INCVAL_L(0), 0);
-	ICE_WRITE_REG(hw, GLTSYN_INCVAL_H(0), 0);
+	ICE_WRITE_REG(hw, GLTSYN_INCVAL_L(tmr_idx), 0);
+	ICE_WRITE_REG(hw, GLTSYN_INCVAL_H(tmr_idx), 0);
 
 	ad->ptp_ena = 0;
 
@@ -6050,6 +6072,7 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ice,
 			      ICE_PROTO_XTR_ARG "=[queue:]<vlan|ipv4|ipv6|ipv6_flow|tcp|ip_offset>"
 			      ICE_SAFE_MODE_SUPPORT_ARG "=<0|1>"
 			      ICE_PIPELINE_MODE_SUPPORT_ARG "=<0|1>"
+			      ICE_DEFAULT_MAC_DISABLE "=<0|1>"
 			      ICE_RX_LOW_LATENCY_ARG "=<0|1>");
 
 RTE_LOG_REGISTER_SUFFIX(ice_logtype_init, init, NOTICE);

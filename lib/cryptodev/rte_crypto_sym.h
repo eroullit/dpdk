@@ -177,6 +177,7 @@ enum rte_crypto_cipher_algorithm {
 };
 
 /** Cipher algorithm name strings */
+__rte_deprecated
 extern const char *
 rte_crypto_cipher_algorithm_strings[];
 
@@ -373,11 +374,17 @@ enum rte_crypto_auth_algorithm {
 	/**< 512 bit SHA3 algorithm. */
 	RTE_CRYPTO_AUTH_SHA3_512_HMAC,
 	/**< HMAC using 512 bit SHA3 algorithm. */
-	RTE_CRYPTO_AUTH_SM3
+	RTE_CRYPTO_AUTH_SM3,
 	/**< ShangMi 3 (SM3) algorithm */
+
+	RTE_CRYPTO_AUTH_SHAKE_128,
+	/**< 128 bit SHAKE algorithm. */
+	RTE_CRYPTO_AUTH_SHAKE_256,
+	/**< 256 bit SHAKE algorithm. */
 };
 
 /** Authentication algorithm name strings */
+__rte_deprecated
 extern const char *
 rte_crypto_auth_algorithm_strings[];
 
@@ -482,6 +489,7 @@ enum rte_crypto_aead_algorithm {
 };
 
 /** AEAD algorithm name strings */
+__rte_deprecated
 extern const char *
 rte_crypto_aead_algorithm_strings[];
 
@@ -574,6 +582,7 @@ enum rte_crypto_sym_xform_type {
  * hold a single transform, the type field is used to specify which transform
  * is contained within the union
  */
+/* Structure rte_crypto_sym_xform 8< */
 struct rte_crypto_sym_xform {
 	struct rte_crypto_sym_xform *next;
 	/**< next xform in chain */
@@ -589,6 +598,7 @@ struct rte_crypto_sym_xform {
 		/**< AEAD xform */
 	};
 };
+/* >8 End of structure rte_crypto_sym_xform. */
 
 /**
  * Symmetric Cryptographic Operation.
@@ -620,6 +630,7 @@ struct rte_crypto_sym_xform {
  * destination buffer being at a different alignment, relative to buffer start,
  * to the data in the source buffer.
  */
+/* Structure rte_crypto_sym_op 8< */
 struct rte_crypto_sym_op {
 	struct rte_mbuf *m_src;	/**< source mbuf */
 	struct rte_mbuf *m_dst;	/**< destination mbuf */
@@ -881,6 +892,7 @@ struct rte_crypto_sym_op {
 		};
 	};
 };
+/* >8 End of structure rte_crypto_sym_op. */
 
 
 /**

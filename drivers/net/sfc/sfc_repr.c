@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#include <rte_flow_driver.h>
+#include <rte_flow.h>
 #include <rte_mbuf.h>
 #include <rte_ethdev.h>
 #include <rte_malloc.h>
@@ -110,39 +112,11 @@ sfc_repr_by_eth_dev(struct rte_eth_dev *eth_dev)
  * change the lock in one place.
  */
 
-static inline void
-sfc_repr_lock_init(struct sfc_repr *sr)
-{
-	rte_spinlock_init(&sr->lock);
-}
-
-#if defined(RTE_LIBRTE_SFC_EFX_DEBUG) || defined(RTE_ENABLE_ASSERT)
-
-static inline int
-sfc_repr_lock_is_locked(struct sfc_repr *sr)
-{
-	return rte_spinlock_is_locked(&sr->lock);
-}
-
-#endif
-
-static inline void
-sfc_repr_lock(struct sfc_repr *sr)
-{
-	rte_spinlock_lock(&sr->lock);
-}
-
-static inline void
-sfc_repr_unlock(struct sfc_repr *sr)
-{
-	rte_spinlock_unlock(&sr->lock);
-}
-
-static inline void
-sfc_repr_lock_fini(__rte_unused struct sfc_repr *sr)
-{
-	/* Just for symmetry of the API */
-}
+#define sfc_repr_lock_init(sr) rte_spinlock_init(&(sr)->lock)
+#define sfc_repr_lock_is_locked(sr) rte_spinlock_is_locked(&(sr)->lock)
+#define sfc_repr_lock(sr) rte_spinlock_lock(&(sr)->lock)
+#define sfc_repr_unlock(sr) rte_spinlock_unlock(&(sr)->lock)
+#define sfc_repr_lock_fini(sr) RTE_SET_USED(sr)
 
 static void
 sfc_repr_rx_queue_stop(void *queue)
@@ -834,6 +808,8 @@ sfc_repr_dev_close(struct rte_eth_dev *dev)
 
 	(void)sfc_repr_proxy_del_port(srs->pf_port_id, srs->repr_id);
 
+	sfc_mae_clear_switch_port(srs->switch_domain_id, srs->switch_port_id);
+
 	dev->rx_pkt_burst = NULL;
 	dev->tx_pkt_burst = NULL;
 	dev->dev_ops = NULL;
@@ -888,6 +864,29 @@ sfc_repr_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	return 0;
 }
 
+static int
+sfc_repr_flow_pick_transfer_proxy(struct rte_eth_dev *dev,
+				  uint16_t *transfer_proxy_port,
+				  struct rte_flow_error *error)
+{
+	struct sfc_repr_shared *srs = sfc_repr_shared_by_eth_dev(dev);
+
+	return rte_flow_pick_transfer_proxy(srs->pf_port_id,
+					    transfer_proxy_port, error);
+}
+
+const struct rte_flow_ops sfc_repr_flow_ops = {
+	.pick_transfer_proxy = sfc_repr_flow_pick_transfer_proxy,
+};
+
+static int
+sfc_repr_dev_flow_ops_get(struct rte_eth_dev *dev __rte_unused,
+			  const struct rte_flow_ops **ops)
+{
+	*ops = &sfc_repr_flow_ops;
+	return 0;
+}
+
 static const struct eth_dev_ops sfc_repr_dev_ops = {
 	.dev_configure			= sfc_repr_dev_configure,
 	.dev_start			= sfc_repr_dev_start,
@@ -901,6 +900,7 @@ static const struct eth_dev_ops sfc_repr_dev_ops = {
 	.rx_queue_release		= sfc_repr_rx_queue_release,
 	.tx_queue_setup			= sfc_repr_tx_queue_setup,
 	.tx_queue_release		= sfc_repr_tx_queue_release,
+	.flow_ops_get			= sfc_repr_dev_flow_ops_get,
 };
 
 

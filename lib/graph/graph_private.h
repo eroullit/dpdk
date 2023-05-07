@@ -10,6 +10,7 @@
 
 #include <rte_common.h>
 #include <rte_eal.h>
+#include <rte_spinlock.h>
 
 #include "rte_graph.h"
 #include "rte_graph_worker.h"
@@ -22,6 +23,7 @@ extern int rte_graph_logtype;
 			__func__, __LINE__, RTE_FMT_TAIL(__VA_ARGS__, )))
 
 #define graph_err(...) GRAPH_LOG(ERR, __VA_ARGS__)
+#define graph_warn(...) GRAPH_LOG(WARNING, __VA_ARGS__)
 #define graph_info(...) GRAPH_LOG(INFO, __VA_ARGS__)
 #define graph_dbg(...) GRAPH_LOG(DEBUG, __VA_ARGS__)
 
@@ -100,6 +102,10 @@ struct graph {
 	/**< Memory size of the graph. */
 	int socket;
 	/**< Socket identifier where memory is allocated. */
+	uint64_t num_pkt_to_capture;
+	/**< Number of packets to be captured per core. */
+	char pcap_filename[RTE_GRAPH_PCAP_FILE_SZ];
+	/**< pcap file name/path. */
 	STAILQ_HEAD(gnode_list, graph_node) node_list;
 	/**< Nodes in a graph. */
 };
@@ -143,20 +149,25 @@ STAILQ_HEAD(graph_head, graph);
  */
 struct graph_head *graph_list_head_get(void);
 
+rte_spinlock_t *
+graph_spinlock_get(void);
+
 /* Lock functions */
 /**
  * @internal
  *
  * Take a lock on the graph internal spin lock.
  */
-void graph_spinlock_lock(void);
+void graph_spinlock_lock(void)
+	__rte_exclusive_lock_function(graph_spinlock_get());
 
 /**
  * @internal
  *
  * Release a lock on the graph internal spin lock.
  */
-void graph_spinlock_unlock(void);
+void graph_spinlock_unlock(void)
+	__rte_unlock_function(graph_spinlock_get());
 
 /* Graph operations */
 /**

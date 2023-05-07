@@ -28,6 +28,7 @@
 #include <bus_pci_driver.h>
 #include <rte_mbuf.h>
 #include <rte_common.h>
+#include <rte_eal_paging.h>
 #include <rte_interrupts.h>
 #include <rte_malloc.h>
 #include <rte_string_fns.h>
@@ -1034,7 +1035,8 @@ int
 mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 {
 	char ifname[IF_NAMESIZE];
-	char port_name[IF_NAMESIZE];
+	char *port_name = NULL;
+	size_t port_name_size = 0;
 	FILE *file;
 	struct mlx5_switch_info data = {
 		.master = 0,
@@ -1047,6 +1049,7 @@ mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 	bool port_switch_id_set = false;
 	bool device_dir = false;
 	char c;
+	ssize_t line_size;
 
 	if (!if_indextoname(ifindex, ifname)) {
 		rte_errno = errno;
@@ -1062,8 +1065,21 @@ mlx5_sysfs_switch_info(unsigned int ifindex, struct mlx5_switch_info *info)
 
 	file = fopen(phys_port_name, "rb");
 	if (file != NULL) {
-		if (fgets(port_name, IF_NAMESIZE, file) != NULL)
+		char *tail_nl;
+
+		line_size = getline(&port_name, &port_name_size, file);
+		if (line_size < 0) {
+			fclose(file);
+			rte_errno = errno;
+			return -rte_errno;
+		} else if (line_size > 0) {
+			/* Remove tailing newline character. */
+			tail_nl = strchr(port_name, '\n');
+			if (tail_nl)
+				*tail_nl = '\0';
 			mlx5_translate_port_name(port_name, &data);
+		}
+		free(port_name);
 		fclose(file);
 	}
 	file = fopen(phys_switch_id, "rb");
@@ -1776,3 +1792,70 @@ exit:
 	mlx5_free(sset_info);
 	return ret;
 }
+
+/**
+ * Unmaps HCA PCI BAR from the current process address space.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ */
+void mlx5_txpp_unmap_hca_bar(struct rte_eth_dev *dev)
+{
+	struct mlx5_proc_priv *ppriv = dev->process_private;
+
+	if (ppriv && ppriv->hca_bar) {
+		rte_mem_unmap(ppriv->hca_bar, MLX5_ST_SZ_BYTES(initial_seg));
+		ppriv->hca_bar = NULL;
+	}
+}
+
+/**
+ * Maps HCA PCI BAR to the current process address space.
+ * Stores pointer in the process private structure allowing
+ * to read internal and real time counter directly from the HW.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ *
+ * @return
+ *   0 on success and not NULL pointer to mapped area in process structure.
+ *   negative otherwise and NULL pointer
+ */
+int mlx5_txpp_map_hca_bar(struct rte_eth_dev *dev)
+{
+	struct mlx5_proc_priv *ppriv = dev->process_private;
+	char pci_addr[PCI_PRI_STR_SIZE] = { 0 };
+	void *base, *expected = NULL;
+	int fd, ret;
+
+	if (!ppriv) {
+		rte_errno = ENOMEM;
+		return -rte_errno;
+	}
+	if (ppriv->hca_bar)
+		return 0;
+	ret = mlx5_dev_to_pci_str(dev->device, pci_addr, sizeof(pci_addr));
+	if (ret < 0)
+		return -rte_errno;
+	/* Open PCI device resource 0 - HCA initialize segment */
+	MKSTR(name, "/sys/bus/pci/devices/%s/resource0", pci_addr);
+	fd = open(name, O_RDWR | O_SYNC);
+	if (fd == -1) {
+		rte_errno = ENOTSUP;
+		return -ENOTSUP;
+	}
+	base = rte_mem_map(NULL, MLX5_ST_SZ_BYTES(initial_seg),
+			   RTE_PROT_READ, RTE_MAP_SHARED, fd, 0);
+	close(fd);
+	if (!base) {
+		rte_errno = ENOTSUP;
+		return -ENOTSUP;
+	}
+	/* Check there is no concurrent mapping in other thread. */
+	if (!__atomic_compare_exchange_n(&ppriv->hca_bar, &expected,
+					 base, false,
+					 __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+		rte_mem_unmap(base, MLX5_ST_SZ_BYTES(initial_seg));
+	return 0;
+}
+

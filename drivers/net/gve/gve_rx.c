@@ -20,14 +20,17 @@ gve_rx_refill(struct gve_rx_queue *rxq)
 	if (nb_alloc <= rxq->nb_avail) {
 		diag = rte_pktmbuf_alloc_bulk(rxq->mpool, &rxq->sw_ring[idx], nb_alloc);
 		if (diag < 0) {
+			rxq->stats.no_mbufs_bulk++;
 			for (i = 0; i < nb_alloc; i++) {
 				nmb = rte_pktmbuf_alloc(rxq->mpool);
 				if (!nmb)
 					break;
 				rxq->sw_ring[idx + i] = nmb;
 			}
-			if (i != nb_alloc)
+			if (i != nb_alloc) {
+				rxq->stats.no_mbufs += nb_alloc - i;
 				nb_alloc = i;
+			}
 		}
 		rxq->nb_avail -= nb_alloc;
 		next_avail += nb_alloc;
@@ -53,13 +56,17 @@ gve_rx_refill(struct gve_rx_queue *rxq)
 			nb_alloc = rxq->nb_rx_desc - idx;
 		diag = rte_pktmbuf_alloc_bulk(rxq->mpool, &rxq->sw_ring[idx], nb_alloc);
 		if (diag < 0) {
+			rxq->stats.no_mbufs_bulk++;
 			for (i = 0; i < nb_alloc; i++) {
 				nmb = rte_pktmbuf_alloc(rxq->mpool);
 				if (!nmb)
 					break;
 				rxq->sw_ring[idx + i] = nmb;
 			}
-			nb_alloc = i;
+			if (i != nb_alloc) {
+				rxq->stats.no_mbufs += nb_alloc - i;
+				nb_alloc = i;
+			}
 		}
 		rxq->nb_avail -= nb_alloc;
 		next_avail += nb_alloc;
@@ -88,6 +95,7 @@ gve_rx_burst(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	uint16_t rx_id = rxq->rx_tail;
 	struct rte_mbuf *rxe;
 	uint16_t nb_rx, len;
+	uint64_t bytes = 0;
 	uint64_t addr;
 	uint16_t i;
 
@@ -99,8 +107,10 @@ gve_rx_burst(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		if (GVE_SEQNO(rxd->flags_seq) != rxq->expected_seqno)
 			break;
 
-		if (rxd->flags_seq & GVE_RXF_ERR)
+		if (rxd->flags_seq & GVE_RXF_ERR) {
+			rxq->stats.errors++;
 			continue;
+		}
 
 		len = rte_be_to_cpu_16(rxd->len) - GVE_RX_PAD;
 		rxe = rxq->sw_ring[rx_id];
@@ -135,6 +145,7 @@ gve_rx_burst(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			rx_id = 0;
 
 		rx_pkts[nb_rx] = rxe;
+		bytes += len;
 		nb_rx++;
 	}
 
@@ -143,6 +154,11 @@ gve_rx_burst(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 	if (rxq->nb_avail > rxq->free_thresh)
 		gve_rx_refill(rxq);
+
+	if (nb_rx) {
+		rxq->stats.packets += nb_rx;
+		rxq->stats.bytes += bytes;
+	}
 
 	return nb_rx;
 }

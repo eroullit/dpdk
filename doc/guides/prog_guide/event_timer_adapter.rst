@@ -35,7 +35,7 @@ device upon timer expiration.
 
 The Event Timer Adapter API represents each event timer with a generic struct,
 which contains an event and user metadata.  The ``rte_event_timer`` struct is
-defined in ``lib/event/librte_event_timer_adapter.h``.
+defined in ``rte_event_timer_adapter.h``.
 
 .. _timer_expiry_event:
 
@@ -138,6 +138,24 @@ and setup, it can use the ``rte_event_timer_adapter_create_ext()`` function.
 This function is passed a callback function that will be invoked if the
 adapter needs to create an event port, giving the application the opportunity
 to control how it is done.
+
+Event device configuration for service based adapter
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When ``rte_event_timer_adapter_create()`` is used for creating
+adapter instance, ``rte_event_dev_config::nb_event_ports`` is
+automatically incremented, and the event device is reconfigured
+with additional event port during service initialization.
+This event device reconfigure logic also increments the
+``rte_event_dev_config::nb_single_link_event_port_queues``
+parameter if the adapter event port config is of type
+``RTE_EVENT_PORT_CFG_SINGLE_LINK``.
+
+Application no longer needs to account for the
+``rte_event_dev_config::nb_event_ports`` and
+``rte_event_dev_config::nb_single_link_event_port_queues``
+parameters required for timer adapter in event device configuration,
+when the adapter is created using the above-mentioned API.
 
 Adapter modes
 ^^^^^^^^^^^^^

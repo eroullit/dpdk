@@ -304,6 +304,7 @@ struct rte_eth_stats {
 #define RTE_ETH_LINK_SPEED_56G     RTE_BIT32(13) /**<  56 Gbps */
 #define RTE_ETH_LINK_SPEED_100G    RTE_BIT32(14) /**< 100 Gbps */
 #define RTE_ETH_LINK_SPEED_200G    RTE_BIT32(15) /**< 200 Gbps */
+#define RTE_ETH_LINK_SPEED_400G    RTE_BIT32(16) /**< 400 Gbps */
 /**@}*/
 
 /**@{@name Link speed
@@ -323,6 +324,7 @@ struct rte_eth_stats {
 #define RTE_ETH_SPEED_NUM_56G      56000 /**<  56 Gbps */
 #define RTE_ETH_SPEED_NUM_100G    100000 /**< 100 Gbps */
 #define RTE_ETH_SPEED_NUM_200G    200000 /**< 200 Gbps */
+#define RTE_ETH_SPEED_NUM_400G    400000 /**< 400 Gbps */
 #define RTE_ETH_SPEED_NUM_UNKNOWN UINT32_MAX /**< Unknown */
 /**@}*/
 
@@ -2590,6 +2592,55 @@ __rte_experimental
 int rte_eth_hairpin_unbind(uint16_t tx_port, uint16_t rx_port);
 
 /**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ *  Get the number of aggregated ports of the DPDK port (specified with port_id).
+ *  It is used when multiple ports are aggregated into a single one.
+ *
+ *  For the regular physical port doesn't have aggregated ports,
+ *  the number of aggregated ports is reported as 0.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @return
+ *   - (>=0) the number of aggregated port if success.
+ */
+__rte_experimental
+int rte_eth_dev_count_aggr_ports(uint16_t port_id);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ *  Map a Tx queue with an aggregated port of the DPDK port (specified with port_id).
+ *  When multiple ports are aggregated into a single one,
+ *  it allows to choose which port to use for Tx via a queue.
+ *
+ *  The application should use rte_eth_dev_map_aggr_tx_affinity()
+ *  after rte_eth_dev_configure(), rte_eth_tx_queue_setup(), and
+ *  before rte_eth_dev_start().
+ *
+ * @param port_id
+ *   The identifier of the port used in rte_eth_tx_burst().
+ * @param tx_queue_id
+ *   The index of the transmit queue used in rte_eth_tx_burst().
+ *   The value must be in the range [0, nb_tx_queue - 1] previously supplied
+ *   to rte_eth_dev_configure().
+ * @param affinity
+ *   The number of the aggregated port.
+ *   Value 0 means no affinity and traffic could be routed to any aggregated port.
+ *   The first aggregated port is number 1 and so on.
+ *   The maximum number is given by rte_eth_dev_count_aggr_ports().
+ *
+ * @return
+ *   Zero if successful. Non-zero otherwise.
+ */
+__rte_experimental
+int rte_eth_dev_map_aggr_tx_affinity(uint16_t port_id, uint16_t tx_queue_id,
+				     uint8_t affinity);
+
+/**
  * Return the NUMA socket to which an Ethernet device is connected
  *
  * @param port_id
@@ -3226,34 +3277,10 @@ int rte_eth_macaddrs_get(uint16_t port_id, struct rte_ether_addr *ma,
 /**
  * Retrieve the contextual information of an Ethernet device.
  *
- * As part of this function, a number of of fields in dev_info will be
- * initialized as follows:
- *
- * rx_desc_lim = lim
- * tx_desc_lim = lim
- *
- * Where lim is defined within the rte_eth_dev_info_get as
- *
- *  const struct rte_eth_desc_lim lim = {
- *      .nb_max = UINT16_MAX,
- *      .nb_min = 0,
- *      .nb_align = 1,
- *	.nb_seg_max = UINT16_MAX,
- *	.nb_mtu_seg_max = UINT16_MAX,
- *  };
- *
- * device = dev->device
- * min_mtu = RTE_ETHER_MIN_LEN - RTE_ETHER_HDR_LEN - RTE_ETHER_CRC_LEN
- * max_mtu = UINT16_MAX
- *
- * The following fields will be populated if support for dev_infos_get()
- * exists for the device and the rte_eth_dev 'dev' has been populated
- * successfully with a call to it:
- *
- * driver_name = rte_driver_name(rte_dev_driver(dev->device));
- * nb_rx_queues = dev->data->nb_rx_queues
- * nb_tx_queues = dev->data->nb_tx_queues
- * dev_flags = &dev->data->dev_flags
+ * This function returns the Ethernet device information based
+ * on the values stored internally in the device specific data.
+ * For example: number of queues, descriptor limits, device
+ * capabilities and offload flags.
  *
  * @param port_id
  *   The port identifier of the Ethernet device.

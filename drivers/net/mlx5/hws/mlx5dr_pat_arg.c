@@ -94,13 +94,13 @@ static bool mlx5dr_pat_compare_pattern(enum mlx5dr_action_type cur_type,
 	return true;
 }
 
-static struct mlx5dr_pat_cached_pattern *
+static struct mlx5dr_pattern_cache_item *
 mlx5dr_pat_find_cached_pattern(struct mlx5dr_pattern_cache *cache,
 			       struct mlx5dr_action *action,
 			       uint16_t num_of_actions,
 			       __be64 *actions)
 {
-	struct mlx5dr_pat_cached_pattern *cached_pat;
+	struct mlx5dr_pattern_cache_item *cached_pat;
 
 	LIST_FOREACH(cached_pat, &cache->head, next) {
 		if (mlx5dr_pat_compare_pattern(cached_pat->type,
@@ -115,13 +115,13 @@ mlx5dr_pat_find_cached_pattern(struct mlx5dr_pattern_cache *cache,
 	return NULL;
 }
 
-static struct mlx5dr_pat_cached_pattern *
+static struct mlx5dr_pattern_cache_item *
 mlx5dr_pat_get_existing_cached_pattern(struct mlx5dr_pattern_cache *cache,
 				       struct mlx5dr_action *action,
 				       uint16_t num_of_actions,
 				       __be64 *actions)
 {
-	struct mlx5dr_pat_cached_pattern *cached_pattern;
+	struct mlx5dr_pattern_cache_item *cached_pattern;
 
 	cached_pattern = mlx5dr_pat_find_cached_pattern(cache, action, num_of_actions, actions);
 	if (cached_pattern) {
@@ -134,11 +134,11 @@ mlx5dr_pat_get_existing_cached_pattern(struct mlx5dr_pattern_cache *cache,
 	return cached_pattern;
 }
 
-static struct mlx5dr_pat_cached_pattern *
+static struct mlx5dr_pattern_cache_item *
 mlx5dr_pat_get_cached_pattern_by_action(struct mlx5dr_pattern_cache *cache,
 					struct mlx5dr_action *action)
 {
-	struct mlx5dr_pat_cached_pattern *cached_pattern;
+	struct mlx5dr_pattern_cache_item *cached_pattern;
 
 	LIST_FOREACH(cached_pattern, &cache->head, next) {
 		if (cached_pattern->mh_data.pattern_obj->id == action->modify_header.pattern_obj->id)
@@ -148,14 +148,14 @@ mlx5dr_pat_get_cached_pattern_by_action(struct mlx5dr_pattern_cache *cache,
 	return NULL;
 }
 
-static struct mlx5dr_pat_cached_pattern *
+static struct mlx5dr_pattern_cache_item *
 mlx5dr_pat_add_pattern_to_cache(struct mlx5dr_pattern_cache *cache,
 				struct mlx5dr_devx_obj *pattern_obj,
 				enum mlx5dr_action_type type,
 				uint16_t num_of_actions,
 				__be64 *actions)
 {
-	struct mlx5dr_pat_cached_pattern *cached_pattern;
+	struct mlx5dr_pattern_cache_item *cached_pattern;
 
 	cached_pattern = simple_calloc(1, sizeof(*cached_pattern));
 	if (!cached_pattern) {
@@ -189,7 +189,7 @@ free_cached_obj:
 }
 
 static void
-mlx5dr_pat_remove_pattern(struct mlx5dr_pat_cached_pattern *cached_pattern)
+mlx5dr_pat_remove_pattern(struct mlx5dr_pattern_cache_item *cached_pattern)
 {
 	LIST_REMOVE(cached_pattern, next);
 	simple_free(cached_pattern->mh_data.data);
@@ -200,7 +200,7 @@ static void
 mlx5dr_pat_put_pattern(struct mlx5dr_pattern_cache *cache,
 		       struct mlx5dr_action *action)
 {
-	struct mlx5dr_pat_cached_pattern *cached_pattern;
+	struct mlx5dr_pattern_cache_item *cached_pattern;
 
 	pthread_spin_lock(&cache->lock);
 	cached_pattern = mlx5dr_pat_get_cached_pattern_by_action(cache, action);
@@ -225,7 +225,7 @@ static int mlx5dr_pat_get_pattern(struct mlx5dr_context *ctx,
 				  size_t pattern_sz,
 				  __be64 *pattern)
 {
-	struct mlx5dr_pat_cached_pattern *cached_pattern;
+	struct mlx5dr_pattern_cache_item *cached_pattern;
 	int ret = 0;
 
 	pthread_spin_lock(&ctx->pattern_cache->lock);
@@ -306,27 +306,6 @@ void mlx5dr_arg_decapl3_write(struct mlx5dr_send_engine *queue,
 	mlx5dr_send_engine_post_end(&ctrl, &send_attr);
 }
 
-static int
-mlx5dr_arg_poll_for_comp(struct mlx5dr_context *ctx, uint16_t queue_id)
-{
-	struct rte_flow_op_result comp[1];
-	int ret;
-
-	while (true) {
-		ret = mlx5dr_send_queue_poll(ctx, queue_id, comp, 1);
-		if (ret) {
-			if (ret < 0) {
-				DR_LOG(ERR, "Failed mlx5dr_send_queue_poll");
-			} else if (comp[0].status == RTE_FLOW_OP_ERROR) {
-				DR_LOG(ERR, "Got comp with error");
-				rte_errno = ENOENT;
-			}
-			break;
-		}
-	}
-	return (ret == 1 ? 0 : ret);
-}
-
 void mlx5dr_arg_write(struct mlx5dr_send_engine *queue,
 		      void *comp_data,
 		      uint32_t arg_idx,
@@ -388,9 +367,11 @@ int mlx5dr_arg_write_inline_arg_data(struct mlx5dr_context *ctx,
 	mlx5dr_send_engine_flush_queue(queue);
 
 	/* Poll for completion */
-	ret = mlx5dr_arg_poll_for_comp(ctx, ctx->queues - 1);
+	ret = mlx5dr_send_queue_action(ctx, ctx->queues - 1,
+				       MLX5DR_SEND_QUEUE_ACTION_DRAIN_SYNC);
+
 	if (ret)
-		DR_LOG(ERR, "Failed to get completions for shared action");
+		DR_LOG(ERR, "Failed to drain arg queue");
 
 	pthread_spin_unlock(&ctx->ctrl_lock);
 
@@ -458,6 +439,22 @@ mlx5dr_arg_create_modify_header_arg(struct mlx5dr_context *ctx,
 	}
 
 	return 0;
+}
+
+bool mlx5dr_pat_arg_verify_actions(__be64 pattern[], uint16_t num_of_actions)
+{
+	int i;
+
+	for (i = 0; i < num_of_actions; i++) {
+		u8 action_id =
+			MLX5_GET(set_action_in, &pattern[i], action_type);
+		if (action_id >= MLX5_MODIFICATION_TYPE_MAX) {
+			DR_LOG(ERR, "Invalid action %u\n", action_id);
+			return false;
+		}
+	}
+
+	return true;
 }
 
 int mlx5dr_pat_arg_create_modify_header(struct mlx5dr_context *ctx,

@@ -19,7 +19,7 @@ ipsec_hmac_opad_ipad_gen(struct rte_crypto_sym_xform *auth_xform,
 	uint32_t i;
 
 	/* HMAC OPAD and IPAD */
-	for (i = 0; i < 127 && i < length; i++) {
+	for (i = 0; i < 128 && i < length; i++) {
 		opad[i] = opad[i] ^ key[i];
 		ipad[i] = ipad[i] ^ key[i];
 	}
@@ -37,8 +37,8 @@ ipsec_hmac_opad_ipad_gen(struct rte_crypto_sym_xform *auth_xform,
 		roc_hash_sha1_gen(ipad, (uint32_t *)&hmac_opad_ipad[24]);
 		break;
 	case RTE_CRYPTO_AUTH_SHA256_HMAC:
-		roc_hash_sha256_gen(opad, (uint32_t *)&hmac_opad_ipad[0]);
-		roc_hash_sha256_gen(ipad, (uint32_t *)&hmac_opad_ipad[64]);
+		roc_hash_sha256_gen(opad, (uint32_t *)&hmac_opad_ipad[0], 256);
+		roc_hash_sha256_gen(ipad, (uint32_t *)&hmac_opad_ipad[64], 256);
 		break;
 	case RTE_CRYPTO_AUTH_SHA384_HMAC:
 		roc_hash_sha512_gen(opad, (uint64_t *)&hmac_opad_ipad[0], 384);
@@ -1344,7 +1344,7 @@ cnxk_on_ipsec_outb_sa_create(struct rte_security_ipsec_xform *ipsec,
 	} else
 		ctx_len += sizeof(template->ip4);
 
-	ctx_len += RTE_ALIGN_CEIL(ctx_len, 8);
+	ctx_len = RTE_ALIGN_CEIL(ctx_len, 8);
 
 	if (crypto_xform->type != RTE_CRYPTO_SYM_XFORM_AEAD) {
 		uint8_t *hmac_opad_ipad = (uint8_t *)&out_sa->sha2;

@@ -18,6 +18,7 @@
 #endif
 #include <rte_flow.h>
 #include <rte_gtp.h>
+#include <rte_random.h>
 
 #include "mlx5_prm.h"
 #include "mlx5_glue.h"
@@ -29,12 +30,12 @@
 #include "mlx5dr_pool.h"
 #include "mlx5dr_context.h"
 #include "mlx5dr_table.h"
-#include "mlx5dr_matcher.h"
 #include "mlx5dr_send.h"
 #include "mlx5dr_rule.h"
 #include "mlx5dr_cmd.h"
 #include "mlx5dr_action.h"
 #include "mlx5dr_definer.h"
+#include "mlx5dr_matcher.h"
 #include "mlx5dr_debug.h"
 #include "mlx5dr_pat_arg.h"
 

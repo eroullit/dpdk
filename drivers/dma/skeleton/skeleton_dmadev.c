@@ -77,7 +77,7 @@ cpucopy_thread(void *param)
 
 		hw->zero_req_count = 0;
 		rte_memcpy(desc->dst, desc->src, desc->len);
-		__atomic_add_fetch(&hw->completed_count, 1, __ATOMIC_RELEASE);
+		__atomic_fetch_add(&hw->completed_count, 1, __ATOMIC_RELEASE);
 		(void)rte_ring_enqueue(hw->desc_completed, (void *)desc);
 	}
 
@@ -515,9 +515,15 @@ skeldma_parse_lcore(const char *key __rte_unused,
 		    const char *value,
 		    void *opaque)
 {
-	int lcore_id = atoi(value);
+	int lcore_id;
+
+	if (value == NULL || opaque == NULL)
+		return -EINVAL;
+
+	lcore_id = atoi(value);
 	if (lcore_id >= 0 && lcore_id < RTE_MAX_LCORE)
 		*(int *)opaque = lcore_id;
+
 	return 0;
 }
 

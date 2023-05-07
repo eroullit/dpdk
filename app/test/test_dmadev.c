@@ -175,77 +175,85 @@ do_multi_copies(int16_t dev_id, uint16_t vchan,
 }
 
 static int
+test_single_copy(int16_t dev_id, uint16_t vchan)
+{
+	uint16_t i;
+	uint16_t id;
+	enum rte_dma_status_code status;
+	struct rte_mbuf *src, *dst;
+	char *src_data, *dst_data;
+
+	src = rte_pktmbuf_alloc(pool);
+	dst = rte_pktmbuf_alloc(pool);
+	src_data = rte_pktmbuf_mtod(src, char *);
+	dst_data = rte_pktmbuf_mtod(dst, char *);
+
+	for (i = 0; i < COPY_LEN; i++)
+		src_data[i] = rte_rand() & 0xFF;
+
+	id = rte_dma_copy(dev_id, vchan, rte_pktmbuf_iova(src), rte_pktmbuf_iova(dst),
+			COPY_LEN, RTE_DMA_OP_FLAG_SUBMIT);
+	if (id != id_count)
+		ERR_RETURN("Error with rte_dma_copy, got %u, expected %u\n",
+				id, id_count);
+
+	/* give time for copy to finish, then check it was done */
+	await_hw(dev_id, vchan);
+
+	for (i = 0; i < COPY_LEN; i++)
+		if (dst_data[i] != src_data[i])
+			ERR_RETURN("Data mismatch at char %u [Got %02x not %02x]\n", i,
+					dst_data[i], src_data[i]);
+
+	/* now check completion works */
+	id = ~id;
+	if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 1)
+		ERR_RETURN("Error with rte_dma_completed\n");
+
+	if (id != id_count)
+		ERR_RETURN("Error:incorrect job id received, %u [expected %u]\n",
+				id, id_count);
+
+	/* check for completed and id when no job done */
+	id = ~id;
+	if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 0)
+		ERR_RETURN("Error with rte_dma_completed when no job done\n");
+	if (id != id_count)
+		ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
+				id, id_count);
+
+	/* check for completed_status and id when no job done */
+	id = ~id;
+	if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
+		ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
+	if (id != id_count)
+		ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
+				id, id_count);
+
+	rte_pktmbuf_free(src);
+	rte_pktmbuf_free(dst);
+
+	/* now check completion returns nothing more */
+	if (rte_dma_completed(dev_id, 0, 1, NULL, NULL) != 0)
+		ERR_RETURN("Error with rte_dma_completed in empty check\n");
+
+	id_count++;
+
+	return 0;
+}
+
+static int
 test_enqueue_copies(int16_t dev_id, uint16_t vchan)
 {
-	enum rte_dma_status_code status;
 	unsigned int i;
-	uint16_t id;
 
 	/* test doing a single copy */
-	do {
-		struct rte_mbuf *src, *dst;
-		char *src_data, *dst_data;
-
-		src = rte_pktmbuf_alloc(pool);
-		dst = rte_pktmbuf_alloc(pool);
-		src_data = rte_pktmbuf_mtod(src, char *);
-		dst_data = rte_pktmbuf_mtod(dst, char *);
-
-		for (i = 0; i < COPY_LEN; i++)
-			src_data[i] = rte_rand() & 0xFF;
-
-		id = rte_dma_copy(dev_id, vchan, rte_pktmbuf_iova(src), rte_pktmbuf_iova(dst),
-				COPY_LEN, RTE_DMA_OP_FLAG_SUBMIT);
-		if (id != id_count)
-			ERR_RETURN("Error with rte_dma_copy, got %u, expected %u\n",
-					id, id_count);
-
-		/* give time for copy to finish, then check it was done */
-		await_hw(dev_id, vchan);
-
-		for (i = 0; i < COPY_LEN; i++)
-			if (dst_data[i] != src_data[i])
-				ERR_RETURN("Data mismatch at char %u [Got %02x not %02x]\n", i,
-						dst_data[i], src_data[i]);
-
-		/* now check completion works */
-		id = ~id;
-		if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 1)
-			ERR_RETURN("Error with rte_dma_completed\n");
-
-		if (id != id_count)
-			ERR_RETURN("Error:incorrect job id received, %u [expected %u]\n",
-					id, id_count);
-
-		/* check for completed and id when no job done */
-		id = ~id;
-		if (rte_dma_completed(dev_id, vchan, 1, &id, NULL) != 0)
-			ERR_RETURN("Error with rte_dma_completed when no job done\n");
-		if (id != id_count)
-			ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
-					id, id_count);
-
-		/* check for completed_status and id when no job done */
-		id = ~id;
-		if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
-			ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
-		if (id != id_count)
-			ERR_RETURN("Error:incorrect job id received when no job done, %u [expected %u]\n",
-					id, id_count);
-
-		rte_pktmbuf_free(src);
-		rte_pktmbuf_free(dst);
-
-		/* now check completion returns nothing more */
-		if (rte_dma_completed(dev_id, 0, 1, NULL, NULL) != 0)
-			ERR_RETURN("Error with rte_dma_completed in empty check\n");
-
-		id_count++;
-
-	} while (0);
+	if (test_single_copy(dev_id, vchan) < 0)
+		return -1;
 
 	/* test doing a multiple single copies */
 	do {
+		uint16_t id;
 		const uint16_t max_ops = 4;
 		struct rte_mbuf *src, *dst;
 		char *src_data, *dst_data;
@@ -294,6 +302,48 @@ test_enqueue_copies(int16_t dev_id, uint16_t vchan)
 			|| do_multi_copies(dev_id, vchan, 0, 1, 0)
 			/* test using completed_status in place of regular completed API */
 			|| do_multi_copies(dev_id, vchan, 0, 0, 1);
+}
+
+static int
+test_stop_start(int16_t dev_id, uint16_t vchan)
+{
+	/* device is already started on input, should be (re)started on output */
+
+	uint16_t id = 0;
+	enum rte_dma_status_code status = RTE_DMA_STATUS_SUCCESSFUL;
+
+	/* - test stopping a device works ok,
+	 * - then do a start-stop without doing a copy
+	 * - finally restart the device
+	 * checking for errors at each stage, and validating we can still copy at the end.
+	 */
+	if (rte_dma_stop(dev_id) < 0)
+		ERR_RETURN("Error stopping device\n");
+
+	if (rte_dma_start(dev_id) < 0)
+		ERR_RETURN("Error restarting device\n");
+	if (rte_dma_stop(dev_id) < 0)
+		ERR_RETURN("Error stopping device after restart (no jobs executed)\n");
+
+	if (rte_dma_start(dev_id) < 0)
+		ERR_RETURN("Error restarting device after multiple stop-starts\n");
+
+	/* before doing a copy, we need to know what the next id will be it should
+	 * either be:
+	 * - the last completed job before start if driver does not reset id on stop
+	 * - or -1 i.e. next job is 0, if driver does reset the job ids on stop
+	 */
+	if (rte_dma_completed_status(dev_id, vchan, 1, &id, &status) != 0)
+		ERR_RETURN("Error with rte_dma_completed_status when no job done\n");
+	id += 1; /* id_count is next job id */
+	if (id != id_count && id != 0)
+		ERR_RETURN("Unexpected next id from device after stop-start. Got %u, expected %u or 0\n",
+				id, id_count);
+
+	id_count = id;
+	if (test_single_copy(dev_id, vchan) < 0)
+		ERR_RETURN("Error performing copy after device restart\n");
+	return 0;
 }
 
 /* Failure handling test cases - global macros and variables for those tests*/
@@ -811,6 +861,10 @@ test_dmadev_instance(int16_t dev_id)
 	if (runtest("copy", test_enqueue_copies, 640, dev_id, vchan, CHECK_ERRS) < 0)
 		goto err;
 
+	/* run tests stopping/starting devices and check jobs still work after restart */
+	if (runtest("stop-start", test_stop_start, 1, dev_id, vchan, CHECK_ERRS) < 0)
+		goto err;
+
 	/* run some burst capacity tests */
 	if (rte_dma_burst_capacity(dev_id, vchan) < 64)
 		printf("DMA Dev %u: insufficient burst capacity (64 required), skipping tests\n",
@@ -837,7 +891,10 @@ test_dmadev_instance(int16_t dev_id)
 		goto err;
 
 	rte_mempool_free(pool);
-	rte_dma_stop(dev_id);
+
+	if (rte_dma_stop(dev_id) < 0)
+		ERR_RETURN("Error stopping device %u\n", dev_id);
+
 	rte_dma_stats_reset(dev_id, vchan);
 	return 0;
 

@@ -146,7 +146,7 @@ static inline uint16_t rte_pktmbuf_priv_size(struct rte_mempool *mp);
 static inline rte_iova_t
 rte_mbuf_iova_get(const struct rte_mbuf *m)
 {
-#if RTE_IOVA_AS_PA
+#if RTE_IOVA_IN_MBUF
 	return m->buf_iova;
 #else
 	return (rte_iova_t)m->buf_addr;
@@ -164,7 +164,7 @@ rte_mbuf_iova_get(const struct rte_mbuf *m)
 static inline void
 rte_mbuf_iova_set(struct rte_mbuf *m, rte_iova_t iova)
 {
-#if RTE_IOVA_AS_PA
+#if RTE_IOVA_IN_MBUF
 	m->buf_iova = iova;
 #else
 	RTE_SET_USED(m);
@@ -381,8 +381,8 @@ rte_mbuf_refcnt_set(struct rte_mbuf *m, uint16_t new_value)
 static inline uint16_t
 __rte_mbuf_refcnt_update(struct rte_mbuf *m, int16_t value)
 {
-	return __atomic_add_fetch(&m->refcnt, (uint16_t)value,
-				 __ATOMIC_ACQ_REL);
+	return __atomic_fetch_add(&m->refcnt, value,
+				 __ATOMIC_ACQ_REL) + value;
 }
 
 /**
@@ -502,8 +502,8 @@ rte_mbuf_ext_refcnt_update(struct rte_mbuf_ext_shared_info *shinfo,
 		return (uint16_t)value;
 	}
 
-	return __atomic_add_fetch(&shinfo->refcnt, (uint16_t)value,
-				 __ATOMIC_ACQ_REL);
+	return __atomic_fetch_add(&shinfo->refcnt, value,
+				 __ATOMIC_ACQ_REL) + value;
 }
 
 /** Mbuf prefetch */
@@ -1315,8 +1315,8 @@ static inline int __rte_pktmbuf_pinned_extbuf_decref(struct rte_mbuf *m)
 	 * Direct usage of add primitive to avoid
 	 * duplication of comparing with one.
 	 */
-	if (likely(__atomic_add_fetch(&shinfo->refcnt, (uint16_t)-1,
-				     __ATOMIC_ACQ_REL)))
+	if (likely(__atomic_fetch_add(&shinfo->refcnt, -1,
+				     __ATOMIC_ACQ_REL) - 1))
 		return 1;
 
 	/* Reinitialize counter before mbuf freeing. */

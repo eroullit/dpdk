@@ -28,8 +28,8 @@
 #include <rte_eal_paging.h>
 #include <rte_telemetry.h>
 
+#include "mempool_trace.h"
 #include "rte_mempool.h"
-#include "rte_mempool_trace.h"
 
 TAILQ_HEAD(rte_mempool_list, rte_tailq_entry);
 
@@ -1495,32 +1495,45 @@ mempool_info_cb(struct rte_mempool *mp, void *arg)
 {
 	struct mempool_info_cb_arg *info = (struct mempool_info_cb_arg *)arg;
 	const struct rte_memzone *mz;
+	uint64_t cache_count, common_count;
 
 	if (strncmp(mp->name, info->pool_name, RTE_MEMZONE_NAMESIZE))
 		return;
 
 	rte_tel_data_add_dict_string(info->d, "name", mp->name);
-	rte_tel_data_add_dict_int(info->d, "pool_id", mp->pool_id);
-	rte_tel_data_add_dict_int(info->d, "flags", mp->flags);
+	rte_tel_data_add_dict_uint(info->d, "pool_id", mp->pool_id);
+	rte_tel_data_add_dict_uint(info->d, "flags", mp->flags);
 	rte_tel_data_add_dict_int(info->d, "socket_id", mp->socket_id);
-	rte_tel_data_add_dict_int(info->d, "size", mp->size);
-	rte_tel_data_add_dict_int(info->d, "cache_size", mp->cache_size);
-	rte_tel_data_add_dict_int(info->d, "elt_size", mp->elt_size);
-	rte_tel_data_add_dict_int(info->d, "header_size", mp->header_size);
-	rte_tel_data_add_dict_int(info->d, "trailer_size", mp->trailer_size);
-	rte_tel_data_add_dict_int(info->d, "private_data_size",
+	rte_tel_data_add_dict_uint(info->d, "size", mp->size);
+	rte_tel_data_add_dict_uint(info->d, "cache_size", mp->cache_size);
+	rte_tel_data_add_dict_uint(info->d, "elt_size", mp->elt_size);
+	rte_tel_data_add_dict_uint(info->d, "header_size", mp->header_size);
+	rte_tel_data_add_dict_uint(info->d, "trailer_size", mp->trailer_size);
+	rte_tel_data_add_dict_uint(info->d, "private_data_size",
 				  mp->private_data_size);
 	rte_tel_data_add_dict_int(info->d, "ops_index", mp->ops_index);
-	rte_tel_data_add_dict_int(info->d, "populated_size",
+	rte_tel_data_add_dict_uint(info->d, "populated_size",
 				  mp->populated_size);
+
+	cache_count = 0;
+	if (mp->cache_size > 0) {
+		int lcore_id;
+		for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++)
+			cache_count += mp->local_cache[lcore_id].len;
+	}
+	rte_tel_data_add_dict_uint(info->d, "total_cache_count", cache_count);
+	common_count = rte_mempool_ops_get_count(mp);
+	if ((cache_count + common_count) > mp->size)
+		common_count = mp->size - cache_count;
+	rte_tel_data_add_dict_uint(info->d, "common_pool_count", common_count);
 
 	mz = mp->mz;
 	rte_tel_data_add_dict_string(info->d, "mz_name", mz->name);
-	rte_tel_data_add_dict_int(info->d, "mz_len", mz->len);
-	rte_tel_data_add_dict_int(info->d, "mz_hugepage_sz",
+	rte_tel_data_add_dict_uint(info->d, "mz_len", mz->len);
+	rte_tel_data_add_dict_uint(info->d, "mz_hugepage_sz",
 				  mz->hugepage_sz);
 	rte_tel_data_add_dict_int(info->d, "mz_socket_id", mz->socket_id);
-	rte_tel_data_add_dict_int(info->d, "mz_flags", mz->flags);
+	rte_tel_data_add_dict_uint(info->d, "mz_flags", mz->flags);
 }
 
 static int

@@ -10,6 +10,7 @@
 #include <openssl/evp.h>	/* Needed for bpi runt block processing */
 
 #ifdef RTE_QAT_LIBIPSECMB
+#define NO_COMPAT_IMB_API_053
 #if defined(RTE_ARCH_ARM)
 #include <ipsec-mb.h>
 #else
@@ -436,8 +437,8 @@ qat_sym_session_configure_cipher(struct rte_cryptodev *dev,
 		if (!qat_is_cipher_alg_supported(
 			cipher_xform->algo, internals)) {
 			QAT_LOG(ERR, "%s not supported on this device",
-				rte_crypto_cipher_algorithm_strings
-					[cipher_xform->algo]);
+				rte_cryptodev_get_cipher_algo_string(
+					cipher_xform->algo));
 			ret = -ENOTSUP;
 			goto error_out;
 		}
@@ -696,7 +697,7 @@ qat_sym_session_configure_auth(struct rte_cryptodev *dev,
 	switch (auth_xform->algo) {
 	case RTE_CRYPTO_AUTH_SM3:
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SM3;
-		session->auth_mode = ICP_QAT_HW_AUTH_MODE2;
+		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
 		break;
 	case RTE_CRYPTO_AUTH_SHA1:
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA1;
@@ -716,6 +717,22 @@ qat_sym_session_configure_auth(struct rte_cryptodev *dev,
 		break;
 	case RTE_CRYPTO_AUTH_SHA512:
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA512;
+		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
+		break;
+	case RTE_CRYPTO_AUTH_SHA3_224:
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA3_224;
+		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
+		break;
+	case RTE_CRYPTO_AUTH_SHA3_256:
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA3_256;
+		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
+		break;
+	case RTE_CRYPTO_AUTH_SHA3_384:
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA3_384;
+		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
+		break;
+	case RTE_CRYPTO_AUTH_SHA3_512:
+		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_SHA3_512;
 		session->auth_mode = ICP_QAT_HW_AUTH_MODE0;
 		break;
 	case RTE_CRYPTO_AUTH_SHA1_HMAC:
@@ -772,8 +789,7 @@ qat_sym_session_configure_auth(struct rte_cryptodev *dev,
 	case RTE_CRYPTO_AUTH_ZUC_EIA3:
 		if (!qat_is_auth_alg_supported(auth_xform->algo, internals)) {
 			QAT_LOG(ERR, "%s not supported on this device",
-				rte_crypto_auth_algorithm_strings
-				[auth_xform->algo]);
+				rte_cryptodev_get_auth_algo_string(auth_xform->algo));
 			return -ENOTSUP;
 		}
 		session->qat_hash_alg = ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3;
@@ -1019,6 +1035,18 @@ static int qat_hash_get_state1_size(enum icp_qat_hw_auth_algo qat_hash_alg)
 	case ICP_QAT_HW_AUTH_ALGO_SHA512:
 		return QAT_HW_ROUND_UP(ICP_QAT_HW_SHA512_STATE1_SZ,
 						QAT_HW_DEFAULT_ALIGNMENT);
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_224:
+		return QAT_HW_ROUND_UP(ICP_QAT_HW_SHA3_224_STATE1_SZ,
+						QAT_HW_DEFAULT_ALIGNMENT);
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_256:
+		return QAT_HW_ROUND_UP(ICP_QAT_HW_SHA3_256_STATE1_SZ,
+						QAT_HW_DEFAULT_ALIGNMENT);
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_384:
+		return QAT_HW_ROUND_UP(ICP_QAT_HW_SHA3_384_STATE1_SZ,
+						QAT_HW_DEFAULT_ALIGNMENT);
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_512:
+		return QAT_HW_ROUND_UP(ICP_QAT_HW_SHA3_512_STATE1_SZ,
+						QAT_HW_DEFAULT_ALIGNMENT);
 	case ICP_QAT_HW_AUTH_ALGO_AES_XCBC_MAC:
 		return QAT_HW_ROUND_UP(ICP_QAT_HW_AES_XCBC_MAC_STATE1_SZ,
 						QAT_HW_DEFAULT_ALIGNMENT);
@@ -1072,6 +1100,14 @@ static int qat_hash_get_digest_size(enum icp_qat_hw_auth_algo qat_hash_alg)
 		return ICP_QAT_HW_SHA384_STATE1_SZ;
 	case ICP_QAT_HW_AUTH_ALGO_SHA512:
 		return ICP_QAT_HW_SHA512_STATE1_SZ;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_224:
+		return ICP_QAT_HW_SHA3_224_STATE1_SZ;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_256:
+		return ICP_QAT_HW_SHA3_256_STATE1_SZ;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_384:
+		return ICP_QAT_HW_SHA3_384_STATE1_SZ;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_512:
+		return ICP_QAT_HW_SHA3_512_STATE1_SZ;
 	case ICP_QAT_HW_AUTH_ALGO_MD5:
 		return ICP_QAT_HW_MD5_STATE1_SZ;
 	case ICP_QAT_HW_AUTH_ALGO_AES_XCBC_MAC:
@@ -1331,6 +1367,8 @@ static int qat_sym_do_precomputes_ipsec_mb(enum icp_qat_hw_auth_algo hash_alg,
 	/* init ipad and opad from key and xor with fixed values */
 	memset(ipad, 0, block_size);
 	memset(opad, 0, block_size);
+	RTE_VERIFY(auth_keylen <= sizeof(ipad));
+	RTE_VERIFY(auth_keylen <= sizeof(opad));
 	rte_memcpy(ipad, auth_key, auth_keylen);
 	rte_memcpy(opad, auth_key, auth_keylen);
 
@@ -1849,9 +1887,10 @@ int qat_sym_cd_cipher_set(struct qat_sym_session *cdesc,
 		key_convert = ICP_QAT_HW_CIPHER_NO_CONVERT;
 	} else if (cdesc->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_SNOW_3G_UEA2
 		|| cdesc->qat_cipher_alg ==
-			ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3)
+			ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3) {
 		key_convert = ICP_QAT_HW_CIPHER_KEY_CONVERT;
-	else if (cdesc->qat_dir == ICP_QAT_HW_CIPHER_ENCRYPT)
+		cdesc->qat_dir = ICP_QAT_HW_CIPHER_ENCRYPT;
+	} else if (cdesc->qat_dir == ICP_QAT_HW_CIPHER_ENCRYPT)
 		key_convert = ICP_QAT_HW_CIPHER_NO_CONVERT;
 	else if (cdesc->qat_mode == ICP_QAT_HW_CIPHER_AEAD_MODE)
 		key_convert = ICP_QAT_HW_CIPHER_NO_CONVERT;
@@ -2229,6 +2268,30 @@ int qat_sym_cd_auth_set(struct qat_sym_session *cdesc,
 			return -EFAULT;
 		}
 		state2_size = ICP_QAT_HW_SHA512_STATE2_SZ;
+		break;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_224:
+		/* Plain SHA3-224 */
+		memset(cdesc->cd_cur_ptr, 0, state1_size);
+		state1_size = qat_hash_get_state1_size(
+				cdesc->qat_hash_alg);
+		break;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_256:
+		/* Plain SHA3-256 */
+		memset(cdesc->cd_cur_ptr, 0, state1_size);
+		state1_size = qat_hash_get_state1_size(
+				cdesc->qat_hash_alg);
+		break;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_384:
+		/* Plain SHA3-384 */
+		memset(cdesc->cd_cur_ptr, 0, state1_size);
+		state1_size = qat_hash_get_state1_size(
+				cdesc->qat_hash_alg);
+		break;
+	case ICP_QAT_HW_AUTH_ALGO_SHA3_512:
+		/* Plain SHA3-512 */
+		memset(cdesc->cd_cur_ptr, 0, state1_size);
+		state1_size = qat_hash_get_state1_size(
+				cdesc->qat_hash_alg);
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_AES_XCBC_MAC:
 		state1_size = ICP_QAT_HW_AES_XCBC_MAC_STATE1_SZ;

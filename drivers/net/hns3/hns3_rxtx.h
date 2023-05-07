@@ -740,9 +740,6 @@ int hns3_tx_burst_mode_get(struct rte_eth_dev *dev,
 const uint32_t *hns3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
 void hns3_init_rx_ptype_tble(struct rte_eth_dev *dev);
 void hns3_set_rxtx_function(struct rte_eth_dev *eth_dev);
-eth_tx_burst_t hns3_get_tx_function(struct rte_eth_dev *dev,
-				    eth_tx_prep_t *prep);
-
 uint32_t hns3_get_tqp_intr_reg_offset(uint16_t tqp_intr_id);
 void hns3_set_queue_intr_gl(struct hns3_hw *hw, uint16_t queue_id,
 			    uint8_t gl_idx, uint16_t gl_value);
@@ -776,5 +773,7 @@ int hns3_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);
 void hns3_tx_push_init(struct rte_eth_dev *dev);
 void hns3_stop_tx_datapath(struct rte_eth_dev *dev);
 void hns3_start_tx_datapath(struct rte_eth_dev *dev);
+void hns3_stop_rxtx_datapath(struct rte_eth_dev *dev);
+void hns3_start_rxtx_datapath(struct rte_eth_dev *dev);
 
 #endif /* HNS3_RXTX_H */

@@ -122,15 +122,15 @@ is_lacp_packets(uint16_t ethertype, uint8_t subtype, struct rte_mbuf *mbuf)
  */
 
 static struct rte_flow_item_eth flow_item_eth_type_8023ad = {
-	.dst.addr_bytes = { 0 },
-	.src.addr_bytes = { 0 },
-	.type = RTE_BE16(RTE_ETHER_TYPE_SLOW),
+	.hdr.dst_addr.addr_bytes = { 0 },
+	.hdr.src_addr.addr_bytes = { 0 },
+	.hdr.ether_type = RTE_BE16(RTE_ETHER_TYPE_SLOW),
 };
 
 static struct rte_flow_item_eth flow_item_eth_mask_type_8023ad = {
-	.dst.addr_bytes = { 0 },
-	.src.addr_bytes = { 0 },
-	.type = 0xFFFF,
+	.hdr.dst_addr.addr_bytes = { 0 },
+	.hdr.src_addr.addr_bytes = { 0 },
+	.hdr.ether_type = 0xFFFF,
 };
 
 static struct rte_flow_item flow_item_8023ad[] = {
@@ -3329,6 +3329,247 @@ end:
 	rte_spinlock_unlock(&internals->lock);
 }
 
+static const char *
+bond_mode_name(uint8_t mode)
+{
+	switch (mode) {
+	case BONDING_MODE_ROUND_ROBIN:
+		return "ROUND_ROBIN";
+	case BONDING_MODE_ACTIVE_BACKUP:
+		return "ACTIVE_BACKUP";
+	case BONDING_MODE_BALANCE:
+		return "BALANCE";
+	case BONDING_MODE_BROADCAST:
+		return "BROADCAST";
+	case BONDING_MODE_8023AD:
+		return "8023AD";
+	case BONDING_MODE_TLB:
+		return "TLB";
+	case BONDING_MODE_ALB:
+		return "ALB";
+	default:
+		return "Unknown";
+	}
+}
+
+static void
+dump_basic(const struct rte_eth_dev *dev, FILE *f)
+{
+	struct bond_dev_private instant_priv;
+	const struct bond_dev_private *internals = &instant_priv;
+	int mode, i;
+
+	/* Obtain a instance of dev_private to prevent data from being modified. */
+	memcpy(&instant_priv, dev->data->dev_private, sizeof(struct bond_dev_private));
+	mode = internals->mode;
+
+	fprintf(f, "  - Dev basic:\n");
+	fprintf(f, "\tBonding mode: %s(%d)\n", bond_mode_name(mode), mode);
+
+	if (mode == BONDING_MODE_BALANCE || mode == BONDING_MODE_8023AD) {
+		fprintf(f, "\tBalance Xmit Policy: ");
+		switch (internals->balance_xmit_policy) {
+		case BALANCE_XMIT_POLICY_LAYER2:
+			fprintf(f, "BALANCE_XMIT_POLICY_LAYER2");
+			break;
+		case BALANCE_XMIT_POLICY_LAYER23:
+			fprintf(f, "BALANCE_XMIT_POLICY_LAYER23");
+			break;
+		case BALANCE_XMIT_POLICY_LAYER34:
+			fprintf(f, "BALANCE_XMIT_POLICY_LAYER34");
+			break;
+		default:
+			fprintf(f, "Unknown");
+		}
+		fprintf(f, "\n");
+	}
+
+	if (mode == BONDING_MODE_8023AD) {
+		fprintf(f, "\tIEEE802.3AD Aggregator Mode: ");
+		switch (internals->mode4.agg_selection) {
+		case AGG_BANDWIDTH:
+			fprintf(f, "bandwidth");
+			break;
+		case AGG_STABLE:
+			fprintf(f, "stable");
+			break;
+		case AGG_COUNT:
+			fprintf(f, "count");
+			break;
+		default:
+			fprintf(f, "unknown");
+		}
+		fprintf(f, "\n");
+	}
+
+	if (internals->slave_count > 0) {
+		fprintf(f, "\tSlaves (%u): [", internals->slave_count);
+		for (i = 0; i < internals->slave_count - 1; i++)
+			fprintf(f, "%u ", internals->slaves[i].port_id);
+
+		fprintf(f, "%u]\n", internals->slaves[internals->slave_count - 1].port_id);
+	} else {
+		fprintf(f, "\tSlaves: []\n");
+	}
+
+	if (internals->active_slave_count > 0) {
+		fprintf(f, "\tActive Slaves (%u): [", internals->active_slave_count);
+		for (i = 0; i < internals->active_slave_count - 1; i++)
+			fprintf(f, "%u ", internals->active_slaves[i]);
+
+		fprintf(f, "%u]\n", internals->active_slaves[internals->active_slave_count - 1]);
+
+	} else {
+		fprintf(f, "\tActive Slaves: []\n");
+	}
+
+	if (internals->user_defined_primary_port)
+		fprintf(f, "\tUser Defined Primary: [%u]\n", internals->primary_port);
+	if (internals->slave_count > 0)
+		fprintf(f, "\tCurrent Primary: [%u]\n", internals->current_primary_port);
+}
+
+static void
+dump_lacp_conf(const struct rte_eth_bond_8023ad_conf *conf, FILE *f)
+{
+	fprintf(f, "\tfast period: %u ms\n", conf->fast_periodic_ms);
+	fprintf(f, "\tslow period: %u ms\n", conf->slow_periodic_ms);
+	fprintf(f, "\tshort timeout: %u ms\n", conf->short_timeout_ms);
+	fprintf(f, "\tlong timeout: %u ms\n", conf->long_timeout_ms);
+	fprintf(f, "\taggregate wait timeout: %u ms\n",
+			conf->aggregate_wait_timeout_ms);
+	fprintf(f, "\ttx period: %u ms\n", conf->tx_period_ms);
+	fprintf(f, "\trx marker period: %u ms\n", conf->rx_marker_period_ms);
+	fprintf(f, "\tupdate timeout: %u ms\n", conf->update_timeout_ms);
+	switch (conf->agg_selection) {
+	case AGG_BANDWIDTH:
+		fprintf(f, "\taggregation mode: bandwidth\n");
+		break;
+	case AGG_STABLE:
+		fprintf(f, "\taggregation mode: stable\n");
+		break;
+	case AGG_COUNT:
+		fprintf(f, "\taggregation mode: count\n");
+		break;
+	default:
+		fprintf(f, "\taggregation mode: invalid\n");
+		break;
+	}
+	fprintf(f, "\n");
+}
+
+static void
+dump_lacp_port_param(const struct port_params *params, FILE *f)
+{
+	char buf[RTE_ETHER_ADDR_FMT_SIZE];
+	fprintf(f, "\t\tsystem priority: %u\n", params->system_priority);
+	rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, &params->system);
+	fprintf(f, "\t\tsystem mac address: %s\n", buf);
+	fprintf(f, "\t\tport key: %u\n", params->key);
+	fprintf(f, "\t\tport priority: %u\n", params->port_priority);
+	fprintf(f, "\t\tport number: %u\n", params->port_number);
+}
+
+static void
+dump_lacp_slave(const struct rte_eth_bond_8023ad_slave_info *info, FILE *f)
+{
+	char a_state[256] = { 0 };
+	char p_state[256] = { 0 };
+	int a_len = 0;
+	int p_len = 0;
+	uint32_t i;
+
+	static const char * const state[] = {
+		"ACTIVE",
+		"TIMEOUT",
+		"AGGREGATION",
+		"SYNCHRONIZATION",
+		"COLLECTING",
+		"DISTRIBUTING",
+		"DEFAULTED",
+		"EXPIRED"
+	};
+	static const char * const selection[] = {
+		"UNSELECTED",
+		"STANDBY",
+		"SELECTED"
+	};
+
+	for (i = 0; i < RTE_DIM(state); i++) {
+		if ((info->actor_state >> i) & 1)
+			a_len += snprintf(&a_state[a_len],
+						RTE_DIM(a_state) - a_len, "%s ",
+						state[i]);
+
+		if ((info->partner_state >> i) & 1)
+			p_len += snprintf(&p_state[p_len],
+						RTE_DIM(p_state) - p_len, "%s ",
+						state[i]);
+	}
+	fprintf(f, "\tAggregator port id: %u\n", info->agg_port_id);
+	fprintf(f, "\tselection: %s\n", selection[info->selected]);
+	fprintf(f, "\tActor detail info:\n");
+	dump_lacp_port_param(&info->actor, f);
+	fprintf(f, "\t\tport state: %s\n", a_state);
+	fprintf(f, "\tPartner detail info:\n");
+	dump_lacp_port_param(&info->partner, f);
+	fprintf(f, "\t\tport state: %s\n", p_state);
+	fprintf(f, "\n");
+}
+
+static void
+dump_lacp(uint16_t port_id, FILE *f)
+{
+	struct rte_eth_bond_8023ad_slave_info slave_info;
+	struct rte_eth_bond_8023ad_conf port_conf;
+	uint16_t slaves[RTE_MAX_ETHPORTS];
+	int num_active_slaves;
+	int i, ret;
+
+	fprintf(f, "  - Lacp info:\n");
+
+	num_active_slaves = rte_eth_bond_active_slaves_get(port_id, slaves,
+			RTE_MAX_ETHPORTS);
+	if (num_active_slaves < 0) {
+		fprintf(f, "\tFailed to get active slave list for port %u\n",
+				port_id);
+		return;
+	}
+
+	fprintf(f, "\tIEEE802.3 port: %u\n", port_id);
+	ret = rte_eth_bond_8023ad_conf_get(port_id, &port_conf);
+	if (ret) {
+		fprintf(f, "\tGet bonded device %u 8023ad config failed\n",
+			port_id);
+		return;
+	}
+	dump_lacp_conf(&port_conf, f);
+
+	for (i = 0; i < num_active_slaves; i++) {
+		ret = rte_eth_bond_8023ad_slave_info(port_id, slaves[i],
+				&slave_info);
+		if (ret) {
+			fprintf(f, "\tGet slave device %u 8023ad info failed\n",
+				slaves[i]);
+			return;
+		}
+		fprintf(f, "\tSlave Port: %u\n", slaves[i]);
+		dump_lacp_slave(&slave_info, f);
+	}
+}
+
+static int
+bond_ethdev_priv_dump(struct rte_eth_dev *dev, FILE *f)
+{
+	const struct bond_dev_private *internals = dev->data->dev_private;
+
+	dump_basic(dev, f);
+	if (internals->mode == BONDING_MODE_8023AD)
+		dump_lacp(dev->data->port_id, f);
+
+	return 0;
+}
+
 const struct eth_dev_ops default_dev_ops = {
 	.dev_start            = bond_ethdev_start,
 	.dev_stop             = bond_ethdev_stop,
@@ -3355,7 +3596,8 @@ const struct eth_dev_ops default_dev_ops = {
 	.mac_addr_set         = bond_ethdev_mac_address_set,
 	.mac_addr_add         = bond_ethdev_mac_addr_add,
 	.mac_addr_remove      = bond_ethdev_mac_addr_remove,
-	.flow_ops_get         = bond_flow_ops_get
+	.flow_ops_get         = bond_flow_ops_get,
+	.eth_dev_priv_dump    = bond_ethdev_priv_dump,
 };
 
 static int

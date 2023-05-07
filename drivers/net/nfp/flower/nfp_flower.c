@@ -15,7 +15,6 @@
 #include "../nfp_ctrl.h"
 #include "../nfp_cpp_bridge.h"
 #include "../nfp_rxtx.h"
-#include "../nfp_flow.h"
 #include "../nfpcore/nfp_mip.h"
 #include "../nfpcore/nfp_rtsym.h"
 #include "../nfpcore/nfp_nsp.h"
@@ -25,7 +24,6 @@
 #include "nfp_flower_cmsg.h"
 
 #define CTRL_VNIC_NB_DESC 512
-#define DEFAULT_FLBUF_SIZE 9216
 
 static void
 nfp_pf_repr_enable_queues(struct rte_eth_dev *dev)
@@ -195,6 +193,8 @@ nfp_flower_pf_close(struct rte_eth_dev *dev)
 	pf_dev = hw->pf_dev;
 	app_fw_flower = NFP_PRIV_TO_APP_FW_FLOWER(pf_dev->app_fw_priv);
 
+	nfp_mtr_priv_uninit(pf_dev);
+
 	/*
 	 * We assume that the DPDK application is stopping all the
 	 * threads/queues before calling the device close function.
@@ -329,7 +329,7 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 		 * DPDK just checks the queue is lower than max queues
 		 * enabled. But the queue needs to be configured
 		 */
-		RTE_LOG_DP(ERR, PMD, "RX Bad queue\n");
+		PMD_RX_LOG(ERR, "RX Bad queue");
 		return 0;
 	}
 
@@ -342,7 +342,7 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 	while (avail + avail_multiplexed < nb_pkts) {
 		rxb = &rxq->rxbufs[rxq->rd_p];
 		if (unlikely(rxb == NULL)) {
-			RTE_LOG_DP(ERR, PMD, "rxb does not exist!\n");
+			PMD_RX_LOG(ERR, "rxb does not exist!");
 			break;
 		}
 
@@ -362,8 +362,8 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 		 */
 		new_mb = rte_pktmbuf_alloc(rxq->mem_pool);
 		if (unlikely(new_mb == NULL)) {
-			RTE_LOG_DP(DEBUG, PMD,
-			"RX mbuf alloc failed port_id=%u queue_id=%d\n",
+			PMD_RX_LOG(DEBUG,
+			"RX mbuf alloc failed port_id=%u queue_id=%d",
 				rxq->port_id, rxq->qidx);
 			nfp_net_mbuf_alloc_failed(rxq);
 			break;
@@ -390,7 +390,7 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 			 * responsibility of avoiding it. But we have
 			 * to give some info about the error
 			 */
-			RTE_LOG_DP(ERR, PMD,
+			PMD_RX_LOG(ERR,
 				"mbuf overflow likely due to the RX offset.\n"
 				"\t\tYour mbuf size should have extra space for"
 				" RX offset=%u bytes.\n"
@@ -451,7 +451,7 @@ nfp_flower_pf_recv_pkts(void *rx_queue,
 		rxds->vals[1] = 0;
 		dma_addr = rte_cpu_to_le_64(RTE_MBUF_DMA_ADDR_DEFAULT(new_mb));
 		rxds->fld.dd = 0;
-		rxds->fld.dma_addr_hi = (dma_addr >> 32) & 0xff;
+		rxds->fld.dma_addr_hi = (dma_addr >> 32) & 0xffff;
 		rxds->fld.dma_addr_lo = dma_addr & 0xffffffff;
 		nb_hold++;
 
@@ -490,7 +490,7 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 		struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts)
 {
-	int i = 0;
+	int i;
 	int pkt_size;
 	int dma_size;
 	uint64_t dma_addr;
@@ -521,7 +521,7 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 	issued_descs = 0;
 
 	/* Sending packets */
-	while ((i < nb_pkts) && free_descs) {
+	for (i = 0; i < nb_pkts && free_descs > 0; i++) {
 		/* Grabbing the mbuf linked to the current descriptor */
 		lmbuf = &txq->txbufs[txq->wr_p].mbuf;
 		/* Warming the cache for releasing the mbuf later on */
@@ -531,8 +531,7 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 
 		if (unlikely(pkt->nb_segs > 1 &&
 				!(hw->cap & NFP_NET_CFG_CTRL_GATHER))) {
-			PMD_INIT_LOG(INFO, "NFP_NET_CFG_CTRL_GATHER not set");
-			PMD_INIT_LOG(INFO, "Multisegment packet unsupported");
+			PMD_INIT_LOG(ERR, "Multisegment packet not supported");
 			goto xmit_end;
 		}
 
@@ -561,7 +560,7 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 		 */
 		pkt_size = pkt->pkt_len;
 
-		while (pkt != NULL) {
+		while (pkt != NULL && free_descs > 0) {
 			/* Copying TSO, VLAN and cksum info */
 			*txds = txd;
 
@@ -583,7 +582,6 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 			txds->data_len = txd.data_len;
 			txds->dma_addr_hi = (dma_addr >> 32) & 0xff;
 			txds->dma_addr_lo = (dma_addr & 0xffffffff);
-			ASSERT(free_descs > 0);
 			free_descs--;
 
 			txq->wr_p++;
@@ -607,7 +605,6 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 			lmbuf = &txq->txbufs[txq->wr_p].mbuf;
 			issued_descs++;
 		}
-		i++;
 	}
 
 xmit_end:
@@ -630,13 +627,6 @@ nfp_flower_init_vnic_common(struct nfp_net_hw *hw, const char *vnic_type)
 
 	pf_dev = hw->pf_dev;
 	pci_dev = hw->pf_dev->pci_dev;
-
-	/* NFP can not handle DMA addresses requiring more than 40 bits */
-	if (rte_mem_check_dma_mask(40)) {
-		PMD_INIT_LOG(ERR, "Device %s can not be used: restricted dma mask to 40 bits!\n",
-				pci_dev->device.name);
-		return -ENODEV;
-	};
 
 	hw->device_id = pci_dev->id.device_id;
 	hw->vendor_id = pci_dev->id.vendor_id;
@@ -665,6 +655,9 @@ nfp_flower_init_vnic_common(struct nfp_net_hw *hw, const char *vnic_type)
 	/* Set the current MTU to the maximum supported */
 	hw->mtu = hw->max_mtu;
 	hw->flbufsz = DEFAULT_FLBUF_SIZE;
+
+	if (nfp_net_check_dma_mask(hw, pci_dev->name) != 0)
+		return -ENODEV;
 
 	/* read the Rx offset configured from firmware */
 	if (NFD_CFG_MAJOR_VERSION_of(hw->ver) < 2)
@@ -1098,13 +1091,19 @@ nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev)
 		goto app_cleanup;
 	}
 
+	ret = nfp_mtr_priv_init(pf_dev);
+	if (ret != 0) {
+		PMD_INIT_LOG(ERR, "Error initializing metering private data");
+		goto flow_priv_cleanup;
+	}
+
 	/* Allocate memory for the PF AND ctrl vNIC here (hence the * 2) */
 	pf_hw = rte_zmalloc_socket("nfp_pf_vnic", 2 * sizeof(struct nfp_net_adapter),
 			RTE_CACHE_LINE_SIZE, numa_node);
 	if (pf_hw == NULL) {
 		PMD_INIT_LOG(ERR, "Could not malloc nfp pf vnic");
 		ret = -ENOMEM;
-		goto flow_priv_cleanup;
+		goto mtr_priv_cleanup;
 	}
 
 	/* Map the PF ctrl bar */
@@ -1194,6 +1193,8 @@ pf_cpp_area_cleanup:
 	nfp_cpp_area_free(pf_dev->ctrl_area);
 vnic_cleanup:
 	rte_free(pf_hw);
+mtr_priv_cleanup:
+	nfp_mtr_priv_uninit(pf_dev);
 flow_priv_cleanup:
 	nfp_flow_priv_uninit(pf_dev);
 app_cleanup:

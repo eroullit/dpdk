@@ -367,11 +367,7 @@ vdpa_ifcvf_stop(struct ifcvf_internal *internal)
 					(u16)(ring_state & IFCVF_16_BIT_MASK);
 				hw->vring[i].last_used_idx =
 					(u16)(ring_state >> 16);
-				if (hw->vring[i].last_avail_idx !=
-					hw->vring[i].last_used_idx) {
-					ifcvf_notify_queue(hw, i);
-					usleep(10);
-				}
+				usleep(10);
 			} while (hw->vring[i].last_avail_idx !=
 				hw->vring[i].last_used_idx);
 		}
@@ -609,7 +605,7 @@ virtio_interrupt_handler(struct ifcvf_internal *internal)
 	int vid = internal->vid;
 	int ret;
 
-	ret = rte_vhost_slave_config_change(vid, 1);
+	ret = rte_vhost_backend_config_change(vid, 1);
 	if (ret)
 		DRV_LOG(ERR, "failed to notify the guest about configuration space change.");
 }
@@ -865,8 +861,30 @@ m_ifcvf_stop(struct ifcvf_internal *internal)
 	struct ifcvf_hw *hw = &internal->hw;
 	uint64_t m_vring_iova = IFCVF_MEDIATED_VRING;
 	uint64_t size, len;
+	u32 ring_state = 0;
 
 	vid = internal->vid;
+
+	/* to make sure no packet is lost for blk device
+	 * do not stop until last_avail_idx == last_used_idx
+	 */
+	if (internal->hw.device_type == IFCVF_BLK) {
+		for (i = 0; i < hw->nr_vring; i++) {
+			do {
+				if (hw->lm_cfg != NULL)
+					ring_state = *(u32 *)(hw->lm_cfg +
+						IFCVF_LM_RING_STATE_OFFSET +
+						i * IFCVF_LM_CFG_SIZE);
+				hw->vring[i].last_avail_idx =
+					(u16)(ring_state & IFCVF_16_BIT_MASK);
+				hw->vring[i].last_used_idx =
+					(u16)(ring_state >> 16);
+				usleep(10);
+			} while (hw->vring[i].last_avail_idx !=
+				hw->vring[i].last_used_idx);
+		}
+	}
+
 	ifcvf_stop_hw(hw);
 
 	for (i = 0; i < hw->nr_vring; i++) {
@@ -1043,6 +1061,8 @@ ifcvf_sw_fallback_switchover(struct ifcvf_internal *internal)
 	unset_intr_relay(internal);
 
 	vdpa_disable_vfio_intr(internal);
+
+	rte_atomic32_set(&internal->running, 0);
 
 	ret = rte_vhost_host_notifier_ctrl(vid, RTE_VHOST_QUEUE_ALL, false);
 	if (ret && ret != -ENOTSUP)
@@ -1295,8 +1315,8 @@ ifcvf_get_vdpa_features(struct rte_vdpa_device *vdev, uint64_t *features)
 
 #define VDPA_SUPPORTED_PROTOCOL_FEATURES \
 		(1ULL << VHOST_USER_PROTOCOL_F_REPLY_ACK | \
-		 1ULL << VHOST_USER_PROTOCOL_F_SLAVE_REQ | \
-		 1ULL << VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD | \
+		 1ULL << VHOST_USER_PROTOCOL_F_BACKEND_REQ | \
+		 1ULL << VHOST_USER_PROTOCOL_F_BACKEND_SEND_FD | \
 		 1ULL << VHOST_USER_PROTOCOL_F_HOST_NOTIFIER | \
 		 1ULL << VHOST_USER_PROTOCOL_F_LOG_SHMFD | \
 		 1ULL << VHOST_USER_PROTOCOL_F_MQ | \
@@ -1746,6 +1766,11 @@ ifcvf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 			goto error;
 	}
 	internal->sw_lm = sw_fallback_lm;
+	if (!internal->sw_lm && !internal->hw.lm_cfg) {
+		DRV_LOG(ERR, "Device %s does not support HW assist live migration, please enable sw-live-migration!",
+			pci_dev->name);
+		goto error;
+	}
 
 	pthread_mutex_lock(&internal_list_lock);
 	TAILQ_INSERT_TAIL(&internal_list, list, next);
@@ -1848,6 +1873,13 @@ static const struct rte_pci_id pci_id_ifcvf_map[] = {
 	  .subsystem_vendor_id = IFCVF_SUBSYS_VENDOR_ID,
 	  .subsystem_device_id = IFCVF_SUBSYS_BLK_DEVICE_ID,
 	},
+
+	{ .class_id = RTE_CLASS_ANY_ID,
+	  .vendor_id = IFCVF_VENDOR_ID,
+	  .device_id = IFCVF_BLK_MODERN_DEVICE_ID,
+	  .subsystem_vendor_id = IFCVF_SUBSYS_VENDOR_ID,
+	  .subsystem_device_id = IFCVF_SUBSYS_DEFAULT_DEVICE_ID,
+	}, /* virtio-blk devices with default subsystem IDs */
 
 	{ .vendor_id = 0, /* sentinel */
 	},

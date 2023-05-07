@@ -285,13 +285,13 @@ struct __rte_packed acc_fcw_ld {
 		hcin_decomp_mode:3,
 		llr_pack_mode:1,
 		hcout_comp_mode:3,
-		saturate_input:1, /* Not supported in ACC200 */
+		saturate_input:1, /* Not supported in VRB1 */
 		dec_convllr:4,
 		hcout_convllr:4;
 	uint32_t itmax:7,
 		itstop:1,
 		so_it:7,
-		minsum_offset:1,  /* Not supported in ACC200 */
+		minsum_offset:1,  /* Not supported in VRB1 */
 		hcout_offset:16;
 	uint32_t hcout_size0:16,
 		hcout_size1:16;
@@ -301,7 +301,7 @@ struct __rte_packed acc_fcw_ld {
 	uint32_t negstop_it:7,
 		negstop_en:1,
 		tb_crc_select:2, /* Not supported in ACC100 */
-		dec_llrclip:2,  /* Not supported in ACC200 */
+		dec_llrclip:2,  /* Not supported in VRB1 */
 		tb_trailer_size:20; /* Not supported in ACC100 */
 };
 
@@ -322,7 +322,7 @@ struct __rte_packed acc_fcw_fft {
 		dft_shift:8,
 		cs_multiplier:16;
 	uint32_t bypass:2,
-		fp16_in:1, /* Not supported in ACC200 */
+		fp16_in:1, /* Not supported in VRB1 */
 		fp16_out:1,
 		exp_adj:4,
 		power_shift:4,
@@ -398,7 +398,7 @@ struct __rte_packed acc_dma_req_desc {
 				sdone_enable:1,
 				irq_enable:1,
 				timeStampEn:1,
-				dltb:1, /* Not supported in ACC200 */
+				dltb:1, /* Not supported in VRB1 */
 				res0:4,
 				numCBs:8,
 				m2dlen:4,
@@ -518,6 +518,8 @@ enum {
 typedef void (*acc10x_fcw_ld_fill_fun_t)(struct rte_bbdev_dec_op *op,
 		struct acc_fcw_ld *fcw,
 		union acc_harq_layout_data *harq_layout);
+typedef uint32_t (*queue_offset_fun_t)(bool pf_device, uint8_t vf_id,
+		uint8_t qgrp_id, uint16_t aq_id);
 
 /* Private data structure for each ACC100 device */
 struct acc_device {
@@ -551,7 +553,11 @@ struct acc_device {
 	bool pf_device; /**< True if this is a PF ACC100 device */
 	bool configured; /**< True if this ACC100 device is configured */
 	uint16_t device_variant;  /**< Device variant */
+	const struct acc_registry_addr *reg_addr;
 	acc10x_fcw_ld_fill_fun_t fcw_ld_fill;  /**< 5GUL FCW generation function */
+	queue_offset_fun_t queue_offset;  /* Device specific queue offset */
+	uint16_t num_qgroups;
+	uint16_t num_aqs;
 };
 
 /* Structure associated with each queue. */
@@ -917,12 +923,8 @@ acc_dma_enqueue(struct acc_queue *q, uint16_t n,
 {
 	union acc_enqueue_reg_fmt enq_req;
 	union acc_dma_desc *desc;
-#ifdef RTE_BBDEV_OFFLOAD_COST
 	uint64_t start_time = 0;
 	queue_stats->acc_offload_cycles = 0;
-#else
-	RTE_SET_USED(queue_stats);
-#endif
 
 	/* Set Sdone and IRQ enable bit on last descriptor. */
 	desc = acc_desc(q, n - 1);
@@ -964,17 +966,13 @@ acc_dma_enqueue(struct acc_queue *q, uint16_t n,
 
 		rte_wmb();
 
-#ifdef RTE_BBDEV_OFFLOAD_COST
 		/* Start time measurement for enqueue function offload. */
 		start_time = rte_rdtsc_precise();
-#endif
+
 		rte_acc_log(DEBUG, "Debug : MMIO Enqueue");
 		mmio_write(q->mmio_reg_enqueue, enq_req.val);
 
-#ifdef RTE_BBDEV_OFFLOAD_COST
-		queue_stats->acc_offload_cycles +=
-				rte_rdtsc_precise() - start_time;
-#endif
+		queue_stats->acc_offload_cycles += rte_rdtsc_precise() - start_time;
 
 		q->aq_enqueued++;
 		q->sw_ring_head += enq_batch_size;
@@ -1120,7 +1118,7 @@ cmp_ldpc_dec_op(struct rte_bbdev_dec_op **ops) {
  * @param op_flags
  *   Store information about device capabilities
  * @param next_triplet
- *   Index for ACC200 DMA Descriptor triplet
+ *   Index for VRB1 DMA Descriptor triplet
  * @param scattergather
  *   Flag to support scatter-gather for the mbuf
  *
