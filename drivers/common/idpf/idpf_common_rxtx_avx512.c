@@ -3,8 +3,8 @@
  */
 
 #include <rte_vect.h>
-#include <idpf_common_device.h>
-#include <idpf_common_rxtx.h>
+#include "idpf_common_device.h"
+#include "idpf_common_rxtx.h"
 
 #ifndef __INTEL_COMPILER
 #pragma GCC diagnostic ignored "-Wcast-qual"
@@ -1600,6 +1600,10 @@ idpf_tx_release_mbufs_avx512(struct idpf_tx_queue *txq)
 			swr[i].mbuf = NULL;
 		}
 		i = 0;
+	}
+	for (; i < txq->tx_tail; i++) {
+		rte_pktmbuf_free_seg(swr[i].mbuf);
+		swr[i].mbuf = NULL;
 	}
 }
 

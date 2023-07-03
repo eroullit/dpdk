@@ -56,6 +56,7 @@ libraries = [
         'stack',
         'vhost',
         'ipsec', # ipsec lib depends on net, crypto and security
+        'pdcp', # pdcp lib depends on crypto and security
         'fib', #fib lib depends on rib
         'port', # pkt framework libs which use other libs from above
         'pdump', # pdump lib depends on bpf
@@ -71,6 +72,7 @@ optional_libs = [
         'cfgfile',
         'flow_classify',
         'gpudev',
+        'graph',
         'gro',
         'gso',
         'kni',
@@ -94,9 +96,6 @@ dpdk_libs_deprecated += [
 disabled_libs = []
 opt_disabled_libs = run_command(list_dir_globs, get_option('disable_libs'),
         check: true).stdout().split()
-if dpdk_conf.get('RTE_IOVA_IN_MBUF') == 0
-    opt_disabled_libs += ['kni']
-endif
 foreach l:opt_disabled_libs
     if not optional_libs.contains(l)
         warning('Cannot disable mandatory library "@0@"'.format(l))
@@ -113,8 +112,6 @@ default_cflags += ['-DALLOW_INTERNAL_API']
 if cc.has_argument('-Wno-format-truncation')
     default_cflags += '-Wno-format-truncation'
 endif
-
-enabled_libs = [] # used to print summary at the end
 
 foreach l:libraries
     build = true
@@ -182,7 +179,7 @@ foreach l:libraries
         continue
     endif
 
-    enabled_libs += name
+    dpdk_libs_enabled += name
     dpdk_conf.set('RTE_LIB_' + name.to_upper(), 1)
     install_headers(headers)
     install_headers(indirect_headers)

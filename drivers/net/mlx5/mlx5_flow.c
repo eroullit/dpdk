@@ -1048,6 +1048,15 @@ mlx5_flow_async_flow_create_by_index(struct rte_eth_dev *dev,
 			    void *user_data,
 			    struct rte_flow_error *error);
 static int
+mlx5_flow_async_flow_update(struct rte_eth_dev *dev,
+			     uint32_t queue,
+			     const struct rte_flow_op_attr *attr,
+			     struct rte_flow *flow,
+			     const struct rte_flow_action actions[],
+			     uint8_t action_template_index,
+			     void *user_data,
+			     struct rte_flow_error *error);
+static int
 mlx5_flow_async_flow_destroy(struct rte_eth_dev *dev,
 			     uint32_t queue,
 			     const struct rte_flow_op_attr *attr,
@@ -1095,6 +1104,20 @@ mlx5_flow_async_action_handle_query(struct rte_eth_dev *dev, uint32_t queue,
 				 void *data,
 				 void *user_data,
 				 struct rte_flow_error *error);
+static int
+mlx5_action_handle_query_update(struct rte_eth_dev *dev,
+				struct rte_flow_action_handle *handle,
+				const void *update, void *query,
+				enum rte_flow_query_update_mode qu_mode,
+				struct rte_flow_error *error);
+static int
+mlx5_flow_async_action_handle_query_update
+	(struct rte_eth_dev *dev, uint32_t queue_id,
+	 const struct rte_flow_op_attr *op_attr,
+	 struct rte_flow_action_handle *action_handle,
+	 const void *update, void *query,
+	 enum rte_flow_query_update_mode qu_mode,
+	 void *user_data, struct rte_flow_error *error);
 
 static const struct rte_flow_ops mlx5_flow_ops = {
 	.validate = mlx5_flow_validate,
@@ -1110,6 +1133,7 @@ static const struct rte_flow_ops mlx5_flow_ops = {
 	.action_handle_destroy = mlx5_action_handle_destroy,
 	.action_handle_update = mlx5_action_handle_update,
 	.action_handle_query = mlx5_action_handle_query,
+	.action_handle_query_update = mlx5_action_handle_query_update,
 	.tunnel_decap_set = mlx5_flow_tunnel_decap_set,
 	.tunnel_match = mlx5_flow_tunnel_match,
 	.tunnel_action_decap_release = mlx5_flow_tunnel_action_release,
@@ -1133,8 +1157,11 @@ static const struct rte_flow_ops mlx5_flow_ops = {
 	.push = mlx5_flow_push,
 	.async_action_handle_create = mlx5_flow_async_action_handle_create,
 	.async_action_handle_update = mlx5_flow_async_action_handle_update,
+	.async_action_handle_query_update =
+		mlx5_flow_async_action_handle_query_update,
 	.async_action_handle_query = mlx5_flow_async_action_handle_query,
 	.async_action_handle_destroy = mlx5_flow_async_action_handle_destroy,
+	.async_actions_update = mlx5_flow_async_flow_update,
 };
 
 /* Tunnel information. */
@@ -1779,6 +1806,38 @@ flow_rxq_flags_clear(struct rte_eth_dev *dev)
 	priv->sh->shared_mark_enabled = 0;
 }
 
+static uint64_t mlx5_restore_info_dynflag;
+
+int
+mlx5_flow_rx_metadata_negotiate(struct rte_eth_dev *dev, uint64_t *features)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	uint64_t supported = 0;
+
+	if (!is_tunnel_offload_active(dev)) {
+		supported |= RTE_ETH_RX_METADATA_USER_FLAG;
+		supported |= RTE_ETH_RX_METADATA_USER_MARK;
+		if ((*features & RTE_ETH_RX_METADATA_TUNNEL_ID) != 0) {
+			DRV_LOG(DEBUG,
+				"tunnel offload was not activated, consider setting dv_xmeta_en=%d",
+				MLX5_XMETA_MODE_MISS_INFO);
+		}
+	} else {
+		supported |= RTE_ETH_RX_METADATA_TUNNEL_ID;
+		if ((*features & RTE_ETH_RX_METADATA_TUNNEL_ID) != 0 &&
+				mlx5_restore_info_dynflag == 0)
+			mlx5_restore_info_dynflag = rte_flow_restore_info_dynflag();
+	}
+
+	if (((*features & supported) & RTE_ETH_RX_METADATA_TUNNEL_ID) != 0)
+		priv->tunnel_enabled = 1;
+	else
+		priv->tunnel_enabled = 0;
+
+	*features &= supported;
+	return 0;
+}
+
 /**
  * Set the Rx queue dynamic metadata (mask and offset) for a flow
  *
@@ -1786,10 +1845,14 @@ flow_rxq_flags_clear(struct rte_eth_dev *dev)
  *   Pointer to the Ethernet device structure.
  */
 void
-mlx5_flow_rxq_dynf_metadata_set(struct rte_eth_dev *dev)
+mlx5_flow_rxq_dynf_set(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
+	uint64_t mark_flag = RTE_MBUF_F_RX_FDIR_ID;
 	unsigned int i;
+
+	if (priv->tunnel_enabled)
+		mark_flag |= mlx5_restore_info_dynflag;
 
 	for (i = 0; i != priv->rxqs_n; ++i) {
 		struct mlx5_rxq_priv *rxq = mlx5_rxq_get(dev, i);
@@ -1809,6 +1872,7 @@ mlx5_flow_rxq_dynf_metadata_set(struct rte_eth_dev *dev)
 			data->flow_meta_offset = rte_flow_dynf_metadata_offs;
 			data->flow_meta_port_mask = priv->sh->dv_meta_mask;
 		}
+		data->mark_flag = mark_flag;
 	}
 }
 
@@ -1924,8 +1988,10 @@ mlx5_flow_validate_action_mark(const struct rte_flow_action *action,
 /*
  * Validate the drop action.
  *
- * @param[in] action_flags
- *   Bit-fields that holds the actions detected until now.
+ * @param[in] dev
+ *   Pointer to the Ethernet device structure.
+ * @param[in] is_root
+ *   True if flow is validated for root table. False otherwise.
  * @param[in] attr
  *   Attributes of flow that includes this action.
  * @param[out] error
@@ -1935,15 +2001,25 @@ mlx5_flow_validate_action_mark(const struct rte_flow_action *action,
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-mlx5_flow_validate_action_drop(uint64_t action_flags __rte_unused,
+mlx5_flow_validate_action_drop(struct rte_eth_dev *dev,
+			       bool is_root,
 			       const struct rte_flow_attr *attr,
 			       struct rte_flow_error *error)
 {
-	if (attr->egress)
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (priv->sh->config.dv_flow_en == 0 && attr->egress)
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ATTR_EGRESS, NULL,
 					  "drop action not supported for "
 					  "egress");
+	if (priv->sh->config.dv_flow_en == 1 && is_root && (attr->egress || attr->transfer) &&
+	    !priv->sh->dr_root_drop_action_en) {
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ATTR, NULL,
+					  "drop action not supported for "
+					  "egress and transfer on group 0");
+	}
 	return 0;
 }
 
@@ -2315,6 +2391,40 @@ mlx5_validate_action_ct(struct rte_eth_dev *dev,
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					  "Invalid last TCP packet flag");
+	return 0;
+}
+
+/**
+ * Validate the level value for modify field action.
+ *
+ * @param[in] data
+ *   Pointer to the rte_flow_action_modify_data structure either src or dst.
+ * @param[out] error
+ *   Pointer to error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+flow_validate_modify_field_level(const struct rte_flow_action_modify_data *data,
+				 struct rte_flow_error *error)
+{
+	if (data->level == 0)
+		return 0;
+	if (data->field != RTE_FLOW_FIELD_TAG)
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
+					  "inner header fields modification is not supported");
+	if (data->tag_index != 0)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
+					  "tag array can be provided using 'level' or 'tag_index' fields, not both");
+	/*
+	 * The tag array for RTE_FLOW_FIELD_TAG type is provided using
+	 * 'tag_index' field. In old API, it was provided using 'level' field
+	 * and it is still supported for backwards compatibility.
+	 */
+	DRV_LOG(WARNING, "tag array provided in 'level' field instead of 'tag_index' field.");
 	return 0;
 }
 
@@ -9287,6 +9397,52 @@ mlx5_flow_async_flow_create_by_index(struct rte_eth_dev *dev,
 }
 
 /**
+ * Enqueue flow update.
+ *
+ * @param[in] dev
+ *   Pointer to the rte_eth_dev structure.
+ * @param[in] queue
+ *   The queue to destroy the flow.
+ * @param[in] attr
+ *   Pointer to the flow operation attributes.
+ * @param[in] flow
+ *   Pointer to the flow to be destroyed.
+ * @param[in] actions
+ *   Action with flow spec value.
+ * @param[in] action_template_index
+ *   The action pattern flow follows from the table.
+ * @param[in] user_data
+ *   Pointer to the user_data.
+ * @param[out] error
+ *   Pointer to error structure.
+ *
+ * @return
+ *    0 on success, negative value otherwise and rte_errno is set.
+ */
+static int
+mlx5_flow_async_flow_update(struct rte_eth_dev *dev,
+			     uint32_t queue,
+			     const struct rte_flow_op_attr *attr,
+			     struct rte_flow *flow,
+			     const struct rte_flow_action actions[],
+			     uint8_t action_template_index,
+			     void *user_data,
+			     struct rte_flow_error *error)
+{
+	const struct mlx5_flow_driver_ops *fops;
+	struct rte_flow_attr fattr = {0};
+
+	if (flow_get_drv_type(dev, &fattr) != MLX5_FLOW_TYPE_HW)
+		return rte_flow_error_set(error, ENOTSUP,
+				RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				NULL,
+				"flow_q update with incorrect steering mode");
+	fops = flow_get_drv_ops(MLX5_FLOW_TYPE_HW);
+	return fops->async_flow_update(dev, queue, attr, flow,
+					actions, action_template_index, user_data, error);
+}
+
+/**
  * Enqueue flow destruction.
  *
  * @param[in] dev
@@ -9462,6 +9618,27 @@ mlx5_flow_async_action_handle_update(struct rte_eth_dev *dev, uint32_t queue,
 
 	return fops->async_action_update(dev, queue, attr, handle,
 					 update, user_data, error);
+}
+
+static int
+mlx5_flow_async_action_handle_query_update
+	(struct rte_eth_dev *dev, uint32_t queue_id,
+	 const struct rte_flow_op_attr *op_attr,
+	 struct rte_flow_action_handle *action_handle,
+	 const void *update, void *query,
+	 enum rte_flow_query_update_mode qu_mode,
+	 void *user_data, struct rte_flow_error *error)
+{
+	const struct mlx5_flow_driver_ops *fops =
+		flow_get_drv_ops(MLX5_FLOW_TYPE_HW);
+
+	if (!fops || !fops->async_action_query_update)
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
+					  "async query_update not supported");
+	return fops->async_action_query_update
+			   (dev, queue_id, op_attr, action_handle,
+			    update, query, qu_mode, user_data, error);
 }
 
 /**
@@ -10602,6 +10779,30 @@ mlx5_action_handle_query(struct rte_eth_dev *dev,
 	return flow_drv_action_query(dev, handle, data, fops, error);
 }
 
+static int
+mlx5_action_handle_query_update(struct rte_eth_dev *dev,
+				struct rte_flow_action_handle *handle,
+				const void *update, void *query,
+				enum rte_flow_query_update_mode qu_mode,
+				struct rte_flow_error *error)
+{
+	struct rte_flow_attr attr = { .transfer = 0 };
+	enum mlx5_flow_drv_type drv_type = flow_get_drv_type(dev, &attr);
+	const struct mlx5_flow_driver_ops *fops;
+
+	if (drv_type == MLX5_FLOW_TYPE_MIN || drv_type == MLX5_FLOW_TYPE_MAX)
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ACTION,
+					  NULL, "invalid driver type");
+	fops = flow_get_drv_ops(drv_type);
+	if (!fops || !fops->action_query_update)
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ACTION,
+					  NULL, "no query_update handler");
+	return fops->action_query_update(dev, handle, update,
+					 query, qu_mode, error);
+}
+
 /**
  * Destroy all indirect actions (shared RSS).
  *
@@ -11295,7 +11496,7 @@ mlx5_flow_tunnel_validate(struct rte_eth_dev *dev,
 	if (!is_tunnel_offload_active(dev))
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ACTION_CONF, NULL,
-					  "tunnel offload was not activated");
+					  "tunnel offload was not activated, consider setting dv_xmeta_en=3");
 	if (!tunnel)
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_ACTION_CONF, NULL,
@@ -11452,12 +11653,10 @@ mlx5_flow_tunnel_get_restore_info(struct rte_eth_dev *dev,
 	uint64_t ol_flags = m->ol_flags;
 	const struct mlx5_flow_tbl_data_entry *tble;
 	const uint64_t mask = RTE_MBUF_F_RX_FDIR | RTE_MBUF_F_RX_FDIR_ID;
+	struct mlx5_priv *priv = dev->data->dev_private;
 
-	if (!is_tunnel_offload_active(dev)) {
-		info->flags = 0;
-		return 0;
-	}
-
+	if (priv->tunnel_enabled == 0)
+		goto err;
 	if ((ol_flags & mask) != mask)
 		goto err;
 	tble = tunnel_mark_decode(dev, m->hash.fdir.hi);

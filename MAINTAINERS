@@ -564,6 +564,11 @@ F: doc/guides/mempool/cnxk.rst
 Bus Drivers
 -----------
 
+AMD CDX bus
+M: Nipun Gupta <nipun.gupta@amd.com>
+M: Nikhil Agarwal <nikhil.agarwal@amd.com>
+F: drivers/bus/cdx/
+
 Auxiliary bus driver - EXPERIMENTAL
 M: Parav Pandit <parav@nvidia.com>
 M: Xueming Li <xuemingl@nvidia.com>
@@ -581,6 +586,8 @@ F: drivers/bus/dpaa/
 F: drivers/bus/fslmc/
 
 PCI bus driver
+M: Chenbo Xia <chenbo.xia@intel.com>
+M: Nipun Gupta <nipun.gupta@amd.com>
 F: drivers/bus/pci/
 
 Platform bus driver
@@ -629,11 +636,11 @@ F: doc/guides/nics/af_xdp.rst
 F: doc/guides/nics/features/af_xdp.ini
 
 Amazon ENA
-M: Marcin Wojtas <mw@semihalf.com>
 M: Michal Krawczyk <mk@semihalf.com>
 M: Shai Brandes <shaibran@amazon.com>
 M: Evgeny Schemeilin <evgenys@amazon.com>
 M: Igor Chauskin <igorch@amazon.com>
+M: Ron Beider <rbeider@amazon.com>
 F: drivers/net/ena/
 F: doc/guides/nics/ena.rst
 F: doc/guides/nics/features/ena.ini
@@ -681,14 +688,6 @@ F: drivers/net/thunderx/
 F: doc/guides/nics/thunderx.rst
 F: doc/guides/nics/features/thunderx.ini
 
-Cavium LiquidIO - UNMAINTAINED
-M: Shijith Thotton <sthotton@marvell.com>
-M: Srisivasubramanian Srinivasan <srinivasan@marvell.com>
-T: git://dpdk.org/next/dpdk-next-net-mrvl
-F: drivers/net/liquidio/
-F: doc/guides/nics/liquidio.rst
-F: doc/guides/nics/features/liquidio.ini
-
 Cavium OCTEON TX
 M: Harman Kalra <hkalra@marvell.com>
 T: git://dpdk.org/next/dpdk-next-net-mrvl
@@ -713,6 +712,9 @@ F: doc/guides/nics/features/enic.ini
 
 Google Virtual Ethernet
 M: Junfeng Guo <junfeng.guo@intel.com>
+M: Jeroen de Borst <jeroendb@google.com>
+M: Rushil Gupta <rushilg@google.com>
+M: Joshua Washington <joshwash@google.com>
 F: drivers/net/gve/
 F: doc/guides/nics/gve.rst
 F: doc/guides/nics/features/gve.ini
@@ -845,9 +847,7 @@ F: doc/guides/nics/mvneta.rst
 F: doc/guides/nics/features/mvneta.ini
 
 Marvell OCTEON TX EP - endpoint
-M: Radha Mohan Chintakuntla <radhac@marvell.com>
-M: Veerasenareddy Burru <vburru@marvell.com>
-M: Sathesh Edara <sedara@marvell.com>
+M: Vamsi Attunuru <vattunuru@marvell.com>
 T: git://dpdk.org/next/dpdk-next-net-mrvl
 F: drivers/net/octeon_ep/
 F: doc/guides/nics/features/octeon_ep.ini
@@ -864,6 +864,8 @@ F: doc/guides/nics/features/mlx4.ini
 NVIDIA mlx5
 M: Matan Azrad <matan@nvidia.com>
 M: Viacheslav Ovsiienko <viacheslavo@nvidia.com>
+M: Ori Kam <orika@nvidia.com>
+M: Suanming Mou <suanmingm@nvidia.com>
 T: git://dpdk.org/next/dpdk-next-net-mlx
 F: drivers/common/mlx5/
 F: drivers/net/mlx5/
@@ -938,8 +940,7 @@ F: drivers/net/pfe/
 F: doc/guides/nics/features/pfe.ini
 
 Marvell QLogic bnx2x
-M: Rasesh Mody <rmody@marvell.com>
-M: Shahed Shaikh <shshaikh@marvell.com>
+M: Julien Aube <julien_dpdk@jaube.fr>
 T: git://dpdk.org/next/dpdk-next-net-mrvl
 F: drivers/net/bnx2x/
 F: doc/guides/nics/bnx2x.rst
@@ -1248,8 +1249,7 @@ F: drivers/dma/hisilicon/
 F: doc/guides/dmadevs/hisilicon.rst
 
 Marvell CNXK DPI DMA
-M: Radha Mohan Chintakuntla <radhac@marvell.com>
-M: Veerasenareddy Burru <vburru@marvell.com>
+M: Vamsi Attunuru <vattunuru@marvell.com>
 F: drivers/dma/cnxk/
 F: doc/guides/dmadevs/cnxk.rst
 
@@ -1502,6 +1502,14 @@ F: doc/guides/prog_guide/ipsec_lib.rst
 M: Vladimir Medvedkin <vladimir.medvedkin@intel.com>
 F: app/test-sad/
 
+PDCP - EXPERIMENTAL
+M: Anoob Joseph <anoobj@marvell.com>
+M: Volodymyr Fialko <vfialko@marvell.com>
+T: git://dpdk.org/next/dpdk-next-crypto
+F: lib/pdcp/
+F: doc/guides/prog_guide/pdcp_lib.rst
+F: app/test/test_pdcp*
+
 Flow Classify - EXPERIMENTAL - UNMAINTAINED
 F: lib/flow_classify/
 F: app/test/test_flow_classify*
@@ -1518,7 +1526,7 @@ F: examples/distributor/
 F: doc/guides/sample_app_ug/dist_app.rst
 
 Reorder
-M: Reshma Pattan <reshma.pattan@intel.com>
+M: Volodymyr Fialko <vfialko@marvell.com>
 F: lib/reorder/
 F: doc/guides/prog_guide/reorder_lib.rst
 F: app/test/test_reorder*
@@ -1657,6 +1665,7 @@ F: app/test/test_rcu*
 F: doc/guides/prog_guide/rcu_lib.rst
 
 PCI
+M: Chenbo Xia <chenbo.xia@intel.com>
 M: Gaetan Rivet <grive@u256.net>
 F: lib/pci/
 
@@ -1714,10 +1723,11 @@ F: doc/guides/prog_guide/bpf_lib.rst
 Graph - EXPERIMENTAL
 M: Jerin Jacob <jerinj@marvell.com>
 M: Kiran Kumar K <kirankumark@marvell.com>
+M: Nithin Dabilpuram <ndabilpuram@marvell.com>
+M: Zhirun Yan <zhirun.yan@intel.com>
 F: lib/graph/
 F: doc/guides/prog_guide/graph_lib.rst
 F: app/test/test_graph*
-M: Nithin Dabilpuram <ndabilpuram@marvell.com>
 F: examples/l3fwd-graph/
 F: doc/guides/sample_app_ug/l3_forward_graph.rst
 

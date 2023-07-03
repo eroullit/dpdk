@@ -147,12 +147,14 @@ Features
 - Matching on GTP extension header with raw encap/decap action.
 - Matching on Geneve TLV option header with raw encap/decap action.
 - Matching on ESP header SPI field.
+- Matching on InfiniBand BTH.
 - Modify IPv4/IPv6 ECN field.
 - RSS support in sample action.
 - E-Switch mirroring and jump.
 - E-Switch mirroring and modify.
 - 21844 flow priorities for ingress or egress flow groups greater than 0 and for any transfer
   flow group.
+- Flow quota.
 - Flow metering, including meter policy API.
 - Flow meter hierarchy.
 - Flow meter mark.
@@ -537,6 +539,8 @@ Limitations
 
   - Supports the 'set' and 'add' operations for ``RTE_FLOW_ACTION_TYPE_MODIFY_FIELD`` action.
   - Modification of an arbitrary place in a packet via the special ``RTE_FLOW_FIELD_START`` Field ID is not supported.
+  - Modification of the MPLS header is supported only in HWS and only to copy from,
+    the encapsulation level is always 0.
   - Modification of the 802.1Q Tag, VXLAN Network or GENEVE Network ID's is not supported.
   - Encapsulation levels are not supported, can modify outermost header fields only.
   - Offsets cannot skip past the boundary of a field.
@@ -588,6 +592,16 @@ Limitations
 
   - Hairpin between two ports could only manual binding and explicit Tx flow mode. For single port hairpin, all the combinations of auto/manual binding and explicit/implicit Tx flow mode could be supported.
   - Hairpin in switchdev SR-IOV mode is not supported till now.
+
+- Quota:
+
+  - Quota implemented for HWS / template API.
+  - Maximal value for quota SET and ADD operations in INT32_MAX (2GB).
+  - Application cannot use 2 consecutive ADD updates.
+    Next tokens update after ADD must always be SET.
+  - Quota flow action cannot be used with Meter or CT flow actions in the same rule.
+  - Quota flow action and item supported in non-root HWS tables.
+  - Maximal number of HW quota and HW meter objects <= 16e6.
 
 - Meter:
 

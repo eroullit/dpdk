@@ -653,7 +653,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Detach physical or virtual dev by port_id\n\n"
 
 			"port config (port_id|all)"
-			" speed (10|100|1000|10000|25000|40000|50000|100000|200000|400000|auto)"
+			" speed (10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto)"
 			" duplex (half|full|auto)\n"
 			"    Set speed and duplex for all ports or port_id\n\n"
 
@@ -1344,6 +1344,10 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 		}
 		if (!strcmp(speedstr, "1000")) {
 			*speed = RTE_ETH_LINK_SPEED_1G;
+		} else if (!strcmp(speedstr, "2500")) {
+			*speed = RTE_ETH_LINK_SPEED_2_5G;
+		} else if (!strcmp(speedstr, "5000")) {
+			*speed = RTE_ETH_LINK_SPEED_5G;
 		} else if (!strcmp(speedstr, "10000")) {
 			*speed = RTE_ETH_LINK_SPEED_10G;
 		} else if (!strcmp(speedstr, "25000")) {
@@ -1408,7 +1412,7 @@ static cmdline_parse_token_string_t cmd_config_speed_all_item1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item1, "speed");
 static cmdline_parse_token_string_t cmd_config_speed_all_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, value1,
-				"10#100#1000#10000#25000#40000#50000#100000#200000#400000#auto");
+				"10#100#1000#2500#5000#10000#25000#40000#50000#100000#200000#400000#auto");
 static cmdline_parse_token_string_t cmd_config_speed_all_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item2, "duplex");
 static cmdline_parse_token_string_t cmd_config_speed_all_value2 =
@@ -1419,7 +1423,7 @@ static cmdline_parse_inst_t cmd_config_speed_all = {
 	.f = cmd_config_speed_all_parsed,
 	.data = NULL,
 	.help_str = "port config all speed "
-		"10|100|1000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
+		"10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
 							"half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_all_port,
@@ -1483,7 +1487,7 @@ static cmdline_parse_token_string_t cmd_config_speed_specific_item1 =
 								"speed");
 static cmdline_parse_token_string_t cmd_config_speed_specific_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, value1,
-				"10#100#1000#10000#25000#40000#50000#100000#200000#400000#auto");
+				"10#100#1000#2500#5000#10000#25000#40000#50000#100000#200000#400000#auto");
 static cmdline_parse_token_string_t cmd_config_speed_specific_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, item2,
 								"duplex");
@@ -1495,7 +1499,7 @@ static cmdline_parse_inst_t cmd_config_speed_specific = {
 	.f = cmd_config_speed_specific_parsed,
 	.data = NULL,
 	.help_str = "port config <port_id> speed "
-		"10|100|1000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
+		"10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto duplex "
 							"half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_specific_port,
@@ -11973,6 +11977,9 @@ cmd_show_fec_mode_parsed(void *parsed_result,
 	case RTE_ETH_FEC_MODE_CAPA_MASK(RS):
 		strlcpy(buf, "rs", sizeof(buf));
 		break;
+	case RTE_ETH_FEC_MODE_CAPA_MASK(LLRS):
+		strlcpy(buf, "llrs", sizeof(buf));
+		break;
 	default:
 		return;
 	}
@@ -12068,7 +12075,7 @@ cmd_set_port_fec_mode_parsed(
 static cmdline_parse_inst_t cmd_set_fec_mode = {
 	.f = cmd_set_port_fec_mode_parsed,
 	.data = NULL,
-	.help_str = "set port <port_id> fec_mode auto|off|rs|baser",
+	.help_str = "set port <port_id> fec_mode auto|off|rs|baser|llrs",
 	.tokens = {
 		(void *)&cmd_set_port_fec_mode_set,
 		(void *)&cmd_set_port_fec_mode_port,
@@ -12275,12 +12282,13 @@ cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
 	struct cmd_show_rx_tx_desc_status_result *res = parsed_result;
 	int rc;
 
-	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
-		fprintf(stderr, "invalid port id %u\n", res->cmd_pid);
-		return;
-	}
-
 	if (!strcmp(res->cmd_keyword, "rxq")) {
+		if (rte_eth_rx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+			fprintf(stderr,
+				"Invalid input: port id = %d, queue id = %d\n",
+				res->cmd_pid, res->cmd_qid);
+			return;
+		}
 		rc = rte_eth_rx_descriptor_status(res->cmd_pid, res->cmd_qid,
 					     res->cmd_did);
 		if (rc < 0) {
@@ -12296,6 +12304,12 @@ cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
 		else
 			printf("Desc status = UNAVAILABLE\n");
 	} else if (!strcmp(res->cmd_keyword, "txq")) {
+		if (rte_eth_tx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+			fprintf(stderr,
+				"Invalid input: port id = %d, queue id = %d\n",
+				res->cmd_pid, res->cmd_qid);
+			return;
+		}
 		rc = rte_eth_tx_descriptor_status(res->cmd_pid, res->cmd_qid,
 					     res->cmd_did);
 		if (rc < 0) {
@@ -12375,8 +12389,10 @@ cmd_show_rx_queue_desc_used_count_parsed(void *parsed_result,
 	struct cmd_show_rx_queue_desc_used_count_result *res = parsed_result;
 	int rc;
 
-	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
-		fprintf(stderr, "invalid port id %u\n", res->cmd_pid);
+	if (rte_eth_rx_queue_is_valid(res->cmd_pid, res->cmd_qid) != 0) {
+		fprintf(stderr,
+			"Invalid input: port id = %d, queue id = %d\n",
+			res->cmd_pid, res->cmd_qid);
 		return;
 	}
 

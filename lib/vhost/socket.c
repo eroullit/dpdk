@@ -15,9 +15,11 @@
 #include <fcntl.h>
 #include <pthread.h>
 
+#include <rte_function_versioning.h>
 #include <rte_log.h>
 
 #include "fd_man.h"
+#include "vduse.h"
 #include "vhost.h"
 #include "vhost_user.h"
 
@@ -35,6 +37,7 @@ struct vhost_user_socket {
 	int socket_fd;
 	struct sockaddr_un un;
 	bool is_server;
+	bool is_vduse;
 	bool reconnect;
 	bool iommu_support;
 	bool use_builtin_virtio_net;
@@ -56,9 +59,12 @@ struct vhost_user_socket {
 
 	uint64_t protocol_features;
 
+	uint32_t max_queue_pairs;
+
 	struct rte_vdpa_device *vdpa_dev;
 
 	struct rte_vhost_device_ops const *notify_ops;
+	struct rte_vhost_device_ops *malloc_notify_ops;
 };
 
 struct vhost_user_connection {
@@ -221,7 +227,7 @@ vhost_user_add_connection(int fd, struct vhost_user_socket *vsocket)
 		return;
 	}
 
-	vid = vhost_new_device();
+	vid = vhost_user_new_device();
 	if (vid == -1) {
 		goto err;
 	}
@@ -821,7 +827,7 @@ rte_vhost_driver_get_queue_num(const char *path, uint32_t *queue_num)
 
 	vdpa_dev = vsocket->vdpa_dev;
 	if (!vdpa_dev) {
-		*queue_num = VHOST_MAX_QUEUE_PAIRS;
+		*queue_num = vsocket->max_queue_pairs;
 		goto unlock_exit;
 	}
 
@@ -831,7 +837,36 @@ rte_vhost_driver_get_queue_num(const char *path, uint32_t *queue_num)
 		goto unlock_exit;
 	}
 
-	*queue_num = RTE_MIN((uint32_t)VHOST_MAX_QUEUE_PAIRS, vdpa_queue_num);
+	*queue_num = RTE_MIN(vsocket->max_queue_pairs, vdpa_queue_num);
+
+unlock_exit:
+	pthread_mutex_unlock(&vhost_user.mutex);
+	return ret;
+}
+
+int
+rte_vhost_driver_set_max_queue_num(const char *path, uint32_t max_queue_pairs)
+{
+	struct vhost_user_socket *vsocket;
+	int ret = 0;
+
+	VHOST_LOG_CONFIG(path, INFO, "Setting max queue pairs to %u\n", max_queue_pairs);
+
+	if (max_queue_pairs > VHOST_MAX_QUEUE_PAIRS) {
+		VHOST_LOG_CONFIG(path, ERR, "Library only supports up to %u queue pairs\n",
+				VHOST_MAX_QUEUE_PAIRS);
+		return -1;
+	}
+
+	pthread_mutex_lock(&vhost_user.mutex);
+	vsocket = find_vhost_user_socket(path);
+	if (!vsocket) {
+		VHOST_LOG_CONFIG(path, ERR, "socket file is not registered yet.\n");
+		ret = -1;
+		goto unlock_exit;
+	}
+
+	vsocket->max_queue_pairs = max_queue_pairs;
 
 unlock_exit:
 	pthread_mutex_unlock(&vhost_user.mutex);
@@ -841,15 +876,12 @@ unlock_exit:
 static void
 vhost_user_socket_mem_free(struct vhost_user_socket *vsocket)
 {
-	if (vsocket && vsocket->path) {
-		free(vsocket->path);
-		vsocket->path = NULL;
-	}
+	if (vsocket == NULL)
+		return;
 
-	if (vsocket) {
-		free(vsocket);
-		vsocket = NULL;
-	}
+	free(vsocket->path);
+	free(vsocket->malloc_notify_ops);
+	free(vsocket);
 }
 
 /*
@@ -890,6 +922,7 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 		goto out_free;
 	}
 	vsocket->vdpa_dev = NULL;
+	vsocket->max_queue_pairs = VHOST_MAX_QUEUE_PAIRS;
 	vsocket->extbuf = flags & RTE_VHOST_USER_EXTBUF_SUPPORT;
 	vsocket->linearbuf = flags & RTE_VHOST_USER_LINEARBUF_SUPPORT;
 	vsocket->async_copy = flags & RTE_VHOST_USER_ASYNC_COPY;
@@ -960,18 +993,21 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 #endif
 	}
 
-	if ((flags & RTE_VHOST_USER_CLIENT) != 0) {
-		vsocket->reconnect = !(flags & RTE_VHOST_USER_NO_RECONNECT);
-		if (vsocket->reconnect && reconn_tid == 0) {
-			if (vhost_user_reconnect_init() != 0)
-				goto out_mutex;
-		}
+	if (!strncmp("/dev/vduse/", path, strlen("/dev/vduse/"))) {
+		vsocket->is_vduse = true;
 	} else {
-		vsocket->is_server = true;
-	}
-	ret = create_unix_socket(vsocket);
-	if (ret < 0) {
-		goto out_mutex;
+		if ((flags & RTE_VHOST_USER_CLIENT) != 0) {
+			vsocket->reconnect = !(flags & RTE_VHOST_USER_NO_RECONNECT);
+			if (vsocket->reconnect && reconn_tid == 0) {
+				if (vhost_user_reconnect_init() != 0)
+					goto out_mutex;
+			}
+		} else {
+			vsocket->is_server = true;
+		}
+		ret = create_unix_socket(vsocket);
+		if (ret < 0)
+			goto out_mutex;
 	}
 
 	vhost_user.vsockets[vhost_user.vsocket_cnt++] = vsocket;
@@ -1036,7 +1072,9 @@ again:
 		if (strcmp(vsocket->path, path))
 			continue;
 
-		if (vsocket->is_server) {
+		if (vsocket->is_vduse) {
+			vduse_device_destroy(path);
+		} else if (vsocket->is_server) {
 			/*
 			 * If r/wcb is executing, release vhost_user's
 			 * mutex lock, and try again since the r/wcb
@@ -1099,20 +1137,68 @@ again:
 /*
  * Register ops so that we can add/remove device to data core.
  */
-int
-rte_vhost_driver_callback_register(const char *path,
-	struct rte_vhost_device_ops const * const ops)
+static int
+vhost_driver_callback_register(const char *path,
+	struct rte_vhost_device_ops const * const ops,
+	struct rte_vhost_device_ops *malloc_ops)
 {
 	struct vhost_user_socket *vsocket;
 
 	pthread_mutex_lock(&vhost_user.mutex);
 	vsocket = find_vhost_user_socket(path);
-	if (vsocket)
+	if (vsocket) {
 		vsocket->notify_ops = ops;
+		free(vsocket->malloc_notify_ops);
+		vsocket->malloc_notify_ops = malloc_ops;
+	}
 	pthread_mutex_unlock(&vhost_user.mutex);
 
 	return vsocket ? 0 : -1;
 }
+
+int __vsym
+rte_vhost_driver_callback_register_v24(const char *path,
+	struct rte_vhost_device_ops const * const ops)
+{
+	return vhost_driver_callback_register(path, ops, NULL);
+}
+
+int __vsym
+rte_vhost_driver_callback_register_v23(const char *path,
+	struct rte_vhost_device_ops const * const ops)
+{
+	int ret;
+
+	/*
+	 * Although the ops structure is a const structure, we do need to
+	 * override the guest_notify operation. This is because with the
+	 * previous APIs it was "reserved" and if any garbage value was passed,
+	 * it could crash the application.
+	 */
+	if (ops && !ops->guest_notify) {
+		struct rte_vhost_device_ops *new_ops;
+
+		new_ops = malloc(sizeof(*new_ops));
+		if (new_ops == NULL)
+			return -1;
+
+		memcpy(new_ops, ops, sizeof(*new_ops));
+		new_ops->guest_notify = NULL;
+
+		ret = vhost_driver_callback_register(path, new_ops, new_ops);
+	} else {
+		ret = vhost_driver_callback_register(path, ops, NULL);
+	}
+
+	return ret;
+}
+
+/* Mark the v23 function as the old version, and v24 as the default version. */
+VERSION_SYMBOL(rte_vhost_driver_callback_register, _v23, 23);
+BIND_DEFAULT_SYMBOL(rte_vhost_driver_callback_register, _v24, 24);
+MAP_STATIC_SYMBOL(int rte_vhost_driver_callback_register(const char *path,
+		struct rte_vhost_device_ops const * const ops),
+		rte_vhost_driver_callback_register_v24);
 
 struct rte_vhost_device_ops const *
 vhost_driver_callback_get(const char *path)
@@ -1138,6 +1224,9 @@ rte_vhost_driver_start(const char *path)
 
 	if (!vsocket)
 		return -1;
+
+	if (vsocket->is_vduse)
+		return vduse_device_create(path);
 
 	if (fdset_tid == 0) {
 		/**

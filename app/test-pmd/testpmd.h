@@ -110,10 +110,19 @@ enum {
 enum {
 	QUEUE_JOB_TYPE_FLOW_CREATE,
 	QUEUE_JOB_TYPE_FLOW_DESTROY,
+	QUEUE_JOB_TYPE_FLOW_UPDATE,
 	QUEUE_JOB_TYPE_ACTION_CREATE,
 	QUEUE_JOB_TYPE_ACTION_DESTROY,
 	QUEUE_JOB_TYPE_ACTION_UPDATE,
 	QUEUE_JOB_TYPE_ACTION_QUERY,
+};
+
+enum noisy_fwd_mode {
+	NOISY_FWD_MODE_IO,
+	NOISY_FWD_MODE_MAC,
+	NOISY_FWD_MODE_MACSWAP,
+	NOISY_FWD_MODE_5TSWAP,
+	NOISY_FWD_MODE_MAX,
 };
 
 /**
@@ -217,6 +226,7 @@ struct port_flow {
 	struct port_flow *next; /**< Next flow in list. */
 	struct port_flow *tmp; /**< Temporary linking. */
 	uint32_t id; /**< Flow rule ID. */
+	struct port_table *table; /**< Flow table. */
 	struct rte_flow *flow; /**< Opaque flow object returned by PMD. */
 	struct rte_flow_conv_rule rule; /**< Saved flow rule description. */
 	enum age_action_context_type age_type; /**< Age action context type. */
@@ -228,7 +238,12 @@ struct port_indirect_action {
 	struct port_indirect_action *next; /**< Next flow in list. */
 	uint32_t id; /**< Indirect action ID. */
 	enum rte_flow_action_type type; /**< Action type. */
-	struct rte_flow_action_handle *handle;	/**< Indirect action handle. */
+	union {
+		struct rte_flow_action_handle *handle;
+		/**< Indirect action handle. */
+		struct rte_flow_action_list_handle *list_handle;
+		/**< Indirect action list handle*/
+	};
 	enum age_action_context_type age_type; /**< Age action context type. */
 };
 
@@ -391,6 +406,7 @@ struct fwd_engine {
 	port_fwd_end_t   port_fwd_end;   /**< NULL if nothing special to do. */
 	stream_init_t    stream_init;    /**< NULL if nothing special to do. */
 	packet_fwd_t     packet_fwd;     /**< Mandatory. */
+	const char       *status;        /**< NULL if nothing to display. */
 };
 
 void common_fwd_stream_init(struct fwd_stream *fs);
@@ -555,6 +571,8 @@ extern int8_t rx_drop_en;
 extern int16_t tx_free_thresh;
 extern int16_t tx_rs_thresh;
 
+extern enum noisy_fwd_mode noisy_fwd_mode;
+extern const char * const noisy_fwd_mode_desc[];
 extern uint16_t noisy_tx_sw_bufsz;
 extern uint16_t noisy_tx_sw_buf_flush_time;
 extern uint64_t noisy_lkup_mem_sz;
@@ -921,7 +939,7 @@ void update_fwd_ports(portid_t new_pid);
 void set_fwd_eth_peer(portid_t port_id, char *peer_addr);
 
 void port_mtu_set(portid_t port_id, uint16_t mtu);
-int port_action_handle_create(portid_t port_id, uint32_t id,
+int port_action_handle_create(portid_t port_id, uint32_t id, bool indirect_list,
 			      const struct rte_flow_indir_action_conf *conf,
 			      const struct rte_flow_action *action);
 int port_action_handle_destroy(portid_t port_id,
@@ -967,6 +985,9 @@ int port_queue_flow_create(portid_t port_id, queueid_t queue_id,
 			   const struct rte_flow_action *actions);
 int port_queue_flow_destroy(portid_t port_id, queueid_t queue_id,
 			    bool postpone, uint32_t n, const uint32_t *rule);
+int port_queue_flow_update(portid_t port_id, queueid_t queue_id,
+			   bool postpone, uint32_t rule_idx, uint32_t actions_idx,
+			   const struct rte_flow_action *actions);
 int port_queue_action_handle_create(portid_t port_id, uint32_t queue_id,
 			bool postpone, uint32_t id,
 			const struct rte_flow_indir_action_conf *conf,

@@ -47,6 +47,7 @@ if is_linux
     sources += files(
             'mlx5_flow_hw.c',
             'mlx5_hws_cnt.c',
+            'mlx5_flow_quota.c',
             'mlx5_flow_verbs.c',
     )
 endif
@@ -76,6 +77,8 @@ if get_option('buildtype').contains('debug')
 else
     cflags += [ '-UPEDANTIC' ]
 endif
+
+require_iova_in_mbuf = false
 
 testpmd_sources += files('mlx5_testpmd.c')
 

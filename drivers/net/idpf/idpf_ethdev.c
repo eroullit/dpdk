@@ -792,8 +792,6 @@ idpf_dev_start(struct rte_eth_dev *dev)
 	if (idpf_dev_stats_reset(dev))
 		PMD_DRV_LOG(ERR, "Failed to reset stats");
 
-	vport->stopped = 0;
-
 	return 0;
 
 err_vport:
@@ -811,7 +809,7 @@ idpf_dev_stop(struct rte_eth_dev *dev)
 {
 	struct idpf_vport *vport = dev->data->dev_private;
 
-	if (vport->stopped == 1)
+	if (dev->data->dev_started == 0)
 		return 0;
 
 	idpf_vc_vport_ena_dis(vport, false);
@@ -821,8 +819,6 @@ idpf_dev_stop(struct rte_eth_dev *dev)
 	idpf_vport_irq_unmap_config(vport, dev->data->nb_rx_queues);
 
 	idpf_vc_vectors_dealloc(vport);
-
-	vport->stopped = 1;
 
 	return 0;
 }
@@ -1028,7 +1024,8 @@ static void
 idpf_handle_event_msg(struct idpf_vport *vport, uint8_t *msg, uint16_t msglen)
 {
 	struct virtchnl2_event *vc_event = (struct virtchnl2_event *)msg;
-	struct rte_eth_dev *dev = (struct rte_eth_dev *)vport->dev;
+	struct rte_eth_dev_data *data = vport->dev_data;
+	struct rte_eth_dev *dev = &rte_eth_devices[data->port_id];
 
 	if (msglen < sizeof(struct virtchnl2_event)) {
 		PMD_DRV_LOG(ERR, "Error event");
@@ -1078,6 +1075,7 @@ idpf_handle_virtchnl_msg(struct idpf_adapter_ext *adapter_ex)
 
 		switch (mbx_op) {
 		case idpf_mbq_opc_send_msg_to_peer_pf:
+		case idpf_mbq_opc_send_msg_to_peer_drv:
 			if (vc_op == VIRTCHNL2_OP_EVENT) {
 				if (ctlq_msg.data_len < sizeof(struct virtchnl2_event)) {
 					PMD_DRV_LOG(ERR, "Error event");
@@ -1128,6 +1126,44 @@ idpf_dev_alarm_handler(void *param)
 	rte_eal_alarm_set(IDPF_ALARM_INTERVAL, idpf_dev_alarm_handler, adapter);
 }
 
+static struct virtchnl2_get_capabilities req_caps = {
+	.csum_caps =
+	VIRTCHNL2_CAP_TX_CSUM_L3_IPV4          |
+	VIRTCHNL2_CAP_TX_CSUM_L4_IPV4_TCP      |
+	VIRTCHNL2_CAP_TX_CSUM_L4_IPV4_UDP      |
+	VIRTCHNL2_CAP_TX_CSUM_L4_IPV4_SCTP     |
+	VIRTCHNL2_CAP_TX_CSUM_L4_IPV6_TCP      |
+	VIRTCHNL2_CAP_TX_CSUM_L4_IPV6_UDP      |
+	VIRTCHNL2_CAP_TX_CSUM_L4_IPV6_SCTP     |
+	VIRTCHNL2_CAP_TX_CSUM_GENERIC          |
+	VIRTCHNL2_CAP_RX_CSUM_L3_IPV4          |
+	VIRTCHNL2_CAP_RX_CSUM_L4_IPV4_TCP      |
+	VIRTCHNL2_CAP_RX_CSUM_L4_IPV4_UDP      |
+	VIRTCHNL2_CAP_RX_CSUM_L4_IPV4_SCTP     |
+	VIRTCHNL2_CAP_RX_CSUM_L4_IPV6_TCP      |
+	VIRTCHNL2_CAP_RX_CSUM_L4_IPV6_UDP      |
+	VIRTCHNL2_CAP_RX_CSUM_L4_IPV6_SCTP     |
+	VIRTCHNL2_CAP_RX_CSUM_GENERIC,
+
+	.rss_caps =
+	VIRTCHNL2_CAP_RSS_IPV4_TCP             |
+	VIRTCHNL2_CAP_RSS_IPV4_UDP             |
+	VIRTCHNL2_CAP_RSS_IPV4_SCTP            |
+	VIRTCHNL2_CAP_RSS_IPV4_OTHER           |
+	VIRTCHNL2_CAP_RSS_IPV6_TCP             |
+	VIRTCHNL2_CAP_RSS_IPV6_UDP             |
+	VIRTCHNL2_CAP_RSS_IPV6_SCTP            |
+	VIRTCHNL2_CAP_RSS_IPV6_OTHER           |
+	VIRTCHNL2_CAP_RSS_IPV4_AH              |
+	VIRTCHNL2_CAP_RSS_IPV4_ESP             |
+	VIRTCHNL2_CAP_RSS_IPV4_AH_ESP          |
+	VIRTCHNL2_CAP_RSS_IPV6_AH              |
+	VIRTCHNL2_CAP_RSS_IPV6_ESP             |
+	VIRTCHNL2_CAP_RSS_IPV6_AH_ESP,
+
+	.other_caps = VIRTCHNL2_CAP_WB_ON_ITR
+};
+
 static int
 idpf_adapter_ext_init(struct rte_pci_device *pci_dev, struct idpf_adapter_ext *adapter)
 {
@@ -1143,6 +1179,8 @@ idpf_adapter_ext_init(struct rte_pci_device *pci_dev, struct idpf_adapter_ext *a
 	hw->subsystem_vendor_id = pci_dev->id.subsystem_vendor_id;
 
 	strncpy(adapter->name, pci_dev->device.name, PCI_PRI_STR_SIZE);
+
+	rte_memcpy(&base->caps, &req_caps, sizeof(struct virtchnl2_get_capabilities));
 
 	ret = idpf_adapter_init(base);
 	if (ret != 0) {
@@ -1239,7 +1277,6 @@ idpf_dev_vport_init(struct rte_eth_dev *dev, void *init_params)
 	vport->adapter = &adapter->base;
 	vport->sw_idx = param->idx;
 	vport->devarg_id = param->devarg_id;
-	vport->dev = dev;
 
 	memset(&create_vport_info, 0, sizeof(create_vport_info));
 	ret = idpf_vport_info_init(vport, &create_vport_info);
@@ -1279,6 +1316,7 @@ err:
 
 static const struct rte_pci_id pci_id_idpf_map[] = {
 	{ RTE_PCI_DEVICE(IDPF_INTEL_VENDOR_ID, IDPF_DEV_ID_PF) },
+	{ RTE_PCI_DEVICE(IDPF_INTEL_VENDOR_ID, IDPF_DEV_ID_SRIOV) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 

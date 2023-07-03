@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2022 Intel Corporation
+ * Copyright(c) 2001-2023 Intel Corporation
  */
 
 #ifndef _IDPF_OSDEP_H_
@@ -23,6 +23,7 @@
 #include <rte_log.h>
 #include <rte_random.h>
 #include <rte_io.h>
+#include <rte_compat.h>
 
 #define INLINE inline
 #define STATIC static
@@ -44,6 +45,8 @@ typedef struct idpf_lock idpf_lock;
 #define lower_32_bits(n)	((u32)(n))
 #define low_16_bits(x)		((x) & 0xFFFF)
 #define high_16_bits(x)		(((x) & 0xFFFF0000) >> 16)
+
+#define IDPF_M(m, s)		((m) << (s))
 
 #ifndef ETH_ADDR_LEN
 #define ETH_ADDR_LEN		6

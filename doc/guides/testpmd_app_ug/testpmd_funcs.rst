@@ -1800,7 +1800,7 @@ Set fec mode
 
 Set fec mode for a specific port::
 
-  testpmd> set port (port_id) fec_mode auto|off|rs|baser
+  testpmd> set port (port_id) fec_mode auto|off|rs|baser|llrs
 
 Config Sample actions list
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -2048,7 +2048,7 @@ port config - speed
 
 Set the speed and duplex mode for all ports or a specific port::
 
-   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|200000|400000|auto) \
+   testpmd> port config (port_id|all) speed (10|100|1000|2500|5000|10000|25000|40000|50000|100000|200000|400000|auto) \
             duplex (half|full|auto)
 
 port config - queues/descriptors
@@ -3771,6 +3771,13 @@ This section lists supported pattern items and their attributes, if any.
   - ``ctrl {unsigned}``: PPP control.
   - ``proto_id {unsigned}``: PPP protocol identifier.
 
+- ``ib_bth``: match InfiniBand BTH(base transport header).
+
+  - ``opcode {unsigned}``: Opcode.
+  - ``pkey {unsigned}``: Partition key.
+  - ``dst_qp {unsigned}``: Destination Queue Pair.
+  - ``psn {unsigned}``: Packet Sequence Number.
+
 - ``meter``: match meter color.
 
   - ``color {value}``: meter color value (green/yellow/red).
@@ -3778,6 +3785,10 @@ This section lists supported pattern items and their attributes, if any.
 - ``aggr_affinity``: match aggregated port.
 
   - ``affinity {value}``: aggregated port (starts from 1).
+
+- ``tx_queue``: match Tx queue of sent packet.
+
+  - ``tx_queue {value}``: send queue value (starts from 0).
 
 - ``send_to_kernel``: send packets to kernel.
 

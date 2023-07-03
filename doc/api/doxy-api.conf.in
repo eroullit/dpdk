@@ -9,6 +9,7 @@ INPUT                   = @TOPDIR@/doc/api/doxy-api-index.md \
                           @TOPDIR@/drivers/crypto/scheduler \
                           @TOPDIR@/drivers/dma/dpaa2 \
                           @TOPDIR@/drivers/event/dlb2 \
+                          @TOPDIR@/drivers/mempool/cnxk \
                           @TOPDIR@/drivers/mempool/dpaa2 \
                           @TOPDIR@/drivers/net/ark \
                           @TOPDIR@/drivers/net/bnxt \
@@ -62,6 +63,7 @@ INPUT                   = @TOPDIR@/doc/api/doxy-api-index.md \
                           @TOPDIR@/lib/net \
                           @TOPDIR@/lib/pcapng \
                           @TOPDIR@/lib/pci \
+                          @TOPDIR@/lib/pdcp \
                           @TOPDIR@/lib/pdump \
                           @TOPDIR@/lib/pipeline \
                           @TOPDIR@/lib/port \
@@ -111,7 +113,6 @@ GENERATE_DEPRECATEDLIST = YES
 VERBATIM_HEADERS        = NO
 ALPHABETICAL_INDEX      = NO
 
-HTML_TIMESTAMP          = NO
 HTML_DYNAMIC_SECTIONS   = YES
 HTML_EXTRA_STYLESHEET   = @TOPDIR@/doc/api/custom.css
 SEARCHENGINE            = YES

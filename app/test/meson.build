@@ -61,8 +61,6 @@ test_sources = files(
         'test_fib6.c',
         'test_fib6_perf.c',
         'test_func_reentrancy.c',
-        'test_graph.c',
-        'test_graph_perf.c',
         'test_hash.c',
         'test_hash_functions.c',
         'test_hash_multiwriter.c',
@@ -128,6 +126,7 @@ test_sources = files(
         'test_rwlock.c',
         'test_sched.c',
         'test_security.c',
+        'test_security_inline_macsec.c',
         'test_security_inline_proto.c',
         'test_seqlock.c',
         'test_service_cores.c',
@@ -151,7 +150,7 @@ test_sources = files(
         'virtual_pmd.c',
 )
 
-test_deps = enabled_libs
+test_deps = dpdk_libs_enabled
 # as well as libs, the pci and vdev bus drivers are needed for a lot of tests
 test_deps += ['bus_pci', 'bus_vdev']
 
@@ -362,6 +361,13 @@ if dpdk_conf.has('RTE_LIB_FLOW_CLASSIFY')
     test_sources += 'test_flow_classify.c'
     fast_tests += [['flow_classify_autotest', false, true]]
 endif
+if dpdk_conf.has('RTE_LIB_GRAPH')
+    test_sources += 'test_graph.c'
+    fast_tests += [['graph_autotest', true, true]]
+    fast_tests += [['node_list_dump', true, true]]
+    test_sources += 'test_graph_perf.c'
+    perf_test_names += 'graph_perf_autotest'
+endif
 if dpdk_conf.has('RTE_LIB_METRICS')
     test_sources += ['test_metrics.c']
     fast_tests += [['metrics_autotest', true, true]]
@@ -435,6 +441,11 @@ if dpdk_conf.has('RTE_HAS_LIBPCAP')
     endif
 endif
 
+if dpdk_conf.has('RTE_LIB_PDCP')
+    test_sources += 'test_pdcp.c'
+    fast_tests += [['pdcp_autotest', false, true]]
+endif
+
 if cc.has_argument('-Wno-format-truncation')
     cflags += '-Wno-format-truncation'
 endif
@@ -479,7 +490,7 @@ dpdk_test = executable('dpdk-test',
              driver_install_path),
         install: true)
 
-has_hugepage = run_command(py3, 'has_hugepage.py', check: true).stdout().strip() != '0'
+has_hugepage = run_command(py3, files('has_hugepage.py'), check: true).stdout().strip() != '0'
 message('hugepage availability: @0@'.format(has_hugepage))
 
 # some perf tests (eg: memcpy perf autotest)take very long

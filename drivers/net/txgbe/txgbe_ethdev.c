@@ -180,7 +180,9 @@ static const struct rte_txgbe_xstats_name_off rte_txgbe_stats_strings[] = {
 	HW_XSTAT(tx_total_packets),
 	HW_XSTAT(rx_total_missed_packets),
 	HW_XSTAT(rx_broadcast_packets),
+	HW_XSTAT(tx_broadcast_packets),
 	HW_XSTAT(rx_multicast_packets),
+	HW_XSTAT(tx_multicast_packets),
 	HW_XSTAT(rx_management_packets),
 	HW_XSTAT(tx_management_packets),
 	HW_XSTAT(rx_management_dropped),
@@ -1531,6 +1533,25 @@ txgbe_dev_configure(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static void txgbe_reinit_gpio_intr(struct txgbe_hw *hw)
+{
+	u32 reg;
+
+	wr32(hw, TXGBE_GPIOINTMASK, 0xFF);
+	reg = rd32(hw, TXGBE_GPIORAWINTSTAT);
+
+	if (reg & TXGBE_GPIOBIT_2)
+		wr32(hw, TXGBE_GPIOEOI, TXGBE_GPIOBIT_2);
+
+	if (reg & TXGBE_GPIOBIT_3)
+		wr32(hw, TXGBE_GPIOEOI, TXGBE_GPIOBIT_3);
+
+	if (reg & TXGBE_GPIOBIT_6)
+		wr32(hw, TXGBE_GPIOEOI, TXGBE_GPIOBIT_6);
+
+	wr32(hw, TXGBE_GPIOINTMASK, 0);
+}
+
 static void
 txgbe_dev_phy_intr_setup(struct rte_eth_dev *dev)
 {
@@ -1680,6 +1701,10 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 	hw->mac.get_link_status = true;
 	hw->dev_start = true;
 
+	/* workaround for GPIO intr lost when mng_veto bit is set */
+	if (txgbe_check_reset_blocked(hw))
+		txgbe_reinit_gpio_intr(hw);
+
 	/* configure PF module if SRIOV enabled */
 	txgbe_pf_host_configure(dev);
 
@@ -1798,6 +1823,7 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 		speed = (TXGBE_LINK_SPEED_100M_FULL |
 			 TXGBE_LINK_SPEED_1GB_FULL |
 			 TXGBE_LINK_SPEED_10GB_FULL);
+		hw->autoneg = true;
 	} else {
 		if (*link_speeds & RTE_ETH_LINK_SPEED_10G)
 			speed |= TXGBE_LINK_SPEED_10GB_FULL;
@@ -1809,6 +1835,7 @@ txgbe_dev_start(struct rte_eth_dev *dev)
 			speed |= TXGBE_LINK_SPEED_1GB_FULL;
 		if (*link_speeds & RTE_ETH_LINK_SPEED_100M)
 			speed |= TXGBE_LINK_SPEED_100M_FULL;
+		hw->autoneg = false;
 	}
 
 	err = hw->mac.setup_link(hw, speed, link_up);
@@ -1896,6 +1923,10 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 
 	/* disable interrupts */
 	txgbe_disable_intr(hw);
+
+	/* workaround for GPIO intr lost when mng_veto bit is set */
+	if (txgbe_check_reset_blocked(hw))
+		txgbe_reinit_gpio_intr(hw);
 
 	/* reset the NIC */
 	txgbe_pf_reset_hw(hw);
@@ -2032,8 +2063,10 @@ txgbe_dev_close(struct rte_eth_dev *dev)
 		rte_delay_ms(100);
 	} while (retries++ < (10 + TXGBE_LINK_UP_TIME));
 
-	/* cancel the delay handler before remove dev */
+	/* cancel all alarm handler before remove dev */
 	rte_eal_alarm_cancel(txgbe_dev_interrupt_delayed_handler, dev);
+	rte_eal_alarm_cancel(txgbe_dev_detect_sfp, dev);
+	rte_eal_alarm_cancel(txgbe_dev_setup_link_alarm_handler, dev);
 
 	/* uninitialize PF if max_vfs not zero */
 	txgbe_pf_host_uninit(dev);
@@ -3230,7 +3263,8 @@ txgbe_dev_interrupt_delayed_handler(void *param)
 	}
 
 	/* restore original mask */
-	intr->mask_misc |= TXGBE_ICRMISC_LSC;
+	if (dev->data->dev_conf.intr_conf.lsc == 1)
+		intr->mask_misc |= TXGBE_ICRMISC_LSC;
 
 	intr->mask = intr->mask_orig;
 	intr->mask_orig = 0;

@@ -174,7 +174,7 @@ if link_lib != ''
 endif
 
 # check for libraries used in multiple places in DPDK
-has_libnuma = 0
+has_libnuma = false
 find_libnuma = true
 if meson.is_cross_build() and not meson.get_cross_property('numa', true)
     # don't look for libnuma if explicitly disabled in cross build
@@ -184,17 +184,17 @@ if find_libnuma
     numa_dep = cc.find_library('numa', required: false)
     if numa_dep.found() and cc.has_header('numaif.h')
         dpdk_conf.set10('RTE_HAS_LIBNUMA', true)
-        has_libnuma = 1
+        has_libnuma = true
         add_project_link_arguments('-lnuma', language: 'c')
         dpdk_extra_ldflags += '-lnuma'
     endif
 endif
 
-has_libfdt = 0
+has_libfdt = false
 fdt_dep = cc.find_library('fdt', required: false)
 if fdt_dep.found() and cc.has_header('fdt.h')
     dpdk_conf.set10('RTE_HAS_LIBFDT', true)
-    has_libfdt = 1
+    has_libfdt = true
     add_project_link_arguments('-lfdt', language: 'c')
     dpdk_extra_ldflags += '-lfdt'
 endif
@@ -366,7 +366,7 @@ if max_numa_nodes == 'detect'
         error('Discovery of max_numa_nodes not supported for cross-compilation.')
     endif
     # overwrite the default value with discovered values
-    max_numa_nodes = run_command(get_numa_count_cmd).stdout().to_int()
+    max_numa_nodes = run_command(get_numa_count_cmd, check: true).stdout().to_int()
     message('Found @0@ numa nodes'.format(max_numa_nodes))
     dpdk_conf.set('RTE_MAX_NUMA_NODES', max_numa_nodes)
 elif max_numa_nodes != 'default'

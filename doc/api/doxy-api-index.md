@@ -49,6 +49,7 @@ The public API headers are grouped by topics:
   [iavf](@ref rte_pmd_iavf.h),
   [bnxt](@ref rte_pmd_bnxt.h),
   [cnxk](@ref rte_pmd_cnxk.h),
+  [cnxk_mempool](@ref rte_pmd_cnxk_mempool.h),
   [dpaa](@ref rte_pmd_dpaa.h),
   [dpaa2](@ref rte_pmd_dpaa2.h),
   [mlx5](@ref rte_pmd_mlx5.h),
@@ -126,8 +127,11 @@ The public API headers are grouped by topics:
   [VXLAN](@ref rte_vxlan.h),
   [Geneve](@ref rte_geneve.h),
   [eCPRI](@ref rte_ecpri.h),
+  [PDCP hdr](@ref rte_pdcp_hdr.h),
+  [PDCP](@ref rte_pdcp.h),
   [L2TPv2](@ref rte_l2tpv2.h),
-  [PPP](@ref rte_ppp.h)
+  [PPP](@ref rte_ppp.h),
+  [IB](@ref rte_ib.h)
 
 - **QoS**:
   [metering](@ref rte_meter.h),
@@ -204,7 +208,8 @@ The public API headers are grouped by topics:
     [graph_worker](@ref rte_graph_worker.h)
   * graph_nodes:
     [eth_node](@ref rte_node_eth_api.h),
-    [ip4_node](@ref rte_node_ip4_api.h)
+    [ip4_node](@ref rte_node_ip4_api.h),
+    [ip6_node](@ref rte_node_ip6_api.h)
 
 - **basic**:
   [bitops](@ref rte_bitops.h),

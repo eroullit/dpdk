@@ -1057,6 +1057,7 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 	uint32_t ids[MLX5_GRAPH_NODE_SAMPLE_NUM];
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_common_dev_config *config = &priv->sh->cdev->config;
+	struct mlx5_hca_flex_attr *attr = &priv->sh->cdev->config.hca_attr.flex;
 	void *fp = NULL, *ibv_ctx = priv->sh->cdev->ctx;
 	int ret;
 
@@ -1079,6 +1080,8 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 	node.header_length_field_shift = 0x3;
 	/* Header length is the 2nd byte. */
 	node.header_length_field_offset = 0x8;
+	if (attr->header_length_mask_width < 8)
+		node.header_length_field_offset += 8 - attr->header_length_mask_width;
 	node.header_length_field_mask = 0xF;
 	/* One byte next header protocol. */
 	node.next_header_field_size = 0x8;
@@ -2347,6 +2350,7 @@ const struct eth_dev_ops mlx5_dev_ops = {
 	.get_monitor_addr = mlx5_get_monitor_addr,
 	.count_aggr_ports = mlx5_count_aggr_ports,
 	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
+	.rx_metadata_negotiate = mlx5_flow_rx_metadata_negotiate,
 };
 
 /* Available operations from secondary process. */
@@ -2372,6 +2376,7 @@ const struct eth_dev_ops mlx5_dev_sec_ops = {
 	.get_module_eeprom = mlx5_get_module_eeprom,
 	.count_aggr_ports = mlx5_count_aggr_ports,
 	.map_aggr_tx_affinity = mlx5_map_aggr_tx_affinity,
+	.rx_metadata_negotiate = mlx5_flow_rx_metadata_negotiate,
 };
 
 /* Available operations in flow isolated mode. */

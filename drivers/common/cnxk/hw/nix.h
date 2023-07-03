@@ -363,6 +363,8 @@
 #define NIX_LF_SQ_OP_STATUS	 (0xa30ull)
 #define NIX_LF_SQ_OP_DROP_OCTS	 (0xa40ull)
 #define NIX_LF_SQ_OP_DROP_PKTS	 (0xa50ull)
+#define NIX_LF_SQ_OP_AGE_DROP_OCTS (0xa60ull) /* [CN10K, .) */
+#define NIX_LF_SQ_OP_AGE_DROP_PKTS (0xa70ull) /* [CN10K, .) */
 #define NIX_LF_CQ_OP_INT	 (0xb00ull)
 #define NIX_LF_CQ_OP_DOOR	 (0xb30ull)
 #define NIX_LF_CQ_OP_STATUS	 (0xb40ull)
@@ -2126,7 +2128,7 @@ struct nix_lso_format {
 #define NIX_SDP_MAX_HW_FRS  65535UL
 #define NIX_SDP_16K_HW_FRS  16380UL
 #define NIX_RPM_MAX_HW_FRS  16380UL
-#define NIX_MIN_HW_FRS	    60UL
+#define NIX_MIN_HW_FRS	    40UL
 
 /** NIX policer rate limits */
 #define NIX_BPF_MAX_RATE_DIV_EXP  12
