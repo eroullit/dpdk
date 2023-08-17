@@ -438,12 +438,8 @@ struct vring_packed_desc_event {
 #define VIRTIO_NET_SUPPORTED_FEATURES ((1ULL << VIRTIO_NET_F_MRG_RXBUF) | \
 				(1ULL << VIRTIO_F_ANY_LAYOUT) | \
 				(1ULL << VIRTIO_NET_F_CTRL_VQ) | \
-				(1ULL << VIRTIO_NET_F_CTRL_RX) | \
-				(1ULL << VIRTIO_NET_F_GUEST_ANNOUNCE) | \
 				(1ULL << VIRTIO_NET_F_MQ)      | \
 				(1ULL << VIRTIO_F_VERSION_1)   | \
-				(1ULL << VHOST_F_LOG_ALL)      | \
-				(1ULL << VHOST_USER_F_PROTOCOL_FEATURES) | \
 				(1ULL << VIRTIO_NET_F_GSO) | \
 				(1ULL << VIRTIO_NET_F_HOST_TSO4) | \
 				(1ULL << VIRTIO_NET_F_HOST_TSO6) | \
@@ -457,10 +453,8 @@ struct vring_packed_desc_event {
 				(1ULL << VIRTIO_NET_F_GUEST_ECN) | \
 				(1ULL << VIRTIO_RING_F_INDIRECT_DESC) | \
 				(1ULL << VIRTIO_RING_F_EVENT_IDX) | \
-				(1ULL << VIRTIO_NET_F_MTU)  | \
 				(1ULL << VIRTIO_F_IN_ORDER) | \
-				(1ULL << VIRTIO_F_IOMMU_PLATFORM) | \
-				(1ULL << VIRTIO_F_RING_PACKED))
+				(1ULL << VIRTIO_F_IOMMU_PLATFORM))
 
 
 struct guest_page {
@@ -1051,11 +1045,5 @@ mbuf_is_consumed(struct rte_mbuf *m)
 }
 
 void mem_set_dump(void *ptr, size_t size, bool enable, uint64_t alignment);
-
-/* Versioned functions */
-int rte_vhost_driver_callback_register_v23(const char *path,
-	struct rte_vhost_device_ops const * const ops);
-int rte_vhost_driver_callback_register_v24(const char *path,
-	struct rte_vhost_device_ops const * const ops);
 
 #endif /* _VHOST_NET_CDEV_H_ */

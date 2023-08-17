@@ -374,7 +374,7 @@ mlx5_flow_expand_rss_skip_explicit(const struct mlx5_flow_expand_node graph[],
 	return next;
 }
 
-#define MLX5_RSS_EXP_ELT_N 16
+#define MLX5_RSS_EXP_ELT_N 32
 
 /**
  * Expand RSS flows into several possible flows according to the RSS hash
@@ -539,6 +539,7 @@ mlx5_flow_expand_rss(struct mlx5_flow_expand_rss *buf, size_t size,
 			if (lsize > size)
 				return -EINVAL;
 			n = elt * sizeof(*item);
+			MLX5_ASSERT((buf->entries) < MLX5_RSS_EXP_ELT_N);
 			buf->entry[buf->entries].priority =
 				stack_pos + 1 + missed;
 			buf->entry[buf->entries].pattern = addr;
@@ -2163,8 +2164,11 @@ mlx5_validate_action_rss(struct rte_eth_dev *dev,
 	const char *message;
 	uint32_t queue_idx;
 
-	if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT &&
-	    rss->func != RTE_ETH_HASH_FUNCTION_TOEPLITZ)
+	if (rss->func == RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ) {
+		DRV_LOG(WARNING, "port %u symmetric RSS supported with SORT",
+			dev->data->port_id);
+	} else if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT &&
+		   rss->func != RTE_ETH_HASH_FUNCTION_TOEPLITZ)
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ACTION_CONF,
 					  &rss->func,
@@ -2411,7 +2415,8 @@ flow_validate_modify_field_level(const struct rte_flow_action_modify_data *data,
 {
 	if (data->level == 0)
 		return 0;
-	if (data->field != RTE_FLOW_FIELD_TAG)
+	if (data->field != RTE_FLOW_FIELD_TAG &&
+	    data->field != (enum rte_flow_field_id)MLX5_RTE_FLOW_FIELD_META_REG)
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ACTION, NULL,
 					  "inner header fields modification is not supported");
@@ -2424,7 +2429,7 @@ flow_validate_modify_field_level(const struct rte_flow_action_modify_data *data,
 	 * 'tag_index' field. In old API, it was provided using 'level' field
 	 * and it is still supported for backwards compatibility.
 	 */
-	DRV_LOG(WARNING, "tag array provided in 'level' field instead of 'tag_index' field.");
+	DRV_LOG(DEBUG, "tag array provided in 'level' field instead of 'tag_index' field.");
 	return 0;
 }
 
@@ -5577,6 +5582,8 @@ get_meter_sub_policy(struct rte_eth_dev *dev,
 						items, rss_actions, error))
 					goto exit;
 				rss_desc_v[i] = wks->rss_desc;
+				rss_desc_v[i].symmetric_hash_function =
+						dev_flow.symmetric_hash_function;
 				rss_desc_v[i].key_len = MLX5_RSS_HASH_KEY_LEN;
 				rss_desc_v[i].hash_fields =
 						dev_flow.hash_fields;
@@ -7156,36 +7163,6 @@ flow_tunnel_from_rule(const struct mlx5_flow *flow)
 }
 
 /**
- * Adjust flow RSS workspace if needed.
- *
- * @param wks
- *   Pointer to thread flow work space.
- * @param rss_desc
- *   Pointer to RSS descriptor.
- * @param[in] nrssq_num
- *   New RSS queue number.
- *
- * @return
- *   0 on success, -1 otherwise and rte_errno is set.
- */
-static int
-flow_rss_workspace_adjust(struct mlx5_flow_workspace *wks,
-			  struct mlx5_flow_rss_desc *rss_desc,
-			  uint32_t nrssq_num)
-{
-	if (likely(nrssq_num <= wks->rssq_num))
-		return 0;
-	rss_desc->queue = realloc(rss_desc->queue,
-			  sizeof(*rss_desc->queue) * RTE_ALIGN(nrssq_num, 2));
-	if (!rss_desc->queue) {
-		rte_errno = ENOMEM;
-		return -1;
-	}
-	wks->rssq_num = RTE_ALIGN(nrssq_num, 2);
-	return 0;
-}
-
-/**
  * Create a flow and add it to @p list.
  *
  * @param dev
@@ -7303,8 +7280,8 @@ flow_list_create(struct rte_eth_dev *dev, enum mlx5_flow_type type,
 	if (attr->ingress)
 		rss = flow_get_rss_action(dev, p_actions_rx);
 	if (rss) {
-		if (flow_rss_workspace_adjust(wks, rss_desc, rss->queue_num))
-			return 0;
+		MLX5_ASSERT(rss->queue_num <= RTE_ETH_RSS_RETA_SIZE_512);
+		rss_desc->symmetric_hash_function = MLX5_RSS_IS_SYMM(rss->func);
 		/*
 		 * The following information is required by
 		 * mlx5_flow_hashfields_adjust() in advance.
@@ -8072,9 +8049,31 @@ flow_release_workspace(void *data)
 
 	while (wks) {
 		next = wks->next;
-		free(wks->rss_desc.queue);
 		free(wks);
 		wks = next;
+	}
+}
+
+static struct mlx5_flow_workspace *gc_head;
+static rte_spinlock_t mlx5_flow_workspace_lock = RTE_SPINLOCK_INITIALIZER;
+
+static void
+mlx5_flow_workspace_gc_add(struct mlx5_flow_workspace *ws)
+{
+	rte_spinlock_lock(&mlx5_flow_workspace_lock);
+	ws->gc = gc_head;
+	gc_head = ws;
+	rte_spinlock_unlock(&mlx5_flow_workspace_lock);
+}
+
+void
+mlx5_flow_workspace_gc_release(void)
+{
+	while (gc_head) {
+		struct mlx5_flow_workspace *wks = gc_head;
+
+		gc_head = wks->gc;
+		flow_release_workspace(wks);
 	}
 }
 
@@ -8103,23 +8102,17 @@ mlx5_flow_get_thread_workspace(void)
 static struct mlx5_flow_workspace*
 flow_alloc_thread_workspace(void)
 {
-	struct mlx5_flow_workspace *data = calloc(1, sizeof(*data));
+	size_t data_size = RTE_ALIGN(sizeof(struct mlx5_flow_workspace), sizeof(long));
+	size_t rss_queue_array_size = sizeof(uint16_t) * RTE_ETH_RSS_RETA_SIZE_512;
+	struct mlx5_flow_workspace *data = calloc(1, data_size +
+						     rss_queue_array_size);
 
 	if (!data) {
-		DRV_LOG(ERR, "Failed to allocate flow workspace "
-			"memory.");
+		DRV_LOG(ERR, "Failed to allocate flow workspace memory.");
 		return NULL;
 	}
-	data->rss_desc.queue = calloc(1,
-			sizeof(uint16_t) * MLX5_RSSQ_DEFAULT_NUM);
-	if (!data->rss_desc.queue)
-		goto err;
-	data->rssq_num = MLX5_RSSQ_DEFAULT_NUM;
+	data->rss_desc.queue = RTE_PTR_ADD(data, data_size);
 	return data;
-err:
-	free(data->rss_desc.queue);
-	free(data);
-	return NULL;
 }
 
 /**
@@ -8140,6 +8133,7 @@ mlx5_flow_push_thread_workspace(void)
 		data = flow_alloc_thread_workspace();
 		if (!data)
 			return NULL;
+		mlx5_flow_workspace_gc_add(data);
 	} else if (!curr->inuse) {
 		data = curr;
 	} else if (curr->next) {
@@ -10390,23 +10384,47 @@ mlx5_flow_dev_dump_sh_all(struct rte_eth_dev *dev,
 		}
 		i = lcore_index;
 
-		for (j = 0; j <= h->mask; j++) {
-			l_inconst = &h->buckets[j].l;
-			if (!l_inconst || !l_inconst->cache[i])
-				continue;
+		if (lcore_index == MLX5_LIST_NLCORE) {
+			for (i = 0; i <= (uint32_t)lcore_index; i++) {
+				for (j = 0; j <= h->mask; j++) {
+					l_inconst = &h->buckets[j].l;
+					if (!l_inconst || !l_inconst->cache[i])
+						continue;
 
-			e = LIST_FIRST(&l_inconst->cache[i]->h);
-			while (e) {
-				modify_hdr =
-				(struct mlx5_flow_dv_modify_hdr_resource *)e;
-				data = (const uint8_t *)modify_hdr->actions;
-				size = (size_t)(modify_hdr->actions_num) * 8;
-				actions_num = modify_hdr->actions_num;
-				id = (uint64_t)(uintptr_t)modify_hdr->action;
-				type = DR_DUMP_REC_TYPE_PMD_MODIFY_HDR;
-				save_dump_file(data, size, type, id,
-						(void *)(&actions_num), file);
-				e = LIST_NEXT(e, next);
+					e = LIST_FIRST(&l_inconst->cache[i]->h);
+					while (e) {
+						modify_hdr =
+						(struct mlx5_flow_dv_modify_hdr_resource *)e;
+						data = (const uint8_t *)modify_hdr->actions;
+						size = (size_t)(modify_hdr->actions_num) * 8;
+						actions_num = modify_hdr->actions_num;
+						id = (uint64_t)(uintptr_t)modify_hdr->action;
+						type = DR_DUMP_REC_TYPE_PMD_MODIFY_HDR;
+						save_dump_file(data, size, type, id,
+								(void *)(&actions_num), file);
+						e = LIST_NEXT(e, next);
+					}
+				}
+			}
+		} else {
+			for (j = 0; j <= h->mask; j++) {
+				l_inconst = &h->buckets[j].l;
+				if (!l_inconst || !l_inconst->cache[i])
+					continue;
+
+				e = LIST_FIRST(&l_inconst->cache[i]->h);
+				while (e) {
+					modify_hdr =
+					(struct mlx5_flow_dv_modify_hdr_resource *)e;
+					data = (const uint8_t *)modify_hdr->actions;
+					size = (size_t)(modify_hdr->actions_num) * 8;
+					actions_num = modify_hdr->actions_num;
+					id = (uint64_t)(uintptr_t)modify_hdr->action;
+					type = DR_DUMP_REC_TYPE_PMD_MODIFY_HDR;
+					save_dump_file(data, size, type, id,
+							(void *)(&actions_num), file);
+					e = LIST_NEXT(e, next);
+				}
 			}
 		}
 
@@ -10735,9 +10753,19 @@ mlx5_action_handle_update(struct rte_eth_dev *dev,
 	const struct mlx5_flow_driver_ops *fops =
 			flow_get_drv_ops(flow_get_drv_type(dev, &attr));
 	int ret;
+	uint32_t act_idx = (uint32_t)(uintptr_t)handle;
+	uint32_t type = act_idx >> MLX5_INDIRECT_ACTION_TYPE_OFFSET;
 
-	ret = flow_drv_action_validate(dev, NULL,
-			(const struct rte_flow_action *)update, fops, error);
+	switch (type) {
+	case MLX5_INDIRECT_ACTION_TYPE_CT:
+	case MLX5_INDIRECT_ACTION_TYPE_METER_MARK:
+		ret = 0;
+		break;
+	default:
+		ret = flow_drv_action_validate(dev, NULL,
+				(const struct rte_flow_action *)update,
+				fops, error);
+	}
 	if (ret)
 		return ret;
 	return flow_drv_action_update(dev, handle, update, fops,

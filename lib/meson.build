@@ -9,6 +9,7 @@
 # given as a dep, no need to mention ring. This is especially true for the
 # core libs which are widely reused, so their deps are kept to a minimum.
 libraries = [
+        'log',
         'kvargs', # eal depends on kvargs
         'telemetry', # basic info querying
         'eal', # everything depends on eal
@@ -39,7 +40,6 @@ libraries = [
         'gso',
         'ip_frag',
         'jobstats',
-        'kni',
         'latencystats',
         'lpm',
         'member',
@@ -62,7 +62,6 @@ libraries = [
         'pdump', # pdump lib depends on bpf
         'table',
         'pipeline',
-        'flow_classify', # flow_classify lib depends on pkt framework table lib
         'graph',
         'node',
 ]
@@ -70,12 +69,10 @@ libraries = [
 optional_libs = [
         'bitratestats',
         'cfgfile',
-        'flow_classify',
         'gpudev',
         'graph',
         'gro',
         'gso',
-        'kni',
         'jobstats',
         'latencystats',
         'metrics',
@@ -86,11 +83,6 @@ optional_libs = [
         'power',
         'table',
         'vhost',
-]
-
-dpdk_libs_deprecated += [
-        'flow_classify',
-        'kni',
 ]
 
 disabled_libs = []

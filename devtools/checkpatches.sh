@@ -78,14 +78,6 @@ check_forbidden_additions() { # <patch>
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
-	# forbid variable declaration inside "for" loop
-	awk -v FOLDERS='.' \
-		-v EXPRESSIONS='for[[:space:]]*\\((char|u?int|unsigned|s?size_t)' \
-		-v RET_ON_FAIL=1 \
-		-v MESSAGE='Declaring a variable inside for()' \
-		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
-		"$1" || res=1
-
 	# refrain from new additions of 16/32/64 bits rte_atomicNN_xxx()
 	awk -v FOLDERS="lib drivers app examples" \
 		-v EXPRESSIONS="rte_atomic[0-9][0-9]_.*\\\(" \
@@ -172,6 +164,14 @@ check_forbidden_additions() { # <patch>
 		-v EXPRESSIONS='http://.*dpdk.org' \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using non https link to dpdk.org' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
+	# prefer Sphinx references for internal documentation
+	awk -v FOLDERS='doc' \
+		-v EXPRESSIONS='//doc.dpdk.org/guides/' \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Using explicit URL to doc.dpdk.org, prefer :ref: or :doc:' \
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 

@@ -5,7 +5,6 @@
 #ifndef _PMD_AESNI_MB_PRIV_H_
 #define _PMD_AESNI_MB_PRIV_H_
 
-#define AESNI_MB_DOCSIS_SEC_ENABLED 1
 #include <rte_security.h>
 #include <rte_security_driver.h>
 #include <rte_ether.h>
@@ -854,6 +853,8 @@ struct aesni_mb_session {
 	/*< Template job structure */
 	uint32_t session_id;
 	/*< IPSec MB session ID */
+	pid_t pid;
+	/*< Process ID that created session */
 	struct {
 		uint16_t offset;
 	} iv;

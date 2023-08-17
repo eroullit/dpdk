@@ -52,8 +52,8 @@ enum mlx5_rte_flow_action_type {
 
 /* Private (internal) Field IDs for MODIFY_FIELD action. */
 enum mlx5_rte_flow_field_id {
-		MLX5_RTE_FLOW_FIELD_END = INT_MIN,
-			MLX5_RTE_FLOW_FIELD_META_REG,
+	MLX5_RTE_FLOW_FIELD_END = INT_MIN,
+	MLX5_RTE_FLOW_FIELD_META_REG,
 };
 
 #define MLX5_INDIRECT_ACTION_TYPE_OFFSET 29
@@ -900,6 +900,7 @@ struct mlx5_flow {
 	bool external; /**< true if the flow is created external to PMD. */
 	uint8_t ingress:1; /**< 1 if the flow is ingress. */
 	uint8_t skip_scale:2;
+	uint8_t symmetric_hash_function:1;
 	/**
 	 * Each Bit be set to 1 if Skip the scale the flow group with factor.
 	 * If bit0 be set to 1, then skip the scale the original flow group;
@@ -1117,9 +1118,10 @@ flow_dv_fetch_field(const uint8_t *data, uint32_t size)
 static inline bool
 flow_modify_field_support_tag_array(enum rte_flow_field_id field)
 {
-	switch (field) {
+	switch ((int)field) {
 	case RTE_FLOW_FIELD_TAG:
 	case RTE_FLOW_FIELD_MPLS:
+	case MLX5_RTE_FLOW_FIELD_META_REG:
 		return true;
 	default:
 		break;
@@ -1249,6 +1251,7 @@ struct mlx5_action_construct_data {
 			uint32_t mask[MLX5_ACT_MAX_MOD_FIELDS];
 		} modify_header;
 		struct {
+			bool symmetric_hash_function; /* Symmetric RSS hash */
 			uint64_t types; /* RSS hash types. */
 			uint32_t level; /* RSS level. */
 			uint32_t idx; /* Shared action index. */
@@ -1452,6 +1455,9 @@ struct rte_flow_template_table {
 				MLX5_RSS_HASH_ESP_SPI)
 #define MLX5_RSS_HASH_NONE 0ULL
 
+#define MLX5_RSS_IS_SYMM(func) \
+		((func) == RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ)
+
 
 /* extract next protocol type from Ethernet & VLAN headers */
 #define MLX5_ETHER_TYPE_FROM_HEADER(_s, _m, _itm, _prt) do { \
@@ -1496,10 +1502,10 @@ struct mlx5_flow_workspace {
 	/* If creating another flow in same thread, push new as stack. */
 	struct mlx5_flow_workspace *prev;
 	struct mlx5_flow_workspace *next;
+	struct mlx5_flow_workspace *gc;
 	uint32_t inuse; /* can't create new flow with current. */
 	struct mlx5_flow flows[MLX5_NUM_MAX_DEV_FLOWS];
 	struct mlx5_flow_rss_desc rss_desc;
-	uint32_t rssq_num; /* Allocated queue num in rss_desc. */
 	uint32_t flow_idx; /* Intermediate device flow index. */
 	struct mlx5_flow_meter_info *fm; /* Pointer to the meter in flow. */
 	struct mlx5_flow_meter_policy *policy;
@@ -2022,6 +2028,8 @@ struct mlx5_flow_driver_ops {
 struct mlx5_flow_workspace *mlx5_flow_push_thread_workspace(void);
 void mlx5_flow_pop_thread_workspace(void);
 struct mlx5_flow_workspace *mlx5_flow_get_thread_workspace(void);
+void mlx5_flow_workspace_gc_release(void);
+
 __extension__
 struct flow_grp_info {
 	uint64_t external:1;

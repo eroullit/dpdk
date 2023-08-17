@@ -22,7 +22,7 @@ static uint8_t mana_rss_hash_key_default[TOEPLITZ_HASH_KEY_SIZE_IN_BYTES] = {
 };
 
 int
-mana_rq_ring_doorbell(struct mana_rxq *rxq, uint8_t arm)
+mana_rq_ring_doorbell(struct mana_rxq *rxq)
 {
 	struct mana_priv *priv = rxq->priv;
 	int ret;
@@ -36,10 +36,13 @@ mana_rq_ring_doorbell(struct mana_rxq *rxq, uint8_t arm)
 		db_page = process_priv->db_page;
 	}
 
+	/* Hardware Spec specifies that software client should set 0 for
+	 * wqe_cnt for Receive Queues.
+	 */
 	ret = mana_ring_doorbell(db_page, GDMA_QUEUE_RECEIVE,
 			 rxq->gdma_rq.id,
 			 rxq->gdma_rq.head * GDMA_WQE_ALIGNMENT_UNIT_SIZE,
-			 arm);
+			 0);
 
 	if (ret)
 		DP_LOG(ERR, "failed to ring RX doorbell ret %d", ret);
@@ -120,7 +123,7 @@ mana_alloc_and_post_rx_wqes(struct mana_rxq *rxq)
 		}
 	}
 
-	mana_rq_ring_doorbell(rxq, rxq->num_desc);
+	mana_rq_ring_doorbell(rxq);
 
 	return ret;
 }
@@ -384,7 +387,7 @@ uint16_t
 mana_rx_burst(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
 {
 	uint16_t pkt_received = 0;
-	uint8_t wqe_posted = 0;
+	uint16_t wqe_posted = 0;
 	struct mana_rxq *rxq = dpdk_rxq;
 	struct mana_priv *priv = rxq->priv;
 	struct rte_mbuf *mbuf;
@@ -416,23 +419,21 @@ repoll:
 
 		switch (oob->cqe_hdr.cqe_type) {
 		case CQE_RX_OKAY:
-			/* Proceed to process mbuf */
-			break;
-
-		case CQE_RX_TRUNCATED:
-			DP_LOG(DEBUG, "Drop a truncated packet");
-			rxq->stats.errors++;
-			rte_pktmbuf_free(mbuf);
-			goto drop;
-
 		case CQE_RX_COALESCED_4:
 			/* Proceed to process mbuf */
 			break;
 
+		case CQE_RX_TRUNCATED:
 		default:
-			DP_LOG(ERR, "Unknown RX CQE type %d",
-			       oob->cqe_hdr.cqe_type);
-			continue;
+			DP_LOG(ERR, "RX CQE type %d client %d vendor %d",
+			       oob->cqe_hdr.cqe_type, oob->cqe_hdr.client_type,
+			       oob->cqe_hdr.vendor_err);
+
+			rxq->stats.errors++;
+			rte_pktmbuf_free(mbuf);
+
+			i++;
+			goto drop;
 		}
 
 		DP_LOG(DEBUG, "mana_rx_comp_oob type %d rxq %p",
@@ -519,7 +520,7 @@ drop:
 	}
 
 	if (wqe_posted)
-		mana_rq_ring_doorbell(rxq, wqe_posted);
+		mana_rq_ring_doorbell(rxq);
 
 	return pkt_received;
 }

@@ -30,6 +30,23 @@ static const char * const idpf_valid_args[] = {
 	NULL
 };
 
+uint32_t idpf_supported_speeds[] = {
+	RTE_ETH_SPEED_NUM_NONE,
+	RTE_ETH_SPEED_NUM_10M,
+	RTE_ETH_SPEED_NUM_100M,
+	RTE_ETH_SPEED_NUM_1G,
+	RTE_ETH_SPEED_NUM_2_5G,
+	RTE_ETH_SPEED_NUM_5G,
+	RTE_ETH_SPEED_NUM_10G,
+	RTE_ETH_SPEED_NUM_20G,
+	RTE_ETH_SPEED_NUM_25G,
+	RTE_ETH_SPEED_NUM_40G,
+	RTE_ETH_SPEED_NUM_50G,
+	RTE_ETH_SPEED_NUM_56G,
+	RTE_ETH_SPEED_NUM_100G,
+	RTE_ETH_SPEED_NUM_200G
+};
+
 static const uint64_t idpf_map_hena_rss[] = {
 	[IDPF_HASH_NONF_UNICAST_IPV4_UDP] =
 			RTE_ETH_RSS_NONFRAG_IPV4_UDP,
@@ -110,47 +127,23 @@ idpf_dev_link_update(struct rte_eth_dev *dev,
 {
 	struct idpf_vport *vport = dev->data->dev_private;
 	struct rte_eth_link new_link;
+	unsigned int i;
 
 	memset(&new_link, 0, sizeof(new_link));
 
-	switch (vport->link_speed) {
-	case RTE_ETH_SPEED_NUM_10M:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_10M;
-		break;
-	case RTE_ETH_SPEED_NUM_100M:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_100M;
-		break;
-	case RTE_ETH_SPEED_NUM_1G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_1G;
-		break;
-	case RTE_ETH_SPEED_NUM_10G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_10G;
-		break;
-	case RTE_ETH_SPEED_NUM_20G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_20G;
-		break;
-	case RTE_ETH_SPEED_NUM_25G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_25G;
-		break;
-	case RTE_ETH_SPEED_NUM_40G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_40G;
-		break;
-	case RTE_ETH_SPEED_NUM_50G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_50G;
-		break;
-	case RTE_ETH_SPEED_NUM_100G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_100G;
-		break;
-	case RTE_ETH_SPEED_NUM_200G:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_200G;
-		break;
-	default:
-		new_link.link_speed = RTE_ETH_SPEED_NUM_NONE;
+	/* initialize with default value */
+	new_link.link_speed = vport->link_up ? RTE_ETH_SPEED_NUM_UNKNOWN : RTE_ETH_SPEED_NUM_NONE;
+
+	/* update in case a match */
+	for (i = 0; i < RTE_DIM(idpf_supported_speeds); i++) {
+		if (vport->link_speed == idpf_supported_speeds[i]) {
+			new_link.link_speed = vport->link_speed;
+			break;
+		}
 	}
 
 	new_link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
-	new_link.link_status = vport->link_up ? RTE_ETH_LINK_UP :
-		RTE_ETH_LINK_DOWN;
+	new_link.link_status = vport->link_up ? RTE_ETH_LINK_UP : RTE_ETH_LINK_DOWN;
 	new_link.link_autoneg = (dev->data->dev_conf.link_speeds & RTE_ETH_LINK_SPEED_FIXED) ?
 				 RTE_ETH_LINK_FIXED : RTE_ETH_LINK_AUTONEG;
 
@@ -842,6 +835,34 @@ idpf_dev_close(struct rte_eth_dev *dev)
 	return 0;
 }
 
+static const struct eth_dev_ops idpf_eth_dev_ops = {
+	.dev_configure			= idpf_dev_configure,
+	.dev_close			= idpf_dev_close,
+	.rx_queue_setup			= idpf_rx_queue_setup,
+	.tx_queue_setup			= idpf_tx_queue_setup,
+	.dev_infos_get			= idpf_dev_info_get,
+	.dev_start			= idpf_dev_start,
+	.dev_stop			= idpf_dev_stop,
+	.link_update			= idpf_dev_link_update,
+	.rx_queue_start			= idpf_rx_queue_start,
+	.tx_queue_start			= idpf_tx_queue_start,
+	.rx_queue_stop			= idpf_rx_queue_stop,
+	.tx_queue_stop			= idpf_tx_queue_stop,
+	.rx_queue_release		= idpf_dev_rx_queue_release,
+	.tx_queue_release		= idpf_dev_tx_queue_release,
+	.mtu_set			= idpf_dev_mtu_set,
+	.dev_supported_ptypes_get	= idpf_dev_supported_ptypes_get,
+	.stats_get			= idpf_dev_stats_get,
+	.stats_reset			= idpf_dev_stats_reset,
+	.reta_update			= idpf_rss_reta_update,
+	.reta_query			= idpf_rss_reta_query,
+	.rss_hash_update		= idpf_rss_hash_update,
+	.rss_hash_conf_get		= idpf_rss_hash_conf_get,
+	.xstats_get			= idpf_dev_xstats_get,
+	.xstats_get_names		= idpf_dev_xstats_get_names,
+	.xstats_reset			= idpf_dev_xstats_reset,
+};
+
 static int
 insert_value(struct idpf_devargs *devargs, uint16_t id)
 {
@@ -1216,34 +1237,6 @@ err_adapter_init:
 	return ret;
 }
 
-static const struct eth_dev_ops idpf_eth_dev_ops = {
-	.dev_configure			= idpf_dev_configure,
-	.dev_close			= idpf_dev_close,
-	.rx_queue_setup			= idpf_rx_queue_setup,
-	.tx_queue_setup			= idpf_tx_queue_setup,
-	.dev_infos_get			= idpf_dev_info_get,
-	.dev_start			= idpf_dev_start,
-	.dev_stop			= idpf_dev_stop,
-	.link_update			= idpf_dev_link_update,
-	.rx_queue_start			= idpf_rx_queue_start,
-	.tx_queue_start			= idpf_tx_queue_start,
-	.rx_queue_stop			= idpf_rx_queue_stop,
-	.tx_queue_stop			= idpf_tx_queue_stop,
-	.rx_queue_release		= idpf_dev_rx_queue_release,
-	.tx_queue_release		= idpf_dev_tx_queue_release,
-	.mtu_set			= idpf_dev_mtu_set,
-	.dev_supported_ptypes_get	= idpf_dev_supported_ptypes_get,
-	.stats_get			= idpf_dev_stats_get,
-	.stats_reset			= idpf_dev_stats_reset,
-	.reta_update			= idpf_rss_reta_update,
-	.reta_query			= idpf_rss_reta_query,
-	.rss_hash_update		= idpf_rss_hash_update,
-	.rss_hash_conf_get		= idpf_rss_hash_conf_get,
-	.xstats_get			= idpf_dev_xstats_get,
-	.xstats_get_names		= idpf_dev_xstats_get_names,
-	.xstats_reset			= idpf_dev_xstats_reset,
-};
-
 static uint16_t
 idpf_vport_idx_alloc(struct idpf_adapter_ext *ad)
 {
@@ -1291,10 +1284,6 @@ idpf_dev_vport_init(struct rte_eth_dev *dev, void *init_params)
 		goto err;
 	}
 
-	adapter->vports[param->idx] = vport;
-	adapter->cur_vports |= RTE_BIT32(param->devarg_id);
-	adapter->cur_vport_nb++;
-
 	dev->data->mac_addrs = rte_zmalloc(NULL, RTE_ETHER_ADDR_LEN, 0);
 	if (dev->data->mac_addrs == NULL) {
 		PMD_INIT_LOG(ERR, "Cannot allocate mac_addr memory.");
@@ -1304,6 +1293,10 @@ idpf_dev_vport_init(struct rte_eth_dev *dev, void *init_params)
 
 	rte_ether_addr_copy((struct rte_ether_addr *)vport->default_mac_addr,
 			    &dev->data->mac_addrs[0]);
+
+	adapter->vports[param->idx] = vport;
+	adapter->cur_vports |= RTE_BIT32(param->devarg_id);
+	adapter->cur_vport_nb++;
 
 	return 0;
 
@@ -1486,9 +1479,9 @@ RTE_PMD_REGISTER_PCI(net_idpf, rte_idpf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_idpf, pci_id_idpf_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_idpf, "* igb_uio | vfio-pci");
 RTE_PMD_REGISTER_PARAM_STRING(net_idpf,
-			      IDPF_TX_SINGLE_Q "=<0|1> "
-			      IDPF_RX_SINGLE_Q "=<0|1> "
-			      IDPF_VPORT "=[vport_set0,[vport_set1],...]");
+	IDPF_TX_SINGLE_Q "=<0|1> "
+	IDPF_RX_SINGLE_Q "=<0|1> "
+	IDPF_VPORT "=[<begin>[-<end>][,<begin >[-<end>]][, ... ]]");
 
 RTE_LOG_REGISTER_SUFFIX(idpf_logtype_init, init, NOTICE);
 RTE_LOG_REGISTER_SUFFIX(idpf_logtype_driver, driver, NOTICE);

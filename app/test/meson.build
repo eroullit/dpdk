@@ -72,7 +72,6 @@ test_sources = files(
         'test_ipsec.c',
         'test_ipsec_sad.c',
         'test_ipsec_perf.c',
-        'test_kni.c',
         'test_kvargs.c',
         'test_lcores.c',
         'test_logs.c',
@@ -106,6 +105,7 @@ test_sources = files(
         'test_rawdev.c',
         'test_rcu_qsbr.c',
         'test_rcu_qsbr_perf.c',
+        'test_reassembly_perf.c',
         'test_reciprocal_division.c',
         'test_reciprocal_division_perf.c',
         'test_red.c',
@@ -236,7 +236,6 @@ fast_tests = [
         ['fbarray_autotest', true, true],
         ['hash_readwrite_func_autotest', false, true],
         ['ipsec_autotest', true, true],
-        ['kni_autotest', false, true],
         ['kvargs_autotest', true, true],
         ['member_autotest', true, true],
         ['power_cpufreq_autotest', false, true],
@@ -296,6 +295,7 @@ perf_test_names = [
         'trace_perf_autotest',
         'ipsec_perf_autotest',
         'thash_perf_autotest',
+        'reassembly_perf_autotest',
 ]
 
 driver_test_names = [
@@ -357,10 +357,6 @@ if dpdk_conf.has('RTE_EVENT_SKELETON')
     test_deps += 'event_skeleton'
 endif
 
-if dpdk_conf.has('RTE_LIB_FLOW_CLASSIFY')
-    test_sources += 'test_flow_classify.c'
-    fast_tests += [['flow_classify_autotest', false, true]]
-endif
 if dpdk_conf.has('RTE_LIB_GRAPH')
     test_sources += 'test_graph.c'
     fast_tests += [['graph_autotest', true, true]]

@@ -577,6 +577,7 @@ iavf_queues_req_reset(struct rte_eth_dev *dev, uint16_t num)
 	PMD_DRV_LOG(INFO, "change queue pairs from %u to %u",
 			vf->vsi_res->num_queue_pairs, num);
 
+	iavf_dev_watchdog_disable(ad);
 	ret = iavf_dev_reset(dev);
 	if (ret) {
 		PMD_DRV_LOG(ERR, "vf reset failed");
@@ -1086,8 +1087,6 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	if (adapter->stopped == 1)
 		return 0;
 
-	iavf_stop_queues(dev);
-
 	/* Disable the interrupt for Rx */
 	rte_intr_efd_disable(intr_handle);
 	/* Rx interrupt vector mapping free */
@@ -1099,6 +1098,8 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	/* remove all multicast addresses */
 	iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
 				  false);
+
+	iavf_stop_queues(dev);
 
 	adapter->stopped = 1;
 	dev->data->dev_started = 0;

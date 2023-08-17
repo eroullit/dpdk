@@ -215,9 +215,11 @@ enum index {
 
 	/* Destroy arguments. */
 	DESTROY_RULE,
+	DESTROY_IS_USER_ID,
 
 	/* Query arguments. */
 	QUERY_ACTION,
+	QUERY_IS_USER_ID,
 
 	/* List arguments. */
 	LIST_GROUP,
@@ -233,10 +235,12 @@ enum index {
 	VC_TRANSFER,
 	VC_TUNNEL_SET,
 	VC_TUNNEL_MATCH,
+	VC_USER_ID,
 
 	/* Dump arguments */
 	DUMP_ALL,
 	DUMP_ONE,
+	DUMP_IS_USER_ID,
 
 	/* Configure arguments */
 	CONFIG_QUEUES_NUMBER,
@@ -313,6 +317,7 @@ enum index {
 	ITEM_IPV4,
 	ITEM_IPV4_VER_IHL,
 	ITEM_IPV4_TOS,
+	ITEM_IPV4_LENGTH,
 	ITEM_IPV4_ID,
 	ITEM_IPV4_FRAGMENT_OFFSET,
 	ITEM_IPV4_TTL,
@@ -322,6 +327,7 @@ enum index {
 	ITEM_IPV6,
 	ITEM_IPV6_TC,
 	ITEM_IPV6_FLOW,
+	ITEM_IPV6_LEN,
 	ITEM_IPV6_PROTO,
 	ITEM_IPV6_HOP,
 	ITEM_IPV6_SRC,
@@ -1154,6 +1160,7 @@ struct buffer {
 			uint32_t act_templ_id;
 			struct rte_flow_attr attr;
 			struct tunnel_ops tunnel_ops;
+			uintptr_t user_id;
 			struct rte_flow_item *pattern;
 			struct rte_flow_action *actions;
 			struct rte_flow_action *masks;
@@ -1162,17 +1169,20 @@ struct buffer {
 			uint8_t *data;
 		} vc; /**< Validate/create arguments. */
 		struct {
-			uint32_t *rule;
-			uint32_t rule_n;
+			uint64_t *rule;
+			uint64_t rule_n;
+			bool is_user_id;
 		} destroy; /**< Destroy arguments. */
 		struct {
 			char file[128];
 			bool mode;
-			uint32_t rule;
+			uint64_t rule;
+			bool is_user_id;
 		} dump; /**< Dump arguments. */
 		struct {
-			uint32_t rule;
+			uint64_t rule;
 			struct rte_flow_action action;
+			bool is_user_id;
 		} query; /**< Query arguments. */
 		struct {
 			uint32_t *group;
@@ -1407,6 +1417,7 @@ static const enum index next_ia_qu_attr[] = {
 static const enum index next_dump_subcmd[] = {
 	DUMP_ALL,
 	DUMP_ONE,
+	DUMP_IS_USER_ID,
 	ZERO,
 };
 
@@ -1427,18 +1438,26 @@ static const enum index next_vc_attr[] = {
 	VC_TRANSFER,
 	VC_TUNNEL_SET,
 	VC_TUNNEL_MATCH,
+	VC_USER_ID,
 	ITEM_PATTERN,
 	ZERO,
 };
 
 static const enum index next_destroy_attr[] = {
 	DESTROY_RULE,
+	DESTROY_IS_USER_ID,
 	END,
 	ZERO,
 };
 
 static const enum index next_dump_attr[] = {
 	COMMON_FILE_PATH,
+	END,
+	ZERO,
+};
+
+static const enum index next_query_attr[] = {
+	QUERY_IS_USER_ID,
 	END,
 	ZERO,
 };
@@ -1604,6 +1623,7 @@ static const enum index item_vlan[] = {
 static const enum index item_ipv4[] = {
 	ITEM_IPV4_VER_IHL,
 	ITEM_IPV4_TOS,
+	ITEM_IPV4_LENGTH,
 	ITEM_IPV4_ID,
 	ITEM_IPV4_FRAGMENT_OFFSET,
 	ITEM_IPV4_TTL,
@@ -1617,6 +1637,7 @@ static const enum index item_ipv4[] = {
 static const enum index item_ipv6[] = {
 	ITEM_IPV6_TC,
 	ITEM_IPV6_FLOW,
+	ITEM_IPV6_LEN,
 	ITEM_IPV6_PROTO,
 	ITEM_IPV6_HOP,
 	ITEM_IPV6_SRC,
@@ -3369,6 +3390,7 @@ static const struct token token_list[] = {
 			     NEXT_ENTRY(COMMON_UNSIGNED)),
 		.args = ARGS(ARGS_ENTRY(struct buffer,
 					args.table.attr.nb_flows)),
+		.call = parse_table,
 	},
 	[TABLE_PATTERN_TEMPLATE] = {
 		.name = "pattern_template",
@@ -3734,7 +3756,7 @@ static const struct token token_list[] = {
 	[DESTROY] = {
 		.name = "destroy",
 		.help = "destroy specific flow rules",
-		.next = NEXT(NEXT_ENTRY(DESTROY_RULE),
+		.next = NEXT(next_destroy_attr,
 			     NEXT_ENTRY(COMMON_PORT_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
 		.call = parse_destroy,
@@ -3756,7 +3778,7 @@ static const struct token token_list[] = {
 	[QUERY] = {
 		.name = "query",
 		.help = "query an existing flow rule",
-		.next = NEXT(NEXT_ENTRY(QUERY_ACTION),
+		.next = NEXT(next_query_attr, NEXT_ENTRY(QUERY_ACTION),
 			     NEXT_ENTRY(COMMON_RULE_ID),
 			     NEXT_ENTRY(COMMON_PORT_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, args.query.action.type),
@@ -3875,6 +3897,12 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY_PTR(struct buffer, args.destroy.rule)),
 		.call = parse_destroy,
 	},
+	[DESTROY_IS_USER_ID] = {
+		.name = "user_id",
+		.help = "rule identifier is user-id",
+		.next = NEXT(next_destroy_attr),
+		.call = parse_destroy,
+	},
 	/* Dump arguments. */
 	[DUMP_ALL] = {
 		.name = "all",
@@ -3891,6 +3919,12 @@ static const struct token token_list[] = {
 				ARGS_ENTRY(struct buffer, args.dump.rule)),
 		.call = parse_dump,
 	},
+	[DUMP_IS_USER_ID] = {
+		.name = "user_id",
+		.help = "rule identifier is user-id",
+		.next = NEXT(next_dump_subcmd),
+		.call = parse_dump,
+	},
 	/* Query arguments. */
 	[QUERY_ACTION] = {
 		.name = "{action}",
@@ -3898,6 +3932,12 @@ static const struct token token_list[] = {
 		.help = "action to query, must be part of the rule",
 		.call = parse_action,
 		.comp = comp_action,
+	},
+	[QUERY_IS_USER_ID] = {
+		.name = "user_id",
+		.help = "rule identifier is user-id",
+		.next = NEXT(next_query_attr),
+		.call = parse_query,
 	},
 	/* List arguments. */
 	[LIST_GROUP] = {
@@ -3958,6 +3998,13 @@ static const struct token token_list[] = {
 		.help = "tunnel match rule",
 		.next = NEXT(next_vc_attr, NEXT_ENTRY(COMMON_UNSIGNED)),
 		.args = ARGS(ARGS_ENTRY(struct tunnel_ops, id)),
+		.call = parse_vc,
+	},
+	[VC_USER_ID] = {
+		.name = "user_id",
+		.help = "specify a user id to create",
+		.next = NEXT(next_vc_attr, NEXT_ENTRY(COMMON_UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.vc.user_id)),
 		.call = parse_vc,
 	},
 	/* Validate/create pattern. */
@@ -4228,6 +4275,14 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv4,
 					     hdr.type_of_service)),
 	},
+	[ITEM_IPV4_LENGTH] = {
+		.name = "length",
+		.help = "total length",
+		.next = NEXT(item_ipv4, NEXT_ENTRY(COMMON_UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv4,
+					     hdr.total_length)),
+	},
 	[ITEM_IPV4_ID] = {
 		.name = "packet_id",
 		.help = "fragment packet id",
@@ -4300,6 +4355,14 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_ipv6,
 						  hdr.vtc_flow,
 						  "\x00\x0f\xff\xff")),
+	},
+	[ITEM_IPV6_LEN] = {
+		.name = "length",
+		.help = "payload length",
+		.next = NEXT(item_ipv6, NEXT_ENTRY(COMMON_UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ipv6,
+					     hdr.payload_len)),
 	},
 	[ITEM_IPV6_PROTO] = {
 		.name = "proto",
@@ -7865,11 +7928,15 @@ parse_vc(struct context *ctx, const struct token *token,
 	case VC_TUNNEL_MATCH:
 		ctx->object = &out->args.vc.tunnel_ops;
 		break;
+	case VC_USER_ID:
+		ctx->object = out;
+		break;
 	}
 	ctx->objmask = NULL;
 	switch (ctx->curr) {
 	case VC_GROUP:
 	case VC_PRIORITY:
+	case VC_USER_ID:
 		return len;
 	case VC_TUNNEL_SET:
 		out->args.vc.tunnel_ops.enabled = 1;
@@ -9695,6 +9762,10 @@ parse_destroy(struct context *ctx, const struct token *token,
 					       sizeof(double));
 		return len;
 	}
+	if (ctx->curr == DESTROY_IS_USER_ID) {
+		out->args.destroy.is_user_id = true;
+		return len;
+	}
 	if (((uint8_t *)(out->args.destroy.rule + out->args.destroy.rule_n) +
 	     sizeof(*out->args.destroy.rule)) > (uint8_t *)out + size)
 		return -1;
@@ -9765,6 +9836,9 @@ parse_dump(struct context *ctx, const struct token *token,
 		ctx->object = out;
 		ctx->objmask = NULL;
 		return len;
+	case DUMP_IS_USER_ID:
+		out->args.dump.is_user_id = true;
+		return len;
 	default:
 		return -1;
 	}
@@ -9793,6 +9867,10 @@ parse_query(struct context *ctx, const struct token *token,
 		ctx->objdata = 0;
 		ctx->object = out;
 		ctx->objmask = NULL;
+	}
+	if (ctx->curr == QUERY_IS_USER_ID) {
+		out->args.query.is_user_id = true;
+		return len;
 	}
 	return len;
 }
@@ -10157,6 +10235,11 @@ parse_table(struct context *ctx, const struct token *token,
 			return -1;
 		out->args.table.attr.specialize = RTE_FLOW_TABLE_SPECIALIZE_TRANSFER_VPORT_ORIG;
 		return len;
+	case TABLE_RULES_NUMBER:
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		return len;
 	default:
 		return -1;
 	}
@@ -10271,7 +10354,7 @@ parse_qo_destroy(struct context *ctx, const struct token *token,
 		 void *buf, unsigned int size)
 {
 	struct buffer *out = buf;
-	uint32_t *flow_id;
+	uint64_t *flow_id;
 
 	/* Token name must match. */
 	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
@@ -11559,7 +11642,7 @@ comp_rule_id(struct context *ctx, const struct token *token,
 	port = &ports[ctx->port];
 	for (pf = port->flow_list; pf != NULL; pf = pf->next) {
 		if (buf && i == ent)
-			return snprintf(buf, size, "%u", pf->id);
+			return snprintf(buf, size, "%"PRIu64, pf->id);
 		++i;
 	}
 	if (buf)
@@ -12349,11 +12432,12 @@ cmd_flow_parsed(const struct buffer *in)
 	case CREATE:
 		port_flow_create(in->port, &in->args.vc.attr,
 				 in->args.vc.pattern, in->args.vc.actions,
-				 &in->args.vc.tunnel_ops);
+				 &in->args.vc.tunnel_ops, in->args.vc.user_id);
 		break;
 	case DESTROY:
 		port_flow_destroy(in->port, in->args.destroy.rule_n,
-				  in->args.destroy.rule);
+				  in->args.destroy.rule,
+				  in->args.destroy.is_user_id);
 		break;
 	case FLUSH:
 		port_flow_flush(in->port);
@@ -12361,11 +12445,13 @@ cmd_flow_parsed(const struct buffer *in)
 	case DUMP_ONE:
 	case DUMP_ALL:
 		port_flow_dump(in->port, in->args.dump.mode,
-				in->args.dump.rule, in->args.dump.file);
+				in->args.dump.rule, in->args.dump.file,
+				in->args.dump.is_user_id);
 		break;
 	case QUERY:
 		port_flow_query(in->port, in->args.query.rule,
-				&in->args.query.action);
+				&in->args.query.action,
+				in->args.query.is_user_id);
 		break;
 	case LIST:
 		port_flow_list(in->port, in->args.list.group_n,

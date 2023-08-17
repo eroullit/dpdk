@@ -25,7 +25,6 @@ extern "C" {
 /** FW-allocatable resource context */
 struct sfc_mae_fw_rsrc {
 	unsigned int			refcnt;
-	RTE_STD_C11
 	union {
 		efx_counter_t		counter_id;
 		efx_mae_aset_id_t	aset_id;
@@ -333,6 +332,10 @@ struct sfc_mae_pattern_data {
 	 */
 	uint8_t				l3_next_proto_restriction_value;
 	uint8_t				l3_next_proto_restriction_mask;
+
+	rte_be16_t			l3_frag_ofst_value;
+	rte_be16_t			l3_frag_ofst_mask;
+	rte_be16_t			l3_frag_ofst_last;
 
 	/* Projected state of EFX_MAE_FIELD_HAS_OVLAN match bit */
 	bool				has_ovlan_value;

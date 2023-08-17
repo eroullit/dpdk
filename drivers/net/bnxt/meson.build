@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2018 Intel Corporation
-# Copyright(c) 2020 Broadcom
+# Copyright(c) 2023 Broadcom
 
 if is_windows
     build = false
@@ -25,6 +25,8 @@ endforeach
 
 headers = files('rte_pmd_bnxt.h')
 
+deps += ['hash']
+
 sources = files(
         'bnxt_cpr.c',
         'bnxt_ethdev.c',
@@ -41,7 +43,6 @@ sources = files(
         'bnxt_util.c',
         'bnxt_vnic.c',
         'bnxt_reps.c',
-
         'rte_pmd_bnxt.c',
 )
 

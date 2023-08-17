@@ -164,7 +164,6 @@ F: app/test/test_devargs.c
 F: app/test/test_eal*
 F: app/test/test_errno.c
 F: app/test/test_lcores.c
-F: app/test/test_logs.c
 F: app/test/test_memcpy*
 F: app/test/test_per_lcore.c
 F: app/test/test_pflock.c
@@ -176,6 +175,11 @@ F: app/test/test_string_fns.c
 F: app/test/test_tailq.c
 F: app/test/test_threads.c
 F: app/test/test_version.c
+
+Logging
+F: lib/log/
+F: doc/guides/prog_guide/log_lib.rst
+F: app/test/test_logs.c
 
 Trace - EXPERIMENTAL
 M: Jerin Jacob <jerinj@marvell.com>
@@ -617,12 +621,6 @@ F: doc/guides/prog_guide/link_bonding_poll_mode_drv_lib.rst
 F: app/test/test_link_bonding*
 F: examples/bond/
 
-Linux KNI
-F: kernel/linux/kni/
-F: lib/kni/
-F: doc/guides/prog_guide/kernel_nic_interface.rst
-F: app/test/test_kni.c
-
 Linux AF_PACKET
 M: John W. Linville <linville@tuxdriver.com>
 F: drivers/net/af_packet/
@@ -1026,10 +1024,6 @@ Tap PMD
 F: drivers/net/tap/
 F: doc/guides/nics/tap.rst
 F: doc/guides/nics/features/tap.ini
-
-KNI PMD
-F: drivers/net/kni/
-F: doc/guides/nics/kni.rst
 
 Ring PMD
 M: Bruce Richardson <bruce.richardson@intel.com>
@@ -1478,6 +1472,7 @@ M: Konstantin Ananyev <konstantin.v.ananyev@yandex.ru>
 F: lib/ip_frag/
 F: doc/guides/prog_guide/ip_fragment_reassembly_lib.rst
 F: app/test/test_ipfrag.c
+F: app/test/test_reassembly_perf.c
 F: examples/ip_fragmentation/
 F: doc/guides/sample_app_ug/ip_frag.rst
 F: examples/ip_reassembly/
@@ -1509,13 +1504,6 @@ T: git://dpdk.org/next/dpdk-next-crypto
 F: lib/pdcp/
 F: doc/guides/prog_guide/pdcp_lib.rst
 F: app/test/test_pdcp*
-
-Flow Classify - EXPERIMENTAL - UNMAINTAINED
-F: lib/flow_classify/
-F: app/test/test_flow_classify*
-F: doc/guides/prog_guide/flow_classify_lib.rst
-F: examples/flow_classify/
-F: doc/guides/sample_app_ug/flow_classify.rst
 
 Distributor
 M: David Hunt <david.hunt@intel.com>
@@ -1670,6 +1658,7 @@ M: Gaetan Rivet <grive@u256.net>
 F: lib/pci/
 
 Power management
+M: Anatoly Burakov <anatoly.burakov@intel.com>
 M: David Hunt <david.hunt@intel.com>
 F: lib/power/
 F: doc/guides/prog_guide/power_man.rst
@@ -1766,6 +1755,11 @@ T: git://dpdk.org/next/dpdk-next-net
 F: app/test-pmd/
 F: doc/guides/testpmd_app_ug/
 
+DMA device performance tool
+M: Cheng Jiang <cheng1.jiang@intel.com>
+F: app/test-dma-perf/
+F: doc/guides/tools/dmaperf.rst
+
 Flow performance tool
 M: Wisam Jaddo <wisamm@nvidia.com>
 F: app/test-flow-perf/
@@ -1797,7 +1791,6 @@ F: doc/guides/tools/img/eventdev_*
 F: app/test/test_event_ring.c
 
 Procinfo tool
-M: Maryam Tahhan <maryam.tahhan@intel.com>
 M: Reshma Pattan <reshma.pattan@intel.com>
 F: app/proc-info/
 F: doc/guides/tools/proc_info.rst

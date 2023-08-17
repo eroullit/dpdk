@@ -2,16 +2,14 @@
  * Copyright(c) 2015-2021 Intel Corporation
  */
 
+#include <unistd.h>
+
 #include "pmd_aesni_mb_priv.h"
 
 struct aesni_mb_op_buf_data {
 	struct rte_mbuf *m;
 	uint32_t offset;
 };
-
-#if IMB_VERSION(1, 2, 0) < IMB_VERSION_NUM
-static IMB_JOB *jobs[IMB_MAX_BURST_SIZE] = {NULL};
-#endif
 
 /**
  * Calculate the authentication pre-computes
@@ -847,12 +845,12 @@ aesni_mb_session_configure(IMB_MGR *mb_mgr,
 
 #if IMB_VERSION(1, 3, 0) < IMB_VERSION_NUM
 	sess->session_id = imb_set_session(mb_mgr, &sess->template_job);
+	sess->pid = getpid();
 #endif
 
 	return 0;
 }
 
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 /** Check DOCSIS security session configuration is valid */
 static int
 check_docsis_sec_session(struct rte_security_session_conf *conf)
@@ -989,7 +987,6 @@ error_exit:
 	free_mb_mgr(mb_mgr);
 	return ret;
 }
-#endif
 
 static inline uint64_t
 auth_start_offset(struct rte_crypto_op *op, struct aesni_mb_session *session,
@@ -1482,7 +1479,10 @@ set_mb_job_params(IMB_JOB *job, struct ipsec_mb_qp *qp,
 			session->template_job.cipher_mode;
 
 #if IMB_VERSION(1, 3, 0) < IMB_VERSION_NUM
-	if (job->session_id != session->session_id)
+	if (session->pid != getpid()) {
+		memcpy(job, &session->template_job, sizeof(IMB_JOB));
+		imb_set_session(mb_mgr, job);
+	} else if (job->session_id != session->session_id)
 #endif
 		memcpy(job, &session->template_job, sizeof(IMB_JOB));
 
@@ -1760,7 +1760,6 @@ set_mb_job_params(IMB_JOB *job, struct ipsec_mb_qp *qp,
 	return 0;
 }
 
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 /**
  * Process a crypto operation containing a security op and complete a
  * IMB_JOB job structure for submission to the multi buffer library for
@@ -1851,7 +1850,6 @@ verify_docsis_sec_crc(IMB_JOB *job, uint8_t *status)
 	if (memcmp(job->auth_tag_output, crc, RTE_ETHER_CRC_LEN) != 0)
 		*status = RTE_CRYPTO_OP_STATUS_AUTH_FAILED;
 }
-#endif
 
 static inline void
 verify_digest(IMB_JOB *job, void *digest, uint16_t len, uint8_t *status)
@@ -1919,8 +1917,6 @@ post_process_mb_job(struct ipsec_mb_qp *qp, IMB_JOB *job)
 	struct aesni_mb_session *sess = NULL;
 	uint8_t *linear_buf = NULL;
 	int sgl = 0;
-
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 	uint8_t is_docsis_sec = 0;
 
 	if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION) {
@@ -1931,7 +1927,6 @@ post_process_mb_job(struct ipsec_mb_qp *qp, IMB_JOB *job)
 		is_docsis_sec = 1;
 		sess = SECURITY_GET_SESS_PRIV(op->sym->session);
 	} else
-#endif
 		sess = CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
 
 	if (likely(op->status == RTE_CRYPTO_OP_STATUS_NOT_PROCESSED)) {
@@ -1959,11 +1954,9 @@ post_process_mb_job(struct ipsec_mb_qp *qp, IMB_JOB *job)
 						op->sym->aead.digest.data,
 						sess->auth.req_digest_len,
 						&op->status);
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 				else if (is_docsis_sec)
 					verify_docsis_sec_crc(job,
 						&op->status);
-#endif
 				else
 					verify_digest(job,
 						op->sym->auth.digest.data,
@@ -2044,6 +2037,7 @@ aesni_mb_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 	IMB_JOB *job;
 	int retval, processed_jobs = 0;
 	uint16_t i, nb_jobs;
+	IMB_JOB *jobs[IMB_MAX_BURST_SIZE] = {NULL};
 
 	if (unlikely(nb_ops == 0 || mb_mgr == NULL))
 		return 0;
@@ -2095,12 +2089,10 @@ aesni_mb_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 			job = jobs[i];
 			op = deqd_ops[i];
 
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 			if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
 				retval = set_sec_mb_job_params(job, qp, op,
 							       &digest_idx);
 			else
-#endif
 				retval = set_mb_job_params(job, qp, op,
 							   &digest_idx, mb_mgr);
 
@@ -2256,12 +2248,10 @@ aesni_mb_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 		if (retval < 0)
 			break;
 
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 		if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
 			retval = set_sec_mb_job_params(job, qp, op,
 						&digest_idx);
 		else
-#endif
 			retval = set_mb_job_params(job, qp, op,
 				&digest_idx, mb_mgr);
 
@@ -2437,7 +2427,6 @@ struct rte_cryptodev_ops aesni_mb_pmd_ops = {
 	.sym_session_clear = ipsec_mb_sym_session_clear
 };
 
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 /**
  * Configure a aesni multi-buffer session from a security session
  * configuration
@@ -2525,8 +2514,6 @@ aesni_mb_configure_dev(struct rte_cryptodev *dev)
 	return -ENOMEM;
 }
 
-#endif
-
 static int
 aesni_mb_probe(struct rte_vdev_device *vdev)
 {
@@ -2567,17 +2554,15 @@ RTE_INIT(ipsec_mb_register_aesni_mb)
 			RTE_CRYPTODEV_FF_IN_PLACE_SGL |
 			RTE_CRYPTODEV_FF_OOP_SGL_IN_SGL_OUT |
 			RTE_CRYPTODEV_FF_OOP_LB_IN_SGL_OUT |
-			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT;
+			RTE_CRYPTODEV_FF_OOP_SGL_IN_LB_OUT |
+			RTE_CRYPTODEV_FF_SECURITY;
 
 	aesni_mb_data->internals_priv_size = 0;
 	aesni_mb_data->ops = &aesni_mb_pmd_ops;
 	aesni_mb_data->qp_priv_size = sizeof(struct aesni_mb_qp_data);
 	aesni_mb_data->queue_pair_configure = NULL;
-#ifdef AESNI_MB_DOCSIS_SEC_ENABLED
 	aesni_mb_data->security_ops = &aesni_mb_pmd_sec_ops;
 	aesni_mb_data->dev_config = aesni_mb_configure_dev;
-	aesni_mb_data->feature_flags |= RTE_CRYPTODEV_FF_SECURITY;
-#endif
 	aesni_mb_data->session_configure = aesni_mb_session_configure;
 	aesni_mb_data->session_priv_size = sizeof(struct aesni_mb_session);
 }

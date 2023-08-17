@@ -26,26 +26,6 @@
 #define VHOST_VDUSE_API_VERSION 0
 #define VDUSE_CTRL_PATH "/dev/vduse/control"
 
-#define VDUSE_NET_SUPPORTED_FEATURES ((1ULL << VIRTIO_NET_F_MRG_RXBUF) | \
-				(1ULL << VIRTIO_F_ANY_LAYOUT) | \
-				(1ULL << VIRTIO_F_VERSION_1)   | \
-				(1ULL << VIRTIO_NET_F_GSO) | \
-				(1ULL << VIRTIO_NET_F_HOST_TSO4) | \
-				(1ULL << VIRTIO_NET_F_HOST_TSO6) | \
-				(1ULL << VIRTIO_NET_F_HOST_UFO) | \
-				(1ULL << VIRTIO_NET_F_HOST_ECN) | \
-				(1ULL << VIRTIO_NET_F_CSUM)    | \
-				(1ULL << VIRTIO_NET_F_GUEST_CSUM) | \
-				(1ULL << VIRTIO_NET_F_GUEST_TSO4) | \
-				(1ULL << VIRTIO_NET_F_GUEST_TSO6) | \
-				(1ULL << VIRTIO_NET_F_GUEST_UFO) | \
-				(1ULL << VIRTIO_NET_F_GUEST_ECN) | \
-				(1ULL << VIRTIO_RING_F_INDIRECT_DESC) | \
-				(1ULL << VIRTIO_F_IN_ORDER) | \
-				(1ULL << VIRTIO_F_IOMMU_PLATFORM) | \
-				(1ULL << VIRTIO_NET_F_CTRL_VQ) | \
-				(1ULL << VIRTIO_NET_F_MQ))
-
 struct vduse {
 	struct fdset fdset;
 };
@@ -432,15 +412,15 @@ vduse_events_handler(int fd, void *arg, int *remove __rte_unused)
 }
 
 int
-vduse_device_create(const char *path)
+vduse_device_create(const char *path, bool compliant_ol_flags)
 {
 	int control_fd, dev_fd, vid, ret;
 	pthread_t fdset_tid;
 	uint32_t i, max_queue_pairs, total_queues;
 	struct virtio_net *dev;
-	struct virtio_net_config vnet_config = { 0 };
+	struct virtio_net_config vnet_config = {{ 0 }};
 	uint64_t ver = VHOST_VDUSE_API_VERSION;
-	uint64_t features = VDUSE_NET_SUPPORTED_FEATURES;
+	uint64_t features;
 	struct vduse_dev_config *dev_config = NULL;
 	const char *name = path + strlen("/dev/vduse/");
 
@@ -486,6 +466,12 @@ vduse_device_create(const char *path)
 		VHOST_LOG_CONFIG(name, ERR, "Failed to allocate VDUSE config\n");
 		ret = -1;
 		goto out_ctrl_close;
+	}
+
+	ret = rte_vhost_driver_get_features(path, &features);
+	if (ret < 0) {
+		VHOST_LOG_CONFIG(name, ERR, "Failed to get backend features\n");
+		goto out_free;
 	}
 
 	ret = rte_vhost_driver_get_queue_num(path, &max_queue_pairs);
@@ -552,7 +538,7 @@ vduse_device_create(const char *path)
 	strncpy(dev->ifname, path, IF_NAME_SZ - 1);
 	dev->vduse_ctrl_fd = control_fd;
 	dev->vduse_dev_fd = dev_fd;
-	vhost_setup_virtio_net(dev->vid, true, true, true, true);
+	vhost_setup_virtio_net(dev->vid, true, compliant_ol_flags, true, true);
 
 	for (i = 0; i < total_queues; i++) {
 		struct vduse_vq_config vq_cfg = { 0 };

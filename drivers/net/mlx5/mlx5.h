@@ -1509,6 +1509,7 @@ struct mlx5_mtr_config {
 
 /* RSS description. */
 struct mlx5_flow_rss_desc {
+	bool symmetric_hash_function; /**< Symmetric hash function */
 	uint32_t level;
 	uint32_t queue_num; /**< Number of entries in @p queue. */
 	uint64_t types; /**< Specific RSS hash types (see RTE_ETH_RSS_*). */
@@ -1534,7 +1535,6 @@ struct mlx5_rxq_obj {
 	LIST_ENTRY(mlx5_rxq_obj) next; /* Pointer to the next element. */
 	struct mlx5_rxq_ctrl *rxq_ctrl; /* Back pointer to parent. */
 	int fd; /* File descriptor for event channel */
-	RTE_STD_C11
 	union {
 		struct {
 			void *wq; /* Work Queue. */
@@ -1554,7 +1554,6 @@ struct mlx5_rxq_obj {
 struct mlx5_ind_table_obj {
 	LIST_ENTRY(mlx5_ind_table_obj) next; /* Pointer to the next element. */
 	uint32_t refcnt; /* Reference counter. */
-	RTE_STD_C11
 	union {
 		void *ind_table; /**< Indirection table. */
 		struct mlx5_devx_obj *rqt; /* DevX RQT object. */
@@ -1569,7 +1568,6 @@ struct mlx5_hrxq {
 	struct mlx5_list_entry entry; /* List entry. */
 	uint32_t standalone:1; /* This object used in shared action. */
 	struct mlx5_ind_table_obj *ind_table; /* Indirection table. */
-	RTE_STD_C11
 	union {
 		void *qp; /* Verbs queue pair. */
 		struct mlx5_devx_obj *tir; /* DevX TIR object. */
@@ -1577,6 +1575,7 @@ struct mlx5_hrxq {
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	void *action; /* DV QP action pointer. */
 #endif
+	bool symmetric_hash_function; /* Symmetric hash function */
 	uint32_t hws_flags; /* Hw steering flags. */
 	uint64_t hash_fields; /* Verbs Hash fields. */
 	uint32_t rss_key_len; /* Hash key length in bytes. */
@@ -1588,7 +1587,6 @@ struct mlx5_hrxq {
 struct mlx5_txq_obj {
 	LIST_ENTRY(mlx5_txq_obj) next; /* Pointer to the next element. */
 	struct mlx5_txq_ctrl *txq_ctrl; /* Pointer to the control queue. */
-	RTE_STD_C11
 	union {
 		struct {
 			void *cq; /* Completion Queue. */
@@ -1648,6 +1646,7 @@ struct mlx5_obj_ops {
 	int (*hrxq_modify)(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq,
 			   const uint8_t *rss_key,
 			   uint64_t hash_fields,
+			   bool symmetric_hash_function,
 			   const struct mlx5_ind_table_obj *ind_tbl);
 	void (*hrxq_destroy)(struct mlx5_hrxq *hrxq);
 	int (*drop_action_create)(struct rte_eth_dev *dev);

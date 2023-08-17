@@ -27,7 +27,7 @@ jobs:
       MINGW: ${{ matrix.config.cross == 'mingw' }}
       MINI: ${{ matrix.config.mini != '' }}
       PPC64LE: ${{ matrix.config.cross == 'ppc64le' }}
-      REF_GIT_TAG: v23.03
+      REF_GIT_TAG: none
       RISCV64: ${{ matrix.config.cross == 'riscv64' }}
       RUN_TESTS: ${{ contains(matrix.config.checks, 'tests') }}
 
@@ -40,7 +40,7 @@ jobs:
             mini: mini
           - os: ubuntu-20.04
             compiler: gcc
-            checks: abi+debug+doc+examples+tests
+            checks: debug+doc+examples+tests
           - os: ubuntu-20.04
             compiler: clang
             checks: asan+doc+tests
@@ -148,6 +148,8 @@ jobs:
   prepare-container-images:
     name: ${{ join(matrix.config.*, '-') }}
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.get_keys.outputs.image }}
 
     strategy:
       fail-fast: false
@@ -214,14 +216,13 @@ jobs:
       id: get_keys
       run: |
         echo 'ccache=ccache-${{ matrix.config.image }}-${{ matrix.config.compiler }}-'$(date -u +%Y-w%W) >> $GITHUB_OUTPUT
-        echo 'image=image-${{ matrix.config.image }}-'$(date -u +%Y-%m-%d) >> $GITHUB_OUTPUT
         echo 'logs=meson-logs-${{ join(matrix.config.*, '-') }}' | tr -d ':' >> $GITHUB_OUTPUT
     - name: Retrieve image cache
       id: image_cache
       uses: actions/cache@v3
       with:
         path: ~/.image
-        key: ${{ steps.get_keys.outputs.image }}
+        key: ${{ needs.prepare-container-images.outputs.image }}
     - name: Fail if no image (not supposed to happen)
       if: steps.image_cache.outputs.cache-hit != 'true'
       run: |

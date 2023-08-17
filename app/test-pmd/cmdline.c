@@ -39,6 +39,7 @@
 #include <rte_gro.h>
 #endif
 #include <rte_mbuf_dyn.h>
+#include <rte_trace.h>
 
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
@@ -254,6 +255,36 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show port (port_id) flow_ctrl"
 			"	Show flow control info of a port.\n\n"
+
+			"dump_physmem\n"
+			"    Dumps all physical memory segment layouts\n\n"
+
+			"dump_socket_mem\n"
+			"    Dumps the memory usage of all sockets\n\n"
+
+			"dump_memzone\n"
+			"    Dumps the layout of all memory zones\n\n"
+
+			"dump_struct_sizes\n"
+			"    Dumps the size of all memory structures\n\n"
+
+			"dump_ring\n"
+			"    Dumps the status of all or specific element in DPDK rings\n\n"
+
+			"dump_mempool\n"
+			"    Dumps the statistics of all or specific memory pool\n\n"
+
+			"dump_devargs\n"
+			"    Dumps the user device list\n\n"
+
+			"dump_lcores\n"
+			"    Dumps the logical cores list\n\n"
+
+			"dump_trace\n"
+			"    Dumps the tracing data to the folder according to the current EAL settings\n\n"
+
+			"dump_log_types\n"
+			"    Dumps the log level for all the dpdk modules\n\n"
 		);
 	}
 
@@ -8369,6 +8400,10 @@ static void cmd_dump_parsed(void *parsed_result,
 		rte_devargs_dump(stdout);
 	else if (!strcmp(res->dump, "dump_lcores"))
 		rte_lcore_dump(stdout);
+#ifndef RTE_EXEC_ENV_WINDOWS
+	else if (!strcmp(res->dump, "dump_trace"))
+		rte_trace_save();
+#endif
 	else if (!strcmp(res->dump, "dump_log_types"))
 		rte_log_dump(stdout);
 }
@@ -8383,6 +8418,9 @@ static cmdline_parse_token_string_t cmd_dump_dump =
 		"dump_mempool#"
 		"dump_devargs#"
 		"dump_lcores#"
+#ifndef RTE_EXEC_ENV_WINDOWS
+		"dump_trace#"
+#endif
 		"dump_log_types");
 
 static cmdline_parse_inst_t cmd_dump = {

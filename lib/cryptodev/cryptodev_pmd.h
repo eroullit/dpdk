@@ -65,7 +65,7 @@ struct rte_cryptodev_data {
 	/** Device ID for this instance */
 	uint8_t dev_id;
 	/** Socket ID where memory is allocated */
-	uint8_t socket_id;
+	int socket_id;
 	/** Unique identifier name */
 	char name[RTE_CRYPTODEV_NAME_MAX_LEN];
 
@@ -683,7 +683,7 @@ rte_cryptodev_session_event_mdata_get(struct rte_crypto_op *op);
  * @internal
  * Cryptodev asymmetric crypto session.
  */
-RTE_STD_C11 struct rte_cryptodev_asym_session {
+struct rte_cryptodev_asym_session {
 	uint8_t driver_id;
 	/**< Session driver ID. */
 	uint16_t max_priv_data_sz;
