@@ -100,7 +100,7 @@ static int
 skeldma_start(struct rte_dma_dev *dev)
 {
 	struct skeldma_hw *hw = dev->data->dev_private;
-	char name[RTE_MAX_THREAD_NAME_LEN];
+	char name[RTE_THREAD_INTERNAL_NAME_SIZE];
 	rte_cpuset_t cpuset;
 	int ret;
 
@@ -127,9 +127,9 @@ skeldma_start(struct rte_dma_dev *dev)
 
 	rte_mb();
 
-	snprintf(name, sizeof(name), "dma_skel_%d", dev->data->dev_id);
-	ret = rte_thread_create_control(&hw->thread, name, NULL,
-				     cpucopy_thread, dev);
+	snprintf(name, sizeof(name), "dma-skel%d", dev->data->dev_id);
+	ret = rte_thread_create_internal_control(&hw->thread, name,
+			cpucopy_thread, dev);
 	if (ret) {
 		SKELDMA_LOG(ERR, "Start cpucopy thread fail!");
 		return -EINVAL;
@@ -137,7 +137,7 @@ skeldma_start(struct rte_dma_dev *dev)
 
 	if (hw->lcore_id != -1) {
 		cpuset = rte_lcore_cpuset(hw->lcore_id);
-		ret = rte_thread_get_affinity_by_id(hw->thread, &cpuset);
+		ret = rte_thread_set_affinity_by_id(hw->thread, &cpuset);
 		if (ret)
 			SKELDMA_LOG(WARNING,
 				"Set thread affinity lcore = %d fail!",

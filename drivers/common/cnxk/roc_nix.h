@@ -196,10 +196,11 @@ struct roc_nix_fc_cfg {
 			uint32_t rq;
 			uint16_t tc;
 			uint16_t cq_drop;
-			bool enable;
 			uint64_t pool;
 			uint64_t spb_pool;
 			uint64_t pool_drop_pct;
+			uint64_t spb_pool_drop_pct;
+			bool enable;
 		} rq_cfg;
 
 		struct {
@@ -366,6 +367,7 @@ struct roc_nix_cq {
 	/* Input parameters */
 	uint16_t qid;
 	uint32_t nb_desc;
+	uint8_t stash_thresh;
 	/* End of Input parameters */
 	uint16_t drop_thresh;
 	struct roc_nix *roc_nix;
@@ -526,6 +528,7 @@ bool __roc_api roc_nix_is_sdp(struct roc_nix *roc_nix);
 bool __roc_api roc_nix_is_pf(struct roc_nix *roc_nix);
 bool __roc_api roc_nix_is_vf_or_sdp(struct roc_nix *roc_nix);
 int __roc_api roc_nix_get_base_chan(struct roc_nix *roc_nix);
+uint8_t __roc_api roc_nix_get_rx_chan_cnt(struct roc_nix *roc_nix);
 int __roc_api roc_nix_get_pf(struct roc_nix *roc_nix);
 int __roc_api roc_nix_get_vf(struct roc_nix *roc_nix);
 uint16_t __roc_api roc_nix_get_pf_func(struct roc_nix *roc_nix);
@@ -706,8 +709,13 @@ int __roc_api roc_nix_tm_node_stats_get(struct roc_nix *roc_nix,
 /*
  * TM ratelimit tree API.
  */
-int __roc_api roc_nix_tm_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid,
-				   uint64_t rate);
+int __roc_api roc_nix_tm_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate);
+
+/*
+ * TM PFC tree ratelimit API.
+ */
+int __roc_api roc_nix_tm_pfc_rlimit_sq(struct roc_nix *roc_nix, uint16_t qid, uint64_t rate);
+
 /*
  * TM hierarchy enable/disable API.
  */

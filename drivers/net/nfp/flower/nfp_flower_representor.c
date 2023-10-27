@@ -3,21 +3,20 @@
  * All rights reserved.
  */
 
-#include <rte_common.h>
-#include <ethdev_pci.h>
-
-#include "../nfp_common.h"
-#include "../nfp_logs.h"
-#include "../nfp_ctrl.h"
-#include "../nfp_rxtx.h"
-#include "../nfd3/nfp_nfd3.h"
-#include "../nfpcore/nfp_mip.h"
-#include "../nfpcore/nfp_rtsym.h"
-#include "../nfpcore/nfp_nsp.h"
-#include "nfp_flower.h"
 #include "nfp_flower_representor.h"
-#include "nfp_flower_ctrl.h"
-#include "nfp_flower_cmsg.h"
+
+#include "../nfd3/nfp_nfd3.h"
+#include "../nfpcore/nfp_nsp.h"
+#include "../nfp_logs.h"
+#include "../nfp_mtr.h"
+
+/* Type of representor */
+enum nfp_repr_type {
+	NFP_REPR_TYPE_PHYS_PORT,    /*<< External NIC port */
+	NFP_REPR_TYPE_PF,           /*<< Physical function */
+	NFP_REPR_TYPE_VF,           /*<< Virtual function */
+	NFP_REPR_TYPE_MAX,          /*<< Number of representor types */
+};
 
 static int
 nfp_pf_repr_rx_queue_setup(struct rte_eth_dev *dev,
@@ -50,7 +49,7 @@ nfp_pf_repr_rx_queue_setup(struct rte_eth_dev *dev,
 
 	/*
 	 * Tracking mbuf size for detecting a potential mbuf overflow due to
-	 * RX offset
+	 * RX offset.
 	 */
 	rxq->mem_pool = mp;
 	rxq->mbuf_size = rxq->mem_pool->elt_size;
@@ -67,7 +66,8 @@ nfp_pf_repr_rx_queue_setup(struct rte_eth_dev *dev,
 	 * resizing in later calls to the queue setup function.
 	 */
 	tz = rte_eth_dma_zone_reserve(dev, "rx_ring", queue_idx,
-			sizeof(struct nfp_net_rx_desc) * NFP_NET_MAX_RX_DESC,
+			sizeof(struct nfp_net_rx_desc) *
+			hw->dev_info->max_qc_size,
 			NFP_MEMZONE_ALIGN, socket_id);
 	if (tz == NULL) {
 		PMD_DRV_LOG(ERR, "Error allocating rx dma");
@@ -80,7 +80,7 @@ nfp_pf_repr_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->dma = (uint64_t)tz->iova;
 	rxq->rxds = tz->addr;
 
-	/* mbuf pointers array for referencing mbufs linked to RX descriptors */
+	/* Mbuf pointers array for referencing mbufs linked to RX descriptors */
 	rxq->rxbufs = rte_zmalloc_socket("rxq->rxbufs",
 			sizeof(*rxq->rxbufs) * nb_desc,
 			RTE_CACHE_LINE_SIZE, socket_id);
@@ -95,7 +95,7 @@ nfp_pf_repr_rx_queue_setup(struct rte_eth_dev *dev,
 
 	/*
 	 * Telling the HW about the physical address of the RX ring and number
-	 * of descriptors in log2 format
+	 * of descriptors in log2 format.
 	 */
 	nn_cfg_writeq(hw, NFP_NET_CFG_RXR_ADDR(queue_idx), rxq->dma);
 	nn_cfg_writeb(hw, NFP_NET_CFG_RXR_SZ(queue_idx), rte_log2_u32(nb_desc));
@@ -140,7 +140,8 @@ nfp_pf_repr_tx_queue_setup(struct rte_eth_dev *dev,
 	 * resizing in later calls to the queue setup function.
 	 */
 	tz = rte_eth_dma_zone_reserve(dev, "tx_ring", queue_idx,
-			sizeof(struct nfp_net_nfd3_tx_desc) * NFP_NET_MAX_TX_DESC,
+			sizeof(struct nfp_net_nfd3_tx_desc) *
+			hw->dev_info->max_qc_size,
 			NFP_MEMZONE_ALIGN, socket_id);
 	if (tz == NULL) {
 		PMD_DRV_LOG(ERR, "Error allocating tx dma");
@@ -152,7 +153,7 @@ nfp_pf_repr_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->tx_count = nb_desc;
 	txq->tx_free_thresh = tx_free_thresh;
 
-	/* queue mapping based on firmware configuration */
+	/* Queue mapping based on firmware configuration */
 	txq->qidx = queue_idx;
 	txq->tx_qcidx = queue_idx * hw->stride_tx;
 	txq->qcp_q = hw->tx_bar + NFP_QCP_QUEUE_OFF(txq->tx_qcidx);
@@ -163,7 +164,7 @@ nfp_pf_repr_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->dma = (uint64_t)tz->iova;
 	txq->txds = tz->addr;
 
-	/* mbuf pointers array for referencing mbufs linked to TX descriptors */
+	/* Mbuf pointers array for referencing mbufs linked to TX descriptors */
 	txq->txbufs = rte_zmalloc_socket("txq->txbufs",
 			sizeof(*txq->txbufs) * nb_desc,
 			RTE_CACHE_LINE_SIZE, socket_id);
@@ -178,7 +179,7 @@ nfp_pf_repr_tx_queue_setup(struct rte_eth_dev *dev,
 
 	/*
 	 * Telling the HW about the physical address of the TX ring and number
-	 * of descriptors in log2 format
+	 * of descriptors in log2 format.
 	 */
 	nn_cfg_writeq(hw, NFP_NET_CFG_TXR_ADDR(queue_idx), txq->dma);
 	nn_cfg_writeb(hw, NFP_NET_CFG_TXR_SZ(queue_idx), rte_log2_u32(nb_desc));
@@ -303,6 +304,7 @@ nfp_flower_repr_dev_start(struct rte_eth_dev *dev)
 {
 	struct nfp_flower_representor *repr;
 	struct nfp_app_fw_flower *app_fw_flower;
+	uint16_t i;
 
 	repr = dev->data->dev_private;
 	app_fw_flower = repr->app_fw_flower;
@@ -314,6 +316,11 @@ nfp_flower_repr_dev_start(struct rte_eth_dev *dev)
 
 	nfp_flower_cmsg_port_mod(app_fw_flower, repr->port_id, true);
 
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+
 	return 0;
 }
 
@@ -322,6 +329,7 @@ nfp_flower_repr_dev_stop(struct rte_eth_dev *dev)
 {
 	struct nfp_flower_representor *repr;
 	struct nfp_app_fw_flower *app_fw_flower;
+	uint16_t i;
 
 	repr = dev->data->dev_private;
 	app_fw_flower = repr->app_fw_flower;
@@ -332,6 +340,11 @@ nfp_flower_repr_dev_stop(struct rte_eth_dev *dev)
 		nfp_eth_set_configured(app_fw_flower->pf_hw->pf_dev->cpp,
 				repr->nfp_idx, 0);
 	}
+
+	for (i = 0; i < dev->data->nb_rx_queues; i++)
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+	for (i = 0; i < dev->data->nb_tx_queues; i++)
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	return 0;
 }
@@ -457,7 +470,7 @@ nfp_flower_repr_rx_burst(void *rx_queue,
 	total_dequeue = rte_ring_dequeue_burst(repr->ring, (void *)rx_pkts,
 			nb_pkts, &available);
 	if (total_dequeue != 0) {
-		PMD_RX_LOG(DEBUG, "Representor Rx burst for %s, port_id: 0x%x, "
+		PMD_RX_LOG(DEBUG, "Representor Rx burst for %s, port_id: %#x, "
 				"received: %u, available: %u", repr->name,
 				repr->port_id, total_dequeue, available);
 
@@ -503,7 +516,7 @@ nfp_flower_repr_tx_burst(void *tx_queue,
 	pf_tx_queue = dev->data->tx_queues[0];
 	sent = nfp_flower_pf_xmit_pkts(pf_tx_queue, tx_pkts, nb_pkts);
 	if (sent != 0) {
-		PMD_TX_LOG(DEBUG, "Representor Tx burst for %s, port_id: 0x%x transmitted: %u",
+		PMD_TX_LOG(DEBUG, "Representor Tx burst for %s, port_id: %#x transmitted: %hu",
 				repr->name, repr->port_id, sent);
 		repr->repr_stats.opackets += sent;
 	}
@@ -596,7 +609,7 @@ nfp_flower_pf_repr_init(struct rte_eth_dev *eth_dev,
 	/* Memory has been allocated in the eth_dev_create() function */
 	repr = eth_dev->data->dev_private;
 
-	/* Copy data here from the input representor template*/
+	/* Copy data here from the input representor template */
 	repr->vf_id            = init_repr_data->vf_id;
 	repr->switch_domain_id = init_repr_data->switch_domain_id;
 	repr->repr_type        = init_repr_data->repr_type;
@@ -639,6 +652,7 @@ nfp_flower_repr_init(struct rte_eth_dev *eth_dev,
 		void *init_params)
 {
 	int ret;
+	uint16_t index;
 	unsigned int numa_node;
 	char ring_name[RTE_ETH_NAME_MAX_LEN];
 	struct nfp_app_fw_flower *app_fw_flower;
@@ -665,7 +679,7 @@ nfp_flower_repr_init(struct rte_eth_dev *eth_dev,
 		return -ENOMEM;
 	}
 
-	/* Copy data here from the input representor template*/
+	/* Copy data here from the input representor template */
 	repr->vf_id            = init_repr_data->vf_id;
 	repr->switch_domain_id = init_repr_data->switch_domain_id;
 	repr->port_id          = init_repr_data->port_id;
@@ -712,10 +726,13 @@ nfp_flower_repr_init(struct rte_eth_dev *eth_dev,
 	}
 
 	/* Add repr to correct array */
-	if (repr->repr_type == NFP_REPR_TYPE_PHYS_PORT)
-		app_fw_flower->phy_reprs[repr->nfp_idx] = repr;
-	else
-		app_fw_flower->vf_reprs[repr->vf_id] = repr;
+	if (repr->repr_type == NFP_REPR_TYPE_PHYS_PORT) {
+		index = NFP_FLOWER_CMSG_PORT_PHYS_PORT_NUM(repr->port_id);
+		app_fw_flower->phy_reprs[index] = repr;
+	} else {
+		index = repr->vf_id;
+		app_fw_flower->vf_reprs[index] = repr;
+	}
 
 	return 0;
 
@@ -745,7 +762,7 @@ nfp_flower_repr_alloc(struct nfp_app_fw_flower *app_fw_flower)
 	nfp_eth_table = app_fw_flower->pf_hw->pf_dev->nfp_eth_table;
 	eth_dev = app_fw_flower->ctrl_hw->eth_dev;
 
-	/* Send a NFP_FLOWER_CMSG_TYPE_MAC_REPR cmsg to hardware*/
+	/* Send a NFP_FLOWER_CMSG_TYPE_MAC_REPR cmsg to hardware */
 	ret = nfp_flower_cmsg_mac_repr(app_fw_flower);
 	if (ret != 0) {
 		PMD_INIT_LOG(ERR, "Cloud not send mac repr cmsgs");
@@ -788,8 +805,8 @@ nfp_flower_repr_alloc(struct nfp_app_fw_flower *app_fw_flower)
 				"%s_repr_p%d", pci_name, i);
 
 		/*
-		 * Create a eth_dev for this representor
-		 * This will also allocate private memory for the device
+		 * Create a eth_dev for this representor.
+		 * This will also allocate private memory for the device.
 		 */
 		ret = rte_eth_dev_create(eth_dev->device, flower_repr.name,
 				sizeof(struct nfp_flower_representor),
@@ -805,7 +822,7 @@ nfp_flower_repr_alloc(struct nfp_app_fw_flower *app_fw_flower)
 
 	/*
 	 * Now allocate eth_dev's for VF representors.
-	 * Also send reify messages
+	 * Also send reify messages.
 	 */
 	for (i = 0; i < app_fw_flower->num_vf_reprs; i++) {
 		flower_repr.repr_type = NFP_REPR_TYPE_VF;
@@ -819,7 +836,7 @@ nfp_flower_repr_alloc(struct nfp_app_fw_flower *app_fw_flower)
 		snprintf(flower_repr.name, sizeof(flower_repr.name),
 				"%s_repr_vf%d", pci_name, i);
 
-		 /* This will also allocate private memory for the device*/
+		/* This will also allocate private memory for the device */
 		ret = rte_eth_dev_create(eth_dev->device, flower_repr.name,
 				sizeof(struct nfp_flower_representor),
 				NULL, NULL, nfp_flower_repr_init, &flower_repr);

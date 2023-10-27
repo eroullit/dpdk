@@ -86,6 +86,7 @@ enum index {
 	PATTERN_TEMPLATE,
 	ACTIONS_TEMPLATE,
 	TABLE,
+	FLOW_GROUP,
 	INDIRECT_ACTION,
 	VALIDATE,
 	CREATE,
@@ -101,6 +102,7 @@ enum index {
 	QUEUE,
 	PUSH,
 	PULL,
+	HASH,
 
 	/* Flex arguments */
 	FLEX_ITEM_INIT,
@@ -205,6 +207,18 @@ enum index {
 	TABLE_RULES_NUMBER,
 	TABLE_PATTERN_TEMPLATE,
 	TABLE_ACTIONS_TEMPLATE,
+
+	/* Group arguments */
+	GROUP_ID,
+	GROUP_INGRESS,
+	GROUP_EGRESS,
+	GROUP_TRANSFER,
+	GROUP_SET_MISS_ACTIONS,
+
+	/* Hash calculation arguments. */
+	HASH_CALC_TABLE,
+	HASH_CALC_PATTERN_INDEX,
+	HASH_CALC_PATTERN,
 
 	/* Tunnel arguments. */
 	TUNNEL_CREATE,
@@ -365,6 +379,7 @@ enum index {
 	ITEM_MPLS_LABEL,
 	ITEM_MPLS_TC,
 	ITEM_MPLS_S,
+	ITEM_MPLS_TTL,
 	ITEM_GRE,
 	ITEM_GRE_PROTO,
 	ITEM_GRE_C_RSVD0_VER,
@@ -385,6 +400,7 @@ enum index {
 	ITEM_GENEVE_OPTLEN,
 	ITEM_VXLAN_GPE,
 	ITEM_VXLAN_GPE_VNI,
+	ITEM_VXLAN_GPE_PROTO,
 	ITEM_ARP_ETH_IPV4,
 	ITEM_ARP_ETH_IPV4_SHA,
 	ITEM_ARP_ETH_IPV4_SPA,
@@ -524,6 +540,9 @@ enum index {
 	ITEM_IB_BTH_PSN,
 	ITEM_IPV6_PUSH_REMOVE_EXT,
 	ITEM_IPV6_PUSH_REMOVE_EXT_TYPE,
+	ITEM_PTYPE,
+	ITEM_PTYPE_VALUE,
+	ITEM_NSH,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -575,7 +594,6 @@ enum index {
 	ACTION_METER_POLICY,
 	ACTION_METER_POLICY_ID2PTR,
 	ACTION_METER_COLOR_MODE,
-	ACTION_METER_INIT_COLOR,
 	ACTION_METER_STATE,
 	ACTION_OF_DEC_NW_TTL,
 	ACTION_OF_POP_VLAN,
@@ -937,6 +955,7 @@ static const char *const modify_field_ids[] = {
 	"flex_item",
 	"hash_result",
 	"geneve_opt_type", "geneve_opt_class", "geneve_opt_data", "mpls",
+	"tcp_data_off", "ipv4_ihl", "ipv4_total_len", "ipv6_payload_len",
 	NULL
 };
 
@@ -1293,6 +1312,14 @@ static const enum index next_at_destroy_attr[] = {
 	ZERO,
 };
 
+static const enum index next_group_attr[] = {
+	GROUP_INGRESS,
+	GROUP_EGRESS,
+	GROUP_TRANSFER,
+	GROUP_SET_MISS_ACTIONS,
+	ZERO,
+};
+
 static const enum index next_table_subcmd[] = {
 	TABLE_CREATE,
 	TABLE_DESTROY,
@@ -1561,6 +1588,8 @@ static const enum index next_item[] = {
 	ITEM_AGGR_AFFINITY,
 	ITEM_TX_QUEUE,
 	ITEM_IB_BTH,
+	ITEM_PTYPE,
+	ITEM_NSH,
 	END_SET,
 	ZERO,
 };
@@ -1712,6 +1741,7 @@ static const enum index item_mpls[] = {
 	ITEM_MPLS_LABEL,
 	ITEM_MPLS_TC,
 	ITEM_MPLS_S,
+	ITEM_MPLS_TTL,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1758,6 +1788,7 @@ static const enum index item_geneve[] = {
 
 static const enum index item_vxlan_gpe[] = {
 	ITEM_VXLAN_GPE_VNI,
+	ITEM_VXLAN_GPE_PROTO,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -2079,6 +2110,17 @@ static const enum index item_ib_bth[] = {
 	ZERO,
 };
 
+static const enum index item_ptype[] = {
+	ITEM_PTYPE_VALUE,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_nsh[] = {
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index next_action[] = {
 	ACTION_END,
 	ACTION_VOID,
@@ -2227,7 +2269,6 @@ static const enum index action_meter_mark[] = {
 	ACTION_METER_PROFILE,
 	ACTION_METER_POLICY,
 	ACTION_METER_COLOR_MODE,
-	ACTION_METER_INIT_COLOR,
 	ACTION_METER_STATE,
 	ACTION_NEXT,
 	ZERO,
@@ -2678,6 +2719,12 @@ static int parse_push(struct context *, const struct token *,
 static int parse_pull(struct context *, const struct token *,
 		      const char *, unsigned int,
 		      void *, unsigned int);
+static int parse_group(struct context *, const struct token *,
+		       const char *, unsigned int,
+		       void *, unsigned int);
+static int parse_hash(struct context *, const struct token *,
+		      const char *, unsigned int,
+		      void *, unsigned int);
 static int parse_tunnel(struct context *, const struct token *,
 			const char *, unsigned int,
 			void *, unsigned int);
@@ -3021,6 +3068,7 @@ static const struct token token_list[] = {
 			      PATTERN_TEMPLATE,
 			      ACTIONS_TEMPLATE,
 			      TABLE,
+			      FLOW_GROUP,
 			      INDIRECT_ACTION,
 			      VALIDATE,
 			      CREATE,
@@ -3035,7 +3083,8 @@ static const struct token token_list[] = {
 			      FLEX,
 			      QUEUE,
 			      PUSH,
-			      PULL)),
+			      PULL,
+			      HASH)),
 		.call = parse_init,
 	},
 	/* Top-level command. */
@@ -3411,6 +3460,46 @@ static const struct token token_list[] = {
 		.call = parse_table,
 	},
 	/* Top-level command. */
+	[FLOW_GROUP] = {
+		.name = "group",
+		.help = "manage flow groups",
+		.next = NEXT(NEXT_ENTRY(GROUP_ID), NEXT_ENTRY(COMMON_PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
+		.call = parse_group,
+	},
+	/* Sub-level commands. */
+	[GROUP_SET_MISS_ACTIONS] = {
+		.name = "set_miss_actions",
+		.help = "set group miss actions",
+		.next = NEXT(next_action),
+		.call = parse_group,
+	},
+	/* Group arguments */
+	[GROUP_ID]	= {
+		.name = "group_id",
+		.help = "group id",
+		.next = NEXT(next_group_attr, NEXT_ENTRY(COMMON_GROUP_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.vc.attr.group)),
+	},
+	[GROUP_INGRESS] = {
+		.name = "ingress",
+		.help = "group ingress attr",
+		.next = NEXT(next_group_attr),
+		.call = parse_group,
+	},
+	[GROUP_EGRESS] = {
+		.name = "egress",
+		.help = "group egress attr",
+		.next = NEXT(next_group_attr),
+		.call = parse_group,
+	},
+	[GROUP_TRANSFER] = {
+		.name = "transfer",
+		.help = "group transfer attr",
+		.next = NEXT(next_group_attr),
+		.call = parse_group,
+	},
+	/* Top-level command. */
 	[QUEUE] = {
 		.name = "queue",
 		.help = "queue a flow rule operation",
@@ -3678,6 +3767,33 @@ static const struct token token_list[] = {
 		.help = "specify queue id",
 		.next = NEXT(NEXT_ENTRY(END), NEXT_ENTRY(COMMON_QUEUE_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, queue)),
+	},
+	/* Top-level command. */
+	[HASH] = {
+		.name = "hash",
+		.help = "calculate hash for a given pattern in a given template table",
+		.next = NEXT(NEXT_ENTRY(HASH_CALC_TABLE), NEXT_ENTRY(COMMON_PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
+		.call = parse_hash,
+	},
+	/* Sub-level commands. */
+	[HASH_CALC_TABLE] = {
+		.name = "template_table",
+		.help = "specify table id",
+		.next = NEXT(NEXT_ENTRY(HASH_CALC_PATTERN_INDEX),
+			     NEXT_ENTRY(COMMON_TABLE_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer,
+					args.vc.table_id)),
+		.call = parse_hash,
+	},
+	[HASH_CALC_PATTERN_INDEX] = {
+		.name = "pattern_template",
+		.help = "specify pattern template id",
+		.next = NEXT(NEXT_ENTRY(ITEM_PATTERN),
+			     NEXT_ENTRY(COMMON_UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct buffer,
+					args.vc.pat_templ_id)),
+		.call = parse_hash,
 	},
 	/* Top-level command. */
 	[INDIRECT_ACTION] = {
@@ -4650,6 +4766,13 @@ static const struct token token_list[] = {
 						  label_tc_s,
 						  "\x00\x00\x01")),
 	},
+	[ITEM_MPLS_TTL] = {
+		.name = "ttl",
+		.help = "MPLS Time-to-Live",
+		.next = NEXT(item_mpls, NEXT_ENTRY(COMMON_UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_mpls, ttl)),
+	},
 	[ITEM_GRE] = {
 		.name = "gre",
 		.help = "match GRE header",
@@ -4803,6 +4926,14 @@ static const struct token token_list[] = {
 			     item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_vxlan_gpe,
 					     hdr.vni)),
+	},
+	[ITEM_VXLAN_GPE_PROTO] = {
+		.name = "protocol",
+		.help = "VXLAN-GPE next protocol",
+		.next = NEXT(item_vxlan_gpe, NEXT_ENTRY(COMMON_UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_vxlan_gpe,
+					     protocol)),
 	},
 	[ITEM_ARP_ETH_IPV4] = {
 		.name = "arp_eth_ipv4",
@@ -5827,6 +5958,30 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ib_bth,
 						 hdr.psn)),
 	},
+	[ITEM_PTYPE] = {
+		.name = "ptype",
+		.help = "match L2/L3/L4 and tunnel information",
+		.priv = PRIV_ITEM(PTYPE,
+				  sizeof(struct rte_flow_item_ptype)),
+		.next = NEXT(item_ptype),
+		.call = parse_vc,
+	},
+	[ITEM_PTYPE_VALUE] = {
+		.name = "packet_type",
+		.help = "packet type as defined in rte_mbuf_ptype",
+		.next = NEXT(item_ptype, NEXT_ENTRY(COMMON_UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_ptype, packet_type)),
+	},
+	[ITEM_NSH] = {
+		.name = "nsh",
+		.help = "match NSH header",
+		.priv = PRIV_ITEM(NSH,
+				  sizeof(struct rte_flow_item_nsh)),
+		.next = NEXT(item_nsh),
+		.call = parse_vc,
+	},
+
 	/* Validate/create actions. */
 	[ACTIONS] = {
 		.name = "actions",
@@ -6174,12 +6329,6 @@ static const struct token token_list[] = {
 		.next = NEXT(action_meter_mark, NEXT_ENTRY(COMMON_UNSIGNED)),
 		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_meter_mark, color_mode)),
 		.call = parse_vc_conf,
-	},
-	[ACTION_METER_INIT_COLOR] = {
-		.name = "mtr_init_color",
-		.help = "meter initial color",
-		.next = NEXT(action_meter_mark, NEXT_ENTRY(ITEM_METER_COLOR_NAME)),
-		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_meter_mark, init_color)),
 	},
 	[ACTION_METER_STATE] = {
 		.name = "mtr_state",
@@ -10449,6 +10598,96 @@ parse_pull(struct context *ctx, const struct token *token,
 	return len;
 }
 
+/** Parse tokens for hash calculation commands. */
+static int
+parse_hash(struct context *ctx, const struct token *token,
+	 const char *str, unsigned int len,
+	 void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	if (!out->command) {
+		if (ctx->curr != HASH)
+			return -1;
+		if (sizeof(*out) > size)
+			return -1;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		out->args.vc.data = (uint8_t *)out + size;
+		return len;
+	}
+	switch (ctx->curr) {
+	case HASH_CALC_TABLE:
+	case HASH_CALC_PATTERN_INDEX:
+		return len;
+	case ITEM_PATTERN:
+		out->args.vc.pattern =
+			(void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
+					       sizeof(double));
+		ctx->object = out->args.vc.pattern;
+		ctx->objmask = NULL;
+		return len;
+	default:
+		return -1;
+	}
+}
+
+static int
+parse_group(struct context *ctx, const struct token *token,
+	    const char *str, unsigned int len,
+	    void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	if (!out->command) {
+		if (ctx->curr != FLOW_GROUP)
+			return -1;
+		if (sizeof(*out) > size)
+			return -1;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		out->args.vc.data = (uint8_t *)out + size;
+		return len;
+	}
+	switch (ctx->curr) {
+	case GROUP_INGRESS:
+		out->args.vc.attr.ingress = 1;
+		return len;
+	case GROUP_EGRESS:
+		out->args.vc.attr.egress = 1;
+		return len;
+	case GROUP_TRANSFER:
+		out->args.vc.attr.transfer = 1;
+		return len;
+	case GROUP_SET_MISS_ACTIONS:
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+		out->args.vc.actions = (void *)RTE_ALIGN_CEIL((uintptr_t)(out + 1),
+							       sizeof(double));
+		return len;
+	default:
+		return -1;
+	}
+}
+
 static int
 parse_flex(struct context *ctx, const struct token *token,
 	     const char *str, unsigned int len,
@@ -12329,6 +12568,10 @@ cmd_flow_parsed(const struct buffer *in)
 					in->args.table_destroy.table_id_n,
 					in->args.table_destroy.table_id);
 		break;
+	case GROUP_SET_MISS_ACTIONS:
+		port_queue_group_set_miss_actions(in->port, &in->args.vc.attr,
+						  in->args.vc.actions);
+		break;
 	case QUEUE_CREATE:
 		port_queue_flow_create(in->port, in->queue, in->postpone,
 			in->args.vc.table_id, in->args.vc.rule_id,
@@ -12350,6 +12593,11 @@ cmd_flow_parsed(const struct buffer *in)
 		break;
 	case PULL:
 		port_queue_flow_pull(in->port, in->queue);
+		break;
+	case HASH:
+		port_flow_hash_calc(in->port, in->args.vc.table_id,
+				    in->args.vc.pat_templ_id,
+				    in->args.vc.pattern);
 		break;
 	case QUEUE_AGED:
 		port_queue_flow_aged(in->port, in->queue,
@@ -12688,6 +12936,9 @@ flow_item_default_mask(const struct rte_flow_item *item)
 		break;
 	case RTE_FLOW_ITEM_TYPE_IB_BTH:
 		mask = &rte_flow_item_ib_bth_mask;
+		break;
+	case RTE_FLOW_ITEM_TYPE_PTYPE:
+		mask = &rte_flow_item_ptype_mask;
 		break;
 	default:
 		break;

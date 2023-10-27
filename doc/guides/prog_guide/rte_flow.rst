@@ -1566,6 +1566,13 @@ Matches an InfiniBand base transport header in RoCE packet.
 
 - ``hdr``: InfiniBand base transport header definition (``rte_ib.h``).
 
+Item: ``PTYPE``
+^^^^^^^^^^^^^^^
+
+Matches the packet type as defined in rte_mbuf_ptype.
+
+- ``packet_type``: L2/L3/L4 and tunnel information.
+
 Actions
 ~~~~~~~
 
@@ -3490,6 +3497,15 @@ The ``quota`` value is reduced according to ``mode`` setting.
    | ``RTE_FLOW_QUOTA_MODE_L3``      | Count packet bytes starting from L3 |
    +------------------+----------------------------------------------------+
 
+Action: ``SEND_TO_KERNEL``
+^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Send packets to the kernel, without going to userspace at all.
+
+The packets will be received by the kernel driver sharing the same device
+as the DPDK port on which this action is configured.
+
+
 Negative types
 ~~~~~~~~~~~~~~
 
@@ -3757,6 +3773,36 @@ Information about the number of available resources can be retrieved via
                      struct rte_flow_port_info *port_info,
                      struct rte_flow_queue_info *queue_info,
                      struct rte_flow_error *error);
+
+Group Miss Actions
+~~~~~~~~~~~~~~~~~~
+
+In an application, many flow rules share common group attributes, meaning they can be grouped and
+classified together. A user can explicitly specify a set of actions performed on a packet when it
+did not match any flows rules in a group using the following API:
+
+.. code-block:: c
+
+      int
+      rte_flow_group_set_miss_actions(uint16_t port_id,
+                                      uint32_t group_id,
+                                      const struct rte_flow_group_attr *attr,
+                                      const struct rte_flow_action actions[],
+                                      struct rte_flow_error *error);
+
+For example, to configure a RTE_FLOW_TYPE_JUMP action as a miss action for ingress group 1:
+
+.. code-block:: c
+
+      struct rte_flow_group_attr attr = {.ingress = 1};
+      struct rte_flow_action act[] = {
+      /* Setting miss actions to jump to group 3 */
+          [0] = {.type = RTE_FLOW_ACTION_TYPE_JUMP,
+                 .conf = &(struct rte_flow_action_jump){.group = 3}},
+          [1] = {.type = RTE_FLOW_ACTION_TYPE_END},
+      };
+      struct rte_flow_error err;
+      rte_flow_group_set_miss_actions(port, 1, &attr, act, &err);
 
 Flow templates
 ~~~~~~~~~~~~~~
@@ -4133,6 +4179,23 @@ Multiple outstanding operation results can be pulled simultaneously.
 User data may be provided during a flow creation/destruction in order
 to distinguish between multiple operations. User data is returned as part
 of the result to provide a method to detect which operation is completed.
+
+Calculate hash
+~~~~~~~~~~~~~~
+
+Calculating hash of a packet in SW as it would be calculated in HW.
+
+The application can use this function to calculate the hash of a given packet
+as it would be calculated in the HW.
+
+.. code-block:: c
+
+   int
+   rte_flow_calc_table_hash(uint16_t port_id,
+                            const struct rte_flow_template_table *table,
+			                   const struct rte_flow_item pattern[],
+                            uint8_t pattern_template_index,
+			                   uint32_t *hash, struct rte_flow_error *error);
 
 .. _flow_isolated_mode:
 

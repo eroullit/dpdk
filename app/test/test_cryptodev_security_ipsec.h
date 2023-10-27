@@ -103,6 +103,7 @@ struct ipsec_test_flags {
 	bool fragment;
 	bool stats_success;
 	bool antireplay;
+	bool use_ext_mbuf;
 	enum df_flags df;
 	enum dscp_flags dscp;
 	enum flabel_flags flabel;
@@ -110,6 +111,8 @@ struct ipsec_test_flags {
 	bool ah;
 	uint32_t plaintext_len;
 	int nb_segs_in_mbuf;
+	bool inb_oop;
+	bool rx_inject;
 };
 
 struct crypto_param {
@@ -300,7 +303,7 @@ int test_ipsec_status_check(const struct ipsec_test_data *td,
 			    enum rte_security_ipsec_sa_direction dir,
 			    int pkt_num);
 
-int test_ipsec_stats_verify(struct rte_security_ctx *ctx,
+int test_ipsec_stats_verify(void *ctx,
 			    void *sess,
 			    const struct ipsec_test_flags *flags,
 			    enum rte_security_ipsec_sa_direction dir);

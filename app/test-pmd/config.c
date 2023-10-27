@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -699,8 +700,8 @@ print_dev_capabilities(uint64_t capabilities)
 	if (capabilities == 0)
 		return;
 
-	begin = __builtin_ctzll(capabilities);
-	end = sizeof(capabilities) * CHAR_BIT - __builtin_clzll(capabilities);
+	begin = rte_ctz64(capabilities);
+	end = sizeof(capabilities) * CHAR_BIT - rte_clz64(capabilities);
 
 	single_capa = 1ULL << begin;
 	for (bit = begin; bit < end; bit++) {
@@ -3179,7 +3180,6 @@ port_queue_action_handle_update(portid_t port_id,
 		if (mtr_update.meter_mark.policy)
 			mtr_update.policy_valid = 1;
 		mtr_update.color_mode_valid = 1;
-		mtr_update.init_color_valid = 1;
 		mtr_update.state_valid = 1;
 		update = &mtr_update;
 		break;
@@ -3299,6 +3299,59 @@ port_queue_flow_push(portid_t port_id, queueid_t queue_id)
 	}
 	printf("Queue #%u operations pushed\n", queue_id);
 	return ret;
+}
+
+/** Calculate the hash result for a given pattern in a given table. */
+int
+port_flow_hash_calc(portid_t port_id, uint32_t table_id,
+		    uint8_t pattern_template_index, const struct rte_flow_item pattern[])
+{
+	uint32_t hash;
+	bool found;
+	struct port_table *pt;
+	struct rte_port *port;
+	struct rte_flow_error error;
+	int ret = 0;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return -EINVAL;
+	port = &ports[port_id];
+
+	found = false;
+	pt = port->table_list;
+	while (pt) {
+		if (table_id == pt->id) {
+			found = true;
+			break;
+		}
+		pt = pt->next;
+	}
+	if (!found) {
+		printf("Table #%u is invalid\n", table_id);
+		return -EINVAL;
+	}
+
+	memset(&error, 0x55, sizeof(error));
+	ret = rte_flow_calc_table_hash(port_id, pt->table, pattern,
+				       pattern_template_index, &hash, &error);
+	if (ret < 0) {
+		printf("Failed to calculate hash ");
+		switch (abs(ret)) {
+		case ENODEV:
+			printf("no such device\n");
+			break;
+		case ENOTSUP:
+			printf("device doesn't support this operation\n");
+			break;
+		default:
+			printf("\n");
+			break;
+		}
+		return ret;
+	}
+	printf("Hash results 0x%x\n", hash);
+	return 0;
 }
 
 /** Pull queue operation results from the queue. */
@@ -3511,6 +3564,33 @@ port_queue_flow_pull(portid_t port_id, queueid_t queue_id)
 	printf("Queue #%u pulled %u operations (%u failed, %u succeeded)\n",
 	       queue_id, ret, ret - success, success);
 	free(res);
+	return ret;
+}
+
+/* Set group miss actions */
+int
+port_queue_group_set_miss_actions(portid_t port_id, const struct rte_flow_attr *attr,
+				  const struct rte_flow_action *actions)
+{
+	struct rte_flow_group_attr gattr = {
+		.ingress = attr->ingress,
+		.egress = attr->egress,
+		.transfer = attr->transfer,
+	};
+	struct rte_flow_error error;
+	int ret = 0;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
+	    port_id == (portid_t)RTE_PORT_ALL)
+		return -EINVAL;
+
+	memset(&error, 0x66, sizeof(error));
+	ret = rte_flow_group_set_miss_actions(port_id, attr->group, &gattr, actions, &error);
+
+	if (ret < 0)
+		return port_flow_complain(&error);
+
+	printf("Group #%u set miss actions succeeded\n", attr->group);
 	return ret;
 }
 
@@ -6800,6 +6880,24 @@ mcast_addr_remove(portid_t port_id, struct rte_ether_addr *mc_addr)
 	if (eth_port_multicast_addr_list_set(port_id) < 0)
 		/* Rollback on failure, add the address back into the pool */
 		mcast_addr_pool_append(port, mc_addr);
+}
+
+void
+mcast_addr_flush(portid_t port_id)
+{
+	int ret;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	ret = rte_eth_dev_set_mc_addr_list(port_id, NULL, 0);
+	if (ret != 0) {
+		fprintf(stderr,
+			"Failed to flush all multicast MAC addresses on port_id %u\n",
+			port_id);
+		return;
+	}
+	mcast_addr_pool_destroy(port_id);
 }
 
 void

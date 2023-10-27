@@ -1218,7 +1218,7 @@ acc100_fcw_ld_fill(struct rte_bbdev_dec_op *op, struct acc_fcw_ld *fcw,
 				- op->ldpc_dec.n_filler);
 
 		/* Alignment on next 64B - Already enforced from HC output */
-		harq_in_length = RTE_ALIGN_FLOOR(harq_in_length, ACC_HARQ_ALIGN_64B);
+		harq_in_length = RTE_ALIGN_CEIL(harq_in_length, ACC_HARQ_ALIGN_64B);
 
 		/* Stronger alignment requirement when in decompression mode */
 		if (fcw->hcin_decomp_mode > 0)
@@ -5187,6 +5187,10 @@ rte_acc_configure(const char *dev_name, struct rte_acc_conf *conf)
 		return acc100_configure(dev_name, conf);
 	else if (pci_dev->id.device_id == ACC101_PF_DEVICE_ID)
 		return acc101_configure(dev_name, conf);
-	else
+	else if (pci_dev->id.device_id == VRB1_PF_DEVICE_ID)
 		return vrb1_configure(dev_name, conf);
+	else if (pci_dev->id.device_id == VRB2_PF_DEVICE_ID)
+		return vrb2_configure(dev_name, conf);
+
+	return -ENXIO;
 }

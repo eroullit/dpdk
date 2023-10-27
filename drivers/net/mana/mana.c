@@ -6,6 +6,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
 
 #include <ethdev_driver.h>
 #include <ethdev_pci.h>
@@ -286,11 +288,12 @@ mana_dev_info_get(struct rte_eth_dev *dev,
 {
 	struct mana_priv *priv = dev->data->dev_private;
 
-	dev_info->max_mtu = RTE_ETHER_MTU;
+	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
+	dev_info->max_mtu = MANA_MAX_MTU;
 
 	/* RX params */
 	dev_info->min_rx_bufsize = MIN_RX_BUF_SIZE;
-	dev_info->max_rx_pktlen = MAX_FRAME_SIZE;
+	dev_info->max_rx_pktlen = MANA_MAX_MTU + RTE_ETHER_HDR_LEN;
 
 	dev_info->max_rx_queues = priv->max_rx_queues;
 	dev_info->max_tx_queues = priv->max_tx_queues;
@@ -700,6 +703,94 @@ mana_dev_stats_reset(struct rte_eth_dev *dev __rte_unused)
 	return 0;
 }
 
+static int
+mana_get_ifname(const struct mana_priv *priv, char (*ifname)[IF_NAMESIZE])
+{
+	int ret;
+	DIR *dir;
+	struct dirent *dent;
+
+	MANA_MKSTR(dirpath, "%s/device/net", priv->ib_ctx->device->ibdev_path);
+
+	dir = opendir(dirpath);
+	if (dir == NULL)
+		return -ENODEV;
+
+	while ((dent = readdir(dir)) != NULL) {
+		char *name = dent->d_name;
+		FILE *file;
+		struct rte_ether_addr addr;
+		char *mac = NULL;
+
+		if ((name[0] == '.') &&
+		    ((name[1] == '\0') ||
+		     ((name[1] == '.') && (name[2] == '\0'))))
+			continue;
+
+		MANA_MKSTR(path, "%s/%s/address", dirpath, name);
+
+		file = fopen(path, "r");
+		if (!file) {
+			ret = -ENODEV;
+			break;
+		}
+
+		ret = fscanf(file, "%ms", &mac);
+		fclose(file);
+
+		if (ret <= 0) {
+			ret = -EINVAL;
+			break;
+		}
+
+		ret = rte_ether_unformat_addr(mac, &addr);
+		free(mac);
+		if (ret)
+			break;
+
+		if (rte_is_same_ether_addr(&addr, priv->dev_data->mac_addrs)) {
+			strlcpy(*ifname, name, sizeof(*ifname));
+			ret = 0;
+			break;
+		}
+	}
+
+	closedir(dir);
+	return ret;
+}
+
+static int
+mana_ifreq(const struct mana_priv *priv, int req, struct ifreq *ifr)
+{
+	int sock, ret;
+
+	sock = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
+	if (sock == -1)
+		return -errno;
+
+	ret = mana_get_ifname(priv, &ifr->ifr_name);
+	if (ret) {
+		close(sock);
+		return ret;
+	}
+
+	if (ioctl(sock, req, ifr) == -1)
+		ret = -errno;
+
+	close(sock);
+
+	return ret;
+}
+
+static int
+mana_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
+{
+	struct mana_priv *priv = dev->data->dev_private;
+	struct ifreq request = { .ifr_mtu = mtu, };
+
+	return mana_ifreq(priv, SIOCSIFMTU, &request);
+}
+
 static const struct eth_dev_ops mana_dev_ops = {
 	.dev_configure		= mana_dev_configure,
 	.dev_start		= mana_dev_start,
@@ -720,6 +811,7 @@ static const struct eth_dev_ops mana_dev_ops = {
 	.link_update		= mana_dev_link_update,
 	.stats_get		= mana_dev_stats_get,
 	.stats_reset		= mana_dev_stats_reset,
+	.mtu_set		= mana_mtu_set,
 };
 
 static const struct eth_dev_ops mana_dev_secondary_ops = {
@@ -822,7 +914,6 @@ get_port_mac(struct ibv_device *device, unsigned int port,
 	DIR *dir;
 	struct dirent *dent;
 	unsigned int dev_port;
-	char mac[20];
 
 	MANA_MKSTR(path, "%s/device/net", device->ibdev_path);
 
@@ -832,6 +923,7 @@ get_port_mac(struct ibv_device *device, unsigned int port,
 
 	while ((dent = readdir(dir))) {
 		char *name = dent->d_name;
+		char *mac = NULL;
 
 		MANA_MKSTR(port_path, "%s/%s/dev_port", path, name);
 
@@ -859,7 +951,7 @@ get_port_mac(struct ibv_device *device, unsigned int port,
 			if (!file)
 				continue;
 
-			ret = fscanf(file, "%s", mac);
+			ret = fscanf(file, "%ms", &mac);
 			fclose(file);
 
 			if (ret < 0)
@@ -868,6 +960,8 @@ get_port_mac(struct ibv_device *device, unsigned int port,
 			ret = rte_ether_unformat_addr(mac, addr);
 			if (ret)
 				DRV_LOG(ERR, "unrecognized mac addr %s", mac);
+
+			free(mac);
 			break;
 		}
 	}
@@ -1260,7 +1354,7 @@ mana_probe_port(struct ibv_device *ibdev, struct ibv_device_attr_ex *dev_attr,
 	/* Create a parent domain with the port number */
 	attr.pd = priv->ib_pd;
 	attr.comp_mask = IBV_PARENT_DOMAIN_INIT_ATTR_PD_CONTEXT;
-	attr.pd_context = (void *)(uint64_t)port;
+	attr.pd_context = (void *)(uintptr_t)port;
 	priv->ib_parent_pd = ibv_alloc_parent_domain(ctx, &attr);
 	if (!priv->ib_parent_pd) {
 		DRV_LOG(ERR, "ibv_alloc_parent_domain failed port %d", port);

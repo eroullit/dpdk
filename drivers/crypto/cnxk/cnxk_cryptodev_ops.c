@@ -490,11 +490,12 @@ cnxk_sess_fill(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xform,
 	struct rte_crypto_sym_xform *aead_xfrm = NULL;
 	struct rte_crypto_sym_xform *c_xfrm = NULL;
 	struct rte_crypto_sym_xform *a_xfrm = NULL;
-	bool pdcp_chain_supported = false;
 	bool ciph_then_auth = false;
 
-	if (roc_cpt->hw_caps[CPT_ENG_TYPE_SE].pdcp_chain)
-		pdcp_chain_supported = true;
+	if (roc_cpt->hw_caps[CPT_ENG_TYPE_SE].pdcp_chain_zuc256)
+		sess->roc_se_ctx.pdcp_iv_offset = 24;
+	else
+		sess->roc_se_ctx.pdcp_iv_offset = 16;
 
 	if (xform == NULL)
 		return -EINVAL;
@@ -591,8 +592,7 @@ cnxk_sess_fill(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xform,
 			case RTE_CRYPTO_AUTH_SNOW3G_UIA2:
 			case RTE_CRYPTO_AUTH_ZUC_EIA3:
 			case RTE_CRYPTO_AUTH_AES_CMAC:
-				if (!pdcp_chain_supported ||
-				    !is_valid_pdcp_cipher_alg(c_xfrm, sess))
+				if (!is_valid_pdcp_cipher_alg(c_xfrm, sess))
 					return -ENOTSUP;
 				break;
 			default:
@@ -627,8 +627,7 @@ cnxk_sess_fill(struct roc_cpt *roc_cpt, struct rte_crypto_sym_xform *xform,
 		case RTE_CRYPTO_AUTH_SNOW3G_UIA2:
 		case RTE_CRYPTO_AUTH_ZUC_EIA3:
 		case RTE_CRYPTO_AUTH_AES_CMAC:
-			if (!pdcp_chain_supported ||
-			    !is_valid_pdcp_cipher_alg(c_xfrm, sess))
+			if (!is_valid_pdcp_cipher_alg(c_xfrm, sess))
 				return -ENOTSUP;
 			break;
 		default:

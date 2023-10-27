@@ -2150,7 +2150,7 @@ ice_recv_scattered_pkts(void *rx_queue,
 			}
 			rxq->hw_time_update = rte_get_timer_cycles() /
 					     (rte_get_timer_hz() / 1000);
-			*RTE_MBUF_DYNFIELD(rxm,
+			*RTE_MBUF_DYNFIELD(first_seg,
 					   (ice_timestamp_dynfield_offset),
 					   rte_mbuf_timestamp_t *) = ts_ns;
 			pkt_flags |= ice_timestamp_dynflag;
@@ -3685,9 +3685,6 @@ ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 	int i, ret;
 	uint64_t ol_flags;
 	struct rte_mbuf *m;
-	struct ice_tx_queue *txq = tx_queue;
-	struct rte_eth_dev *dev = &rte_eth_devices[txq->port_id];
-	uint16_t max_frame_size = dev->data->mtu + ICE_ETH_OVERHEAD;
 
 	for (i = 0; i < nb_pkts; i++) {
 		m = tx_pkts[i];
@@ -3704,11 +3701,8 @@ ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 			return i;
 		}
 
-		/* check the data_len in mbuf */
-		if (m->data_len < ICE_TX_MIN_PKT_LEN ||
-			m->data_len > max_frame_size) {
+		if (m->pkt_len < ICE_TX_MIN_PKT_LEN) {
 			rte_errno = EINVAL;
-			PMD_DRV_LOG(ERR, "INVALID mbuf: bad data_len=[%hu]", m->data_len);
 			return i;
 		}
 
@@ -3727,7 +3721,6 @@ ice_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 
 		if (ice_check_empty_mbuf(m) != 0) {
 			rte_errno = EINVAL;
-			PMD_DRV_LOG(ERR, "INVALID mbuf:	last mbuf data_len=[0]");
 			return i;
 		}
 	}

@@ -593,6 +593,23 @@ static const struct rte_cryptodev_capabilities openssl_pmd_capabilities[] = {
 		},
 		}
 	},
+	{	/* SM2 */
+		.op = RTE_CRYPTO_OP_TYPE_ASYMMETRIC,
+		{.asym = {
+			.xform_capa = {
+				.xform_type = RTE_CRYPTO_ASYM_XFORM_SM2,
+				.hash_algos = (1 << RTE_CRYPTO_AUTH_SM3),
+				.op_types =
+				((1<<RTE_CRYPTO_ASYM_OP_SIGN) |
+				 (1 << RTE_CRYPTO_ASYM_OP_VERIFY) |
+				 (1 << RTE_CRYPTO_ASYM_OP_ENCRYPT) |
+				 (1 << RTE_CRYPTO_ASYM_OP_DECRYPT)),
+				{.internal_rng = 1
+				}
+			}
+		}
+		}
+	},
 
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
@@ -1288,10 +1305,10 @@ err_dsa:
 #ifndef OPENSSL_NO_SM2
 		OSSL_PARAM_BLD *param_bld = NULL;
 		OSSL_PARAM *params = NULL;
+		BIGNUM *pkey_bn = NULL;
+		uint8_t pubkey[64];
+		size_t len = 0;
 		int ret = -1;
-
-		if (xform->sm2.hash != RTE_CRYPTO_AUTH_SM3)
-			return -1;
 
 		param_bld = OSSL_PARAM_BLD_new();
 		if (!param_bld) {
@@ -1301,6 +1318,38 @@ err_dsa:
 
 		ret = OSSL_PARAM_BLD_push_utf8_string(param_bld,
 				OSSL_ASYM_CIPHER_PARAM_DIGEST, "SM3", 0);
+		if (!ret) {
+			OPENSSL_LOG(ERR, "failed to push params\n");
+			goto err_sm2;
+		}
+
+		ret = OSSL_PARAM_BLD_push_utf8_string(param_bld,
+				OSSL_PKEY_PARAM_GROUP_NAME, "SM2", 0);
+		if (!ret) {
+			OPENSSL_LOG(ERR, "failed to push params\n");
+			goto err_sm2;
+		}
+
+		pkey_bn = BN_bin2bn((const unsigned char *)xform->ec.pkey.data,
+							xform->ec.pkey.length, pkey_bn);
+
+		ret = OSSL_PARAM_BLD_push_BN(param_bld, OSSL_PKEY_PARAM_PRIV_KEY,
+									 pkey_bn);
+		if (!ret) {
+			OPENSSL_LOG(ERR, "failed to push params\n");
+			goto err_sm2;
+		}
+
+		memset(pubkey, 0, sizeof(pubkey));
+		pubkey[0] = 0x04;
+		len += 1;
+		memcpy(&pubkey[len], xform->ec.q.x.data, xform->ec.q.x.length);
+		len += xform->ec.q.x.length;
+		memcpy(&pubkey[len], xform->ec.q.y.data, xform->ec.q.y.length);
+		len += xform->ec.q.y.length;
+
+		ret = OSSL_PARAM_BLD_push_octet_string(param_bld,
+				OSSL_PKEY_PARAM_PUB_KEY, pubkey, len);
 		if (!ret) {
 			OPENSSL_LOG(ERR, "failed to push params\n");
 			goto err_sm2;

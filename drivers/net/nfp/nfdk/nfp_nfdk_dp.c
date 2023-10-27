@@ -3,18 +3,83 @@
  * All rights reserved.
  */
 
-#include <ethdev_driver.h>
+#include "nfp_nfdk.h"
+
 #include <bus_pci_driver.h>
 #include <rte_malloc.h>
 
-#include "../nfp_logs.h"
-#include "../nfp_common.h"
-#include "../nfp_rxtx.h"
-#include "../nfpcore/nfp_mip.h"
-#include "../nfpcore/nfp_rtsym.h"
 #include "../flower/nfp_flower.h"
-#include "../flower/nfp_flower_cmsg.h"
-#include "nfp_nfdk.h"
+#include "../nfpcore/nfp_platform.h"
+#include "../nfp_logs.h"
+
+#define NFDK_TX_DESC_GATHER_MAX         17
+
+/* Set TX CSUM offload flags in TX descriptor of nfdk */
+static uint64_t
+nfp_net_nfdk_tx_cksum(struct nfp_net_txq *txq,
+		struct rte_mbuf *mb,
+		uint64_t flags)
+{
+	uint64_t ol_flags;
+	struct nfp_net_hw *hw = txq->hw;
+
+	if ((hw->cap & NFP_NET_CFG_CTRL_TXCSUM) == 0)
+		return flags;
+
+	ol_flags = mb->ol_flags;
+
+	/* Set TCP csum offload if TSO enabled. */
+	if ((ol_flags & RTE_MBUF_F_TX_TCP_SEG) != 0)
+		flags |= NFDK_DESC_TX_L4_CSUM;
+
+	if ((ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) != 0)
+		flags |= NFDK_DESC_TX_ENCAP;
+
+	/* IPv6 does not need checksum */
+	if ((ol_flags & RTE_MBUF_F_TX_IP_CKSUM) != 0)
+		flags |= NFDK_DESC_TX_L3_CSUM;
+
+	if ((ol_flags & RTE_MBUF_F_TX_L4_MASK) != 0)
+		flags |= NFDK_DESC_TX_L4_CSUM;
+
+	return flags;
+}
+
+/* Set TX descriptor for TSO of nfdk */
+static uint64_t
+nfp_net_nfdk_tx_tso(struct nfp_net_txq *txq,
+		struct rte_mbuf *mb)
+{
+	uint8_t outer_len;
+	uint64_t ol_flags;
+	struct nfp_net_nfdk_tx_desc txd;
+	struct nfp_net_hw *hw = txq->hw;
+
+	txd.raw = 0;
+
+	if ((hw->cap & NFP_NET_CFG_CTRL_LSO_ANY) == 0)
+		return txd.raw;
+
+	ol_flags = mb->ol_flags;
+	if ((ol_flags & RTE_MBUF_F_TX_TCP_SEG) == 0)
+		return txd.raw;
+
+	txd.l3_offset = mb->l2_len;
+	txd.l4_offset = mb->l2_len + mb->l3_len;
+	txd.lso_meta_res = 0;
+	txd.mss = rte_cpu_to_le_16(mb->tso_segsz);
+	txd.lso_hdrlen = mb->l2_len + mb->l3_len + mb->l4_len;
+	txd.lso_totsegs = (mb->pkt_len + mb->tso_segsz) / mb->tso_segsz;
+
+	if ((ol_flags & RTE_MBUF_F_TX_TUNNEL_MASK) != 0) {
+		outer_len = mb->outer_l2_len + mb->outer_l3_len;
+		txd.l3_offset += outer_len;
+		txd.l4_offset += outer_len;
+		txd.lso_hdrlen += outer_len;
+	}
+
+	return txd.raw;
+}
 
 uint32_t
 nfp_flower_nfdk_pkt_add_metadata(struct rte_mbuf *mbuf,
@@ -36,9 +101,7 @@ static inline uint16_t
 nfp_net_nfdk_headlen_to_segs(uint16_t headlen)
 {
 	/* First descriptor fits less data, so adjust for that */
-	return DIV_ROUND_UP(headlen +
-			NFDK_TX_MAX_DATA_PER_DESC -
-			NFDK_TX_MAX_DATA_PER_HEAD,
+	return DIV_ROUND_UP(headlen + NFDK_TX_MAX_DATA_PER_DESC - NFDK_TX_MAX_DATA_PER_HEAD,
 			NFDK_TX_MAX_DATA_PER_DESC);
 }
 
@@ -112,13 +175,16 @@ nfp_net_nfdk_set_meta_data(struct rte_mbuf *pkt,
 	char *meta;
 	uint8_t layer = 0;
 	uint32_t meta_type;
+	uint32_t cap_extend;
 	struct nfp_net_hw *hw;
 	uint32_t header_offset;
 	uint8_t vlan_layer = 0;
+	uint8_t ipsec_layer = 0;
 	struct nfp_net_meta_raw meta_data;
 
 	memset(&meta_data, 0, sizeof(meta_data));
 	hw = txq->hw;
+	cap_extend = hw->cap_ext;
 
 	if ((pkt->ol_flags & RTE_MBUF_F_TX_VLAN) != 0 &&
 			(hw->ctrl & NFP_NET_CFG_CTRL_TXVLAN_V2) != 0) {
@@ -126,6 +192,18 @@ nfp_net_nfdk_set_meta_data(struct rte_mbuf *pkt,
 			meta_data.length = NFP_NET_META_HEADER_SIZE;
 		meta_data.length += NFP_NET_META_FIELD_SIZE;
 		meta_data.header |= NFP_NET_META_VLAN;
+	}
+
+	if ((pkt->ol_flags & RTE_MBUF_F_TX_SEC_OFFLOAD) != 0 &&
+			(cap_extend & NFP_NET_CFG_CTRL_IPSEC) != 0) {
+		uint32_t ipsec_type = NFP_NET_META_IPSEC |
+				NFP_NET_META_IPSEC << NFP_NET_META_FIELD_SIZE |
+				NFP_NET_META_IPSEC << (2 * NFP_NET_META_FIELD_SIZE);
+		if (meta_data.length == 0)
+			meta_data.length = NFP_NET_META_FIELD_SIZE;
+		uint8_t ipsec_offset = meta_data.length - NFP_NET_META_FIELD_SIZE;
+		meta_data.header |= (ipsec_type << ipsec_offset);
+		meta_data.length += 3 * NFP_NET_META_FIELD_SIZE;
 	}
 
 	if (meta_data.length == 0)
@@ -149,6 +227,15 @@ nfp_net_nfdk_set_meta_data(struct rte_mbuf *pkt,
 			}
 			nfp_net_set_meta_vlan(&meta_data, pkt, layer);
 			vlan_layer++;
+			break;
+		case NFP_NET_META_IPSEC:
+			if (ipsec_layer > 2) {
+				PMD_DRV_LOG(ERR, "At most 3 layers of ipsec is supported for now.");
+				return;
+			}
+
+			nfp_net_set_meta_ipsec(&meta_data, txq, pkt, layer, ipsec_layer);
+			ipsec_layer++;
 			break;
 		default:
 			PMD_DRV_LOG(ERR, "The metadata type not supported");
@@ -265,8 +352,10 @@ nfp_net_nfdk_xmit_pkts_common(void *tx_queue,
 		 * than packet head len.
 		 */
 		if (dma_len > NFDK_DESC_TX_DMA_LEN_HEAD)
-			dma_len = NFDK_DESC_TX_DMA_LEN_HEAD;
-		dlen_type = dma_len | (NFDK_DESC_TX_TYPE_HEAD & (type << 12));
+			tmp_dlen = NFDK_DESC_TX_DMA_LEN_HEAD;
+		else
+			tmp_dlen = dma_len;
+		dlen_type = tmp_dlen | (NFDK_DESC_TX_TYPE_HEAD & (type << 12));
 		ktxds->dma_len_type = rte_cpu_to_le_16(dlen_type);
 		dma_addr = rte_mbuf_data_iova(pkt);
 		ktxds->dma_addr_hi = rte_cpu_to_le_16(dma_addr >> 32);
@@ -277,7 +366,6 @@ nfp_net_nfdk_xmit_pkts_common(void *tx_queue,
 		 * Preserve the original dlen_type, this way below the EOP logic
 		 * can use dlen_type.
 		 */
-		tmp_dlen = dlen_type & NFDK_DESC_TX_DMA_LEN_HEAD;
 		dma_len -= tmp_dlen;
 		dma_addr += tmp_dlen + 1;
 
@@ -357,7 +445,6 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 		unsigned int socket_id,
 		const struct rte_eth_txconf *tx_conf)
 {
-	int ret;
 	size_t size;
 	uint32_t tx_desc_sz;
 	uint16_t min_tx_desc;
@@ -369,11 +456,7 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 
 	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
-	PMD_INIT_FUNC_TRACE();
-
-	ret = nfp_net_tx_desc_limits(hw, &min_tx_desc, &max_tx_desc);
-	if (ret != 0)
-		return ret;
+	nfp_net_tx_desc_limits(hw, &min_tx_desc, &max_tx_desc);
 
 	/* Validating number of descriptors */
 	tx_desc_sz = nb_desc * sizeof(struct nfp_net_nfdk_tx_desc);
@@ -396,7 +479,7 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 
 	/*
 	 * Free memory prior to re-allocation if needed. This is the case after
-	 * calling nfp_net_stop
+	 * calling nfp_net_stop().
 	 */
 	if (dev->data->tx_queues[queue_idx] != NULL) {
 		PMD_TX_LOG(DEBUG, "Freeing memory prior to re-allocation %d",
@@ -431,7 +514,7 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->tx_count = nb_desc * NFDK_TX_DESC_PER_SIMPLE_PKT;
 	txq->tx_free_thresh = tx_free_thresh;
 
-	/* queue mapping based on firmware configuration */
+	/* Queue mapping based on firmware configuration */
 	txq->qidx = queue_idx;
 	txq->tx_qcidx = queue_idx * hw->stride_tx;
 	txq->qcp_q = hw->tx_bar + NFP_QCP_QUEUE_OFF(txq->tx_qcidx);
@@ -441,7 +524,7 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 	txq->dma = tz->iova;
 	txq->ktxds = tz->addr;
 
-	/* mbuf pointers array for referencing mbufs linked to TX descriptors */
+	/* Mbuf pointers array for referencing mbufs linked to TX descriptors */
 	txq->txbufs = rte_zmalloc_socket("txq->txbufs",
 			sizeof(*txq->txbufs) * txq->tx_count,
 			RTE_CACHE_LINE_SIZE, socket_id);
@@ -457,7 +540,7 @@ nfp_net_nfdk_tx_queue_setup(struct rte_eth_dev *dev,
 
 	/*
 	 * Telling the HW about the physical address of the TX ring and number
-	 * of descriptors in log2 format
+	 * of descriptors in log2 format.
 	 */
 	nn_cfg_writeq(hw, NFP_NET_CFG_TXR_ADDR(queue_idx), txq->dma);
 	nn_cfg_writeb(hw, NFP_NET_CFG_TXR_SZ(queue_idx), rte_log2_u32(txq->tx_count));

@@ -16,8 +16,9 @@
 #include "roc_errata.h"
 #include "roc_se.h"
 
-#define CNXK_CPT_MIN_HEADROOM_REQ	 32
-#define CNXK_CPT_MIN_TAILROOM_REQ	 102
+/* Space for ctrl_word(8B), IV(48B), passthrough alignment(8B) */
+#define CNXK_CPT_MIN_HEADROOM_REQ 64
+#define CNXK_CPT_MIN_TAILROOM_REQ 102
 
 /* Default command timeout in seconds */
 #define DEFAULT_COMMAND_TIMEOUT 4
@@ -44,6 +45,7 @@ struct cpt_qp_meta_info {
 struct cpt_inflight_req {
 	union cpt_res_s res;
 	union {
+		void *opaque;
 		struct rte_crypto_op *cop;
 		struct rte_event_vector *vec;
 	};

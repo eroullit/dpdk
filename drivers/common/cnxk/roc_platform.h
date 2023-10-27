@@ -20,6 +20,7 @@
 #include <rte_malloc.h>
 #include <rte_memzone.h>
 #include <rte_pci.h>
+#include <rte_seqcount.h>
 #include <rte_spinlock.h>
 #include <rte_string_fns.h>
 #include <rte_tailq.h>
@@ -129,12 +130,27 @@
 #define plt_spinlock_unlock  rte_spinlock_unlock
 #define plt_spinlock_trylock rte_spinlock_trylock
 
+#define plt_seqcount_t			rte_seqcount_t
+#define plt_seqcount_init		rte_seqcount_init
+#define plt_seqcount_read_begin		rte_seqcount_read_begin
+#define plt_seqcount_read_retry		rte_seqcount_read_retry
+#define plt_seqcount_write_begin	rte_seqcount_write_begin
+#define plt_seqcount_write_end		rte_seqcount_write_end
+
+#define plt_thread_t		     rte_thread_t
 #define plt_intr_callback_register   rte_intr_callback_register
 #define plt_intr_callback_unregister rte_intr_callback_unregister
 #define plt_intr_disable	     rte_intr_disable
 #define plt_thread_is_intr	     rte_thread_is_intr
 #define plt_intr_callback_fn	     rte_intr_callback_fn
-#define plt_ctrl_thread_create	     rte_ctrl_thread_create
+#define plt_thread_create_control    rte_thread_create_internal_control
+#define plt_thread_join	             rte_thread_join
+
+static inline bool
+plt_thread_is_valid(plt_thread_t thr)
+{
+	return thr.opaque_id ? true : false;
+}
 
 #define plt_intr_efd_counter_size_get	rte_intr_efd_counter_size_get
 #define plt_intr_efd_counter_size_set	rte_intr_efd_counter_size_set
@@ -194,6 +210,11 @@
 #define plt_bit_relaxed_set64   rte_bit_relaxed_set64
 #define plt_bit_relaxed_clear64 rte_bit_relaxed_clear64
 
+#define plt_popcount32		rte_popcount32
+#define plt_popcount64		rte_popcount64
+#define plt_clz32		rte_clz32
+#define plt_ctz64		rte_ctz64
+
 #define plt_mmap       mmap
 #define PLT_PROT_READ  PROT_READ
 #define PLT_PROT_WRITE PROT_WRITE
@@ -242,6 +263,7 @@ extern int cnxk_logtype_sso;
 extern int cnxk_logtype_tim;
 extern int cnxk_logtype_tm;
 extern int cnxk_logtype_ree;
+extern int cnxk_logtype_dpi;
 
 #define plt_err(fmt, args...)                                                  \
 	RTE_LOG(ERR, PMD, "%s():%u " fmt "\n", __func__, __LINE__, ##args)
@@ -270,6 +292,7 @@ extern int cnxk_logtype_ree;
 #define plt_tim_dbg(fmt, ...)	plt_dbg(tim, fmt, ##__VA_ARGS__)
 #define plt_tm_dbg(fmt, ...)	plt_dbg(tm, fmt, ##__VA_ARGS__)
 #define plt_ree_dbg(fmt, ...)	plt_dbg(ree, fmt, ##__VA_ARGS__)
+#define plt_dpi_dbg(fmt, ...)	plt_dbg(dpi, fmt, ##__VA_ARGS__)
 
 /* Datapath logs */
 #define plt_dp_err(fmt, args...)                                               \
@@ -304,6 +327,11 @@ extern int cnxk_logtype_ree;
 
 __rte_internal
 int roc_plt_init(void);
+
+__rte_internal
+uint16_t roc_plt_control_lmt_id_get(void);
+__rte_internal
+uint16_t roc_plt_lmt_validate(void);
 
 /* Init callbacks */
 typedef int (*roc_plt_init_cb_t)(void);

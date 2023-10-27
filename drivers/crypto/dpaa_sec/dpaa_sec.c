@@ -666,7 +666,7 @@ dpaa_sec_dump(struct dpaa_sec_op_ctx *ctx, struct dpaa_sec_qp *qp)
 
 	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION)
 		sess = CRYPTODEV_GET_SYM_SESS_PRIV(op->sym->session);
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 	else if (op->sess_type == RTE_CRYPTO_OP_SECURITY_SESSION)
 		sess = SECURITY_GET_SESS_PRIV(op->sym->session);
 #endif
@@ -677,7 +677,7 @@ dpaa_sec_dump(struct dpaa_sec_op_ctx *ctx, struct dpaa_sec_qp *qp)
 
 	cdb = &sess->cdb;
 	rte_memcpy(&c_cdb, cdb, sizeof(struct sec_cdb));
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 	printf("\nsession protocol type = %d\n", sess->proto_alg);
 #endif
 	printf("\n****************************************\n"
@@ -702,7 +702,7 @@ dpaa_sec_dump(struct dpaa_sec_op_ctx *ctx, struct dpaa_sec_qp *qp)
 		sess->iv.length, sess->iv.offset,
 		sess->digest_length, sess->auth_only_len,
 		sess->auth_cipher_text);
-#ifdef RTE_LIBRTE_SECURITY
+#ifdef RTE_LIB_SECURITY
 	printf("PDCP session params:\n"
 		"\tDomain:\t\t%d\n\tBearer:\t\t%d\n\tpkt_dir:\t%d\n\thfn_ovd:"
 		"\t%d\n\tsn_size:\t%d\n\tsdap_enabled:\t%d\n\thfn_ovd_offset:"
@@ -2817,6 +2817,15 @@ dpaa_sec_ipsec_proto_init(struct rte_crypto_cipher_xform *cipher_xform,
 			"+++Using sha256-hmac truncated len is non-standard,"
 			"it will not work with lookaside proto");
 		break;
+	case RTE_CRYPTO_AUTH_SHA224_HMAC:
+		session->auth_key.algmode = OP_ALG_AAI_HMAC;
+		if (session->digest_length == 6)
+			session->auth_key.alg = OP_PCL_IPSEC_HMAC_SHA2_224_96;
+		else if (session->digest_length == 14)
+			session->auth_key.alg = OP_PCL_IPSEC_HMAC_SHA2_224_224;
+		else
+			session->auth_key.alg = OP_PCL_IPSEC_HMAC_SHA2_224_112;
+		break;
 	case RTE_CRYPTO_AUTH_SHA384_HMAC:
 		session->auth_key.alg = OP_PCL_IPSEC_HMAC_SHA2_384_192;
 		session->auth_key.algmode = OP_ALG_AAI_HMAC;
@@ -2836,7 +2845,6 @@ dpaa_sec_ipsec_proto_init(struct rte_crypto_cipher_xform *cipher_xform,
 		session->auth_key.alg = OP_PCL_IPSEC_AES_XCBC_MAC_96;
 		session->auth_key.algmode = OP_ALG_AAI_XCBC_MAC;
 		break;
-	case RTE_CRYPTO_AUTH_SHA224_HMAC:
 	case RTE_CRYPTO_AUTH_SNOW3G_UIA2:
 	case RTE_CRYPTO_AUTH_SHA1:
 	case RTE_CRYPTO_AUTH_SHA256:
@@ -3188,6 +3196,11 @@ dpaa_sec_set_pdcp_session(struct rte_cryptodev *dev,
 		       auth_xform->key.length);
 		session->auth_alg = auth_xform->algo;
 	} else {
+		if (pdcp_xform->domain == RTE_SECURITY_PDCP_MODE_CONTROL) {
+			DPAA_SEC_ERR("Crypto: Integrity must for c-plane");
+			ret = -EINVAL;
+			goto out;
+		}
 		session->auth_key.data = NULL;
 		session->auth_key.length = 0;
 		session->auth_alg = 0;

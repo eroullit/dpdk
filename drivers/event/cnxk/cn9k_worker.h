@@ -157,15 +157,6 @@ cn9k_sso_hws_dual_forward_event(struct cn9k_sso_hws_dual *dws, uint64_t base,
 }
 
 static __rte_always_inline void
-cn9k_sso_tx_tag_flush(uint64_t base)
-{
-	if (unlikely(CNXK_TT_FROM_TAG(plt_read64(base + SSOW_LF_GWS_TAG)) ==
-		     SSO_TT_EMPTY))
-		return;
-	plt_write64(0, base + SSOW_LF_GWS_OP_SWTAG_FLUSH);
-}
-
-static __rte_always_inline void
 cn9k_wqe_to_mbuf(uint64_t wqe, const uint64_t mbuf, uint8_t port_id,
 		 const uint32_t tag, const uint32_t flags,
 		 const void *const lookup_mem)
@@ -375,6 +366,7 @@ uint16_t __rte_hot cn9k_sso_hws_enq_new_burst(void *port,
 uint16_t __rte_hot cn9k_sso_hws_enq_fwd_burst(void *port,
 					      const struct rte_event ev[],
 					      uint16_t nb_events);
+int __rte_hot cn9k_sso_hws_profile_switch(void *port, uint8_t profile);
 
 uint16_t __rte_hot cn9k_sso_hws_dual_enq(void *port,
 					 const struct rte_event *ev);
@@ -391,6 +383,7 @@ uint16_t __rte_hot cn9k_sso_hws_ca_enq(void *port, struct rte_event ev[],
 				       uint16_t nb_events);
 uint16_t __rte_hot cn9k_sso_hws_dual_ca_enq(void *port, struct rte_event ev[],
 					    uint16_t nb_events);
+int __rte_hot cn9k_sso_hws_dual_profile_switch(void *port, uint8_t profile);
 
 #define R(name, flags)                                                         \
 	uint16_t __rte_hot cn9k_sso_hws_deq_##name(                            \
@@ -727,7 +720,6 @@ cn9k_sso_hws_event_tx(uint64_t base, struct rte_event *ev, uint64_t *cmd,
 		      uint64_t *txq_data, const uint32_t flags)
 {
 	struct rte_mbuf *m = ev->mbuf;
-	uint16_t ref_cnt = m->refcnt;
 	struct cn9k_eth_txq *txq;
 
 	/* Perform header writes before barrier for TSO */
@@ -800,13 +792,6 @@ cn9k_sso_hws_event_tx(uint64_t base, struct rte_event *ev, uint64_t *cmd,
 	}
 
 done:
-	if (flags & NIX_TX_OFFLOAD_MBUF_NOFF_F) {
-		if (ref_cnt > 1)
-			return 1;
-	}
-
-	cn9k_sso_tx_tag_flush(base);
-
 	return 1;
 }
 

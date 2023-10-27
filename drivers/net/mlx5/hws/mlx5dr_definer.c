@@ -177,7 +177,8 @@ struct mlx5dr_definer_conv_data {
 	X(SET_BE32,     ipsec_spi,              v->hdr.spi,             rte_flow_item_esp) \
 	X(SET_BE32,     ipsec_sequence_number,  v->hdr.seq,             rte_flow_item_esp) \
 	X(SET,		ib_l4_udp_port,		UDP_ROCEV2_PORT,	rte_flow_item_ib_bth) \
-	X(SET,		ib_l4_opcode,		v->hdr.opcode,		rte_flow_item_ib_bth)
+	X(SET,		ib_l4_opcode,		v->hdr.opcode,		rte_flow_item_ib_bth) \
+	X(SET,		ib_l4_bth_a,		v->hdr.a,		rte_flow_item_ib_bth) \
 
 /* Item set function format */
 #define X(set_type, func_name, value, item_type) \
@@ -1320,35 +1321,24 @@ mlx5dr_definer_conv_item_mpls(struct mlx5dr_definer_conv_data *cd,
 		return rte_errno;
 	}
 
-	if (cd->relaxed) {
-		DR_LOG(ERR, "Relaxed mode is not supported");
-		rte_errno = ENOTSUP;
-		return rte_errno;
-	}
+	if (!cd->relaxed) {
+		/* In order to match on MPLS we must match on ip_protocol and l4_dport. */
+		fc = &cd->fc[DR_CALC_FNAME(IP_PROTOCOL, false)];
+		if (!fc->tag_set) {
+			fc->item_idx = item_idx;
+			fc->tag_mask_set = &mlx5dr_definer_ones_set;
+			fc->tag_set = &mlx5dr_definer_udp_protocol_set;
+			DR_CALC_SET(fc, eth_l2, l4_type_bwc, false);
+		}
 
-	/* Currently support only MPLSoUDP */
-	if (cd->last_item != RTE_FLOW_ITEM_TYPE_UDP &&
-	    cd->last_item != RTE_FLOW_ITEM_TYPE_MPLS) {
-		DR_LOG(ERR, "MPLS supported only after UDP");
-		rte_errno = ENOTSUP;
-		return rte_errno;
-	}
-
-	/* In order to match on MPLS we must match on ip_protocol and l4_dport. */
-	fc = &cd->fc[DR_CALC_FNAME(IP_PROTOCOL, false)];
-	if (!fc->tag_set) {
-		fc->item_idx = item_idx;
-		fc->tag_mask_set = &mlx5dr_definer_ones_set;
-		fc->tag_set = &mlx5dr_definer_udp_protocol_set;
-		DR_CALC_SET(fc, eth_l2, l4_type_bwc, false);
-	}
-
-	fc = &cd->fc[DR_CALC_FNAME(L4_DPORT, false)];
-	if (!fc->tag_set) {
-		fc->item_idx = item_idx;
-		fc->tag_mask_set = &mlx5dr_definer_ones_set;
-		fc->tag_set = &mlx5dr_definer_mpls_udp_port_set;
-		DR_CALC_SET(fc, eth_l4, destination_port, false);
+		/* Currently support only MPLSoUDP */
+		fc = &cd->fc[DR_CALC_FNAME(L4_DPORT, false)];
+		if (!fc->tag_set) {
+			fc->item_idx = item_idx;
+			fc->tag_mask_set = &mlx5dr_definer_ones_set;
+			fc->tag_set = &mlx5dr_definer_mpls_udp_port_set;
+			DR_CALC_SET(fc, eth_l4, destination_port, false);
+		}
 	}
 
 	if (m && (!is_mem_zero(m->label_tc_s, 3) || m->ttl)) {
@@ -1410,6 +1400,22 @@ mlx5dr_definer_get_register_fc(struct mlx5dr_definer_conv_data *cd, int reg)
 	case REG_C_7:
 		fc = &cd->fc[MLX5DR_DEFINER_FNAME_REG_7];
 		DR_CALC_SET_HDR(fc, registers, register_c_7);
+		break;
+	case REG_C_8:
+		fc = &cd->fc[MLX5DR_DEFINER_FNAME_REG_8];
+		DR_CALC_SET_HDR(fc, registers, register_c_8);
+		break;
+	case REG_C_9:
+		fc = &cd->fc[MLX5DR_DEFINER_FNAME_REG_9];
+		DR_CALC_SET_HDR(fc, registers, register_c_9);
+		break;
+	case REG_C_10:
+		fc = &cd->fc[MLX5DR_DEFINER_FNAME_REG_10];
+		DR_CALC_SET_HDR(fc, registers, register_c_10);
+		break;
+	case REG_C_11:
+		fc = &cd->fc[MLX5DR_DEFINER_FNAME_REG_11];
+		DR_CALC_SET_HDR(fc, registers, register_c_11);
 		break;
 	case REG_A:
 		fc = &cd->fc[MLX5DR_DEFINER_FNAME_REG_A];
@@ -2148,7 +2154,7 @@ mlx5dr_definer_conv_item_ib_l4(struct mlx5dr_definer_conv_data *cd,
 
 	if (m->hdr.se || m->hdr.m || m->hdr.padcnt || m->hdr.tver ||
 		m->hdr.pkey || m->hdr.f || m->hdr.b || m->hdr.rsvd0 ||
-		m->hdr.a || m->hdr.rsvd1 || !is_mem_zero(m->hdr.psn, 3)) {
+		m->hdr.rsvd1 || !is_mem_zero(m->hdr.psn, 3)) {
 		rte_errno = ENOTSUP;
 		return rte_errno;
 	}
@@ -2165,6 +2171,13 @@ mlx5dr_definer_conv_item_ib_l4(struct mlx5dr_definer_conv_data *cd,
 		fc->item_idx = item_idx;
 		fc->tag_set = &mlx5dr_definer_ib_l4_qp_set;
 		DR_CALC_SET_HDR(fc, ib_l4, qp);
+	}
+
+	if (m->hdr.a) {
+		fc = &cd->fc[MLX5DR_DEFINER_FNAME_IB_L4_A];
+		fc->item_idx = item_idx;
+		fc->tag_set = &mlx5dr_definer_ib_l4_bth_a_set;
+		DR_CALC_SET_HDR(fc, ib_l4, ackreq);
 	}
 
 	return 0;
@@ -2351,11 +2364,15 @@ mlx5dr_definer_find_byte_in_tag(struct mlx5dr_definer *definer,
 				uint32_t *tag_byte_off)
 {
 	uint8_t byte_offset;
-	int i;
+	int i, dw_to_scan;
+
+	/* Avoid accessing unused DW selectors */
+	dw_to_scan = mlx5dr_definer_is_jumbo(definer) ?
+		DW_SELECTORS : DW_SELECTORS_MATCH;
 
 	/* Add offset since each DW covers multiple BYTEs */
 	byte_offset = hl_byte_off % DW_SIZE;
-	for (i = 0; i < DW_SELECTORS; i++) {
+	for (i = 0; i < dw_to_scan; i++) {
 		if (definer->dw_selector[i] == hl_byte_off / DW_SIZE) {
 			*tag_byte_off = byte_offset + DW_SIZE * (DW_SELECTORS - i - 1);
 			return 0;

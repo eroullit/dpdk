@@ -227,6 +227,13 @@ struct rte_flow_ops {
 		(struct rte_eth_dev *dev,
 		 struct rte_flow_template_table *template_table,
 		 struct rte_flow_error *err);
+	/** See rte_flow_group_set_miss_actions() */
+	int (*group_set_miss_actions)
+		(struct rte_eth_dev *dev,
+		 uint32_t group_id,
+		 const struct rte_flow_group_attr *attr,
+		 const struct rte_flow_action actions[],
+		 struct rte_flow_error *err);
 	/** See rte_flow_async_create() */
 	struct rte_flow *(*async_create)
 		(struct rte_eth_dev *dev,
@@ -358,6 +365,11 @@ struct rte_flow_ops {
 		 const void **update, void **query,
 		 enum rte_flow_query_update_mode mode,
 		 void *user_data, struct rte_flow_error *error);
+	/** @see rte_flow_calc_table_hash() */
+	int (*flow_calc_table_hash)
+		(struct rte_eth_dev *dev, const struct rte_flow_template_table *table,
+		 const struct rte_flow_item pattern[], uint8_t pattern_template_index,
+		 uint32_t *hash, struct rte_flow_error *error);
 };
 
 /**

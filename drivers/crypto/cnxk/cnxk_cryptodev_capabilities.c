@@ -1152,6 +1152,20 @@ static const struct rte_cryptodev_capabilities caps_sm4[] = {
 	},
 };
 
+static const struct rte_cryptodev_capabilities caps_sm2[] = {
+	{	/* SM2 */
+		.op = RTE_CRYPTO_OP_TYPE_ASYMMETRIC,
+		{.asym = {
+			.xform_capa = {
+				.xform_type = RTE_CRYPTO_ASYM_XFORM_SM2,
+				.op_types = ((1 << RTE_CRYPTO_ASYM_OP_SIGN) |
+					     (1 << RTE_CRYPTO_ASYM_OP_VERIFY))
+			}
+		}
+		}
+	}
+};
+
 static const struct rte_cryptodev_capabilities caps_end[] = {
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
@@ -1180,8 +1194,8 @@ static const struct rte_cryptodev_capabilities sec_caps_aes[] = {
 					.increment = 4
 				},
 				.iv_size = {
-					.min = 11,
-					.max = 11,
+					.min = 12,
+					.max = 12,
 					.increment = 0
 				}
 			}, }
@@ -1210,8 +1224,8 @@ static const struct rte_cryptodev_capabilities sec_caps_aes[] = {
 					.increment = 4
 				},
 				.iv_size = {
-					.min = 12,
-					.max = 12,
+					.min = 11,
+					.max = 11,
 					.increment = 0
 				}
 			}, }
@@ -1619,10 +1633,13 @@ static void
 cn10k_crypto_caps_add(struct rte_cryptodev_capabilities cnxk_caps[],
 		     union cpt_eng_caps *hw_caps, int *cur_pos)
 {
-	if (hw_caps->sg_ver2) {
+	if (hw_caps[CPT_ENG_TYPE_SE].sg_ver2) {
 		CPT_CAPS_ADD(cnxk_caps, cur_pos, hw_caps, sm3);
 		CPT_CAPS_ADD(cnxk_caps, cur_pos, hw_caps, sm4);
 	}
+
+	if (hw_caps[CPT_ENG_TYPE_AE].sm2)
+		CPT_CAPS_ADD(cnxk_caps, cur_pos, hw_caps, sm2);
 }
 
 static void

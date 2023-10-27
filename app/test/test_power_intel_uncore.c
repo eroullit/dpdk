@@ -14,7 +14,7 @@ test_power_intel_uncore(void)
 }
 
 #else
-#include <rte_power_intel_uncore.h>
+#include <rte_power_uncore.h>
 #include <power_common.h>
 
 #define MAX_UNCORE_FREQS 32
@@ -246,10 +246,14 @@ test_power_intel_uncore(void)
 {
 	int ret;
 
+	ret = rte_power_set_uncore_env(RTE_UNCORE_PM_ENV_INTEL_UNCORE);
+	if (ret < 0)
+		goto fail_all;
+
 	ret = rte_power_uncore_get_num_pkgs();
 	if (ret == 0) {
 		printf("Uncore frequency management not supported/enabled on this kernel. "
-		"Please enable CONFIG_INTEL_UNCORE_FREQ_CONTROL if on x86 with linux kernel"
+		"Please enable CONFIG_INTEL_UNCORE_FREQ_CONTROL if on Intel x86 with linux kernel"
 		" >= 5.6\n");
 		return TEST_SKIPPED;
 	}
@@ -298,4 +302,4 @@ fail_all:
 }
 #endif
 
-REGISTER_TEST_COMMAND(power_intel_uncore_autotest, test_power_intel_uncore);
+REGISTER_FAST_TEST(power_intel_uncore_autotest, true, true, test_power_intel_uncore);

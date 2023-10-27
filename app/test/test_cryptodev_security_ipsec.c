@@ -213,6 +213,14 @@ test_ipsec_sec_caps_verify(struct rte_security_ipsec_xform *ipsec_xform,
 		}
 	}
 
+	if (ipsec_xform->options.ingress_oop == 1 &&
+	    sec_cap->ipsec.options.ingress_oop == 0) {
+		if (!silent)
+			RTE_LOG(INFO, USER1,
+				"Inline Ingress OOP processing is not supported\n");
+		return -ENOTSUP;
+	}
+
 	return 0;
 }
 
@@ -1241,7 +1249,7 @@ test_ipsec_status_check(const struct ipsec_test_data *td,
 }
 
 int
-test_ipsec_stats_verify(struct rte_security_ctx *ctx,
+test_ipsec_stats_verify(void *ctx,
 			void *sess,
 			const struct ipsec_test_flags *flags,
 			enum rte_security_ipsec_sa_direction dir)

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include <rte_common.h>
 #include <rte_errno.h>
@@ -166,6 +167,7 @@ static const struct rte_flow_desc_data rte_flow_desc_item[] = {
 	MK_FLOW_ITEM(AGGR_AFFINITY, sizeof(struct rte_flow_item_aggr_affinity)),
 	MK_FLOW_ITEM(TX_QUEUE, sizeof(struct rte_flow_item_tx_queue)),
 	MK_FLOW_ITEM(IB_BTH, sizeof(struct rte_flow_item_ib_bth)),
+	MK_FLOW_ITEM(PTYPE, sizeof(struct rte_flow_item_ptype)),
 };
 
 /** Generate flow_action[] entry. */
@@ -1973,6 +1975,28 @@ rte_flow_template_table_destroy(uint16_t port_id,
 				  NULL, rte_strerror(ENOTSUP));
 }
 
+int
+rte_flow_group_set_miss_actions(uint16_t port_id,
+				uint32_t group_id,
+				const struct rte_flow_group_attr *attr,
+				const struct rte_flow_action actions[],
+				struct rte_flow_error *error)
+{
+	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
+	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
+
+	if (unlikely(!ops))
+		return -rte_errno;
+	if (likely(!!ops->group_set_miss_actions)) {
+		return flow_err(port_id,
+				ops->group_set_miss_actions(dev, group_id, attr, actions, error),
+				error);
+	}
+	return rte_flow_error_set(error, ENOTSUP,
+				  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+				  NULL, rte_strerror(ENOTSUP));
+}
+
 struct rte_flow *
 rte_flow_async_create(uint16_t port_id,
 		      uint32_t queue_id,
@@ -2202,6 +2226,8 @@ rte_flow_async_action_handle_query(uint16_t port_id,
 	const struct rte_flow_ops *ops = rte_flow_ops_get(port_id, error);
 	int ret;
 
+	if (unlikely(!ops))
+		return -rte_errno;
 	ret = ops->async_action_handle_query(dev, queue_id, op_attr,
 					  action_handle, data, user_data, error);
 	ret = flow_err(port_id, ret, error);
@@ -2430,4 +2456,25 @@ rte_flow_async_action_list_handle_query_update(uint16_t port_id, uint32_t queue_
 							     mode, user_data,
 							     ret);
 	return ret;
+}
+
+int
+rte_flow_calc_table_hash(uint16_t port_id, const struct rte_flow_template_table *table,
+			 const struct rte_flow_item pattern[], uint8_t pattern_template_index,
+			 uint32_t *hash, struct rte_flow_error *error)
+{
+	int ret;
+	struct rte_eth_dev *dev;
+	const struct rte_flow_ops *ops;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
+	ops = rte_flow_ops_get(port_id, error);
+	if (!ops || !ops->flow_calc_table_hash)
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
+					  "action_list async query_update not supported");
+	dev = &rte_eth_devices[port_id];
+	ret = ops->flow_calc_table_hash(dev, table, pattern, pattern_template_index,
+					hash, error);
+	return flow_err(port_id, ret, error);
 }

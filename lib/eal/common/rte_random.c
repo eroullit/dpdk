@@ -7,6 +7,7 @@
 #endif
 #include <unistd.h>
 
+#include <rte_bitops.h>
 #include <rte_branch_prediction.h>
 #include <rte_cycles.h>
 #include <rte_lcore.h>
@@ -18,6 +19,7 @@ struct rte_rand_state {
 	uint64_t z3;
 	uint64_t z4;
 	uint64_t z5;
+	RTE_CACHE_GUARD;
 } __rte_cache_aligned;
 
 /* One instance each for every lcore id-equipped thread, and one
@@ -83,7 +85,7 @@ rte_srand(uint64_t seed)
 	unsigned int lcore_id;
 
 	/* add lcore_id to seed to avoid having the same sequence */
-	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++)
+	for (lcore_id = 0; lcore_id < RTE_DIM(rand_states); lcore_id++)
 		__rte_srand_lfsr258(seed + lcore_id, &rand_states[lcore_id]);
 }
 
@@ -153,7 +155,7 @@ rte_rand_max(uint64_t upper_bound)
 
 	state = __rte_rand_get_state();
 
-	ones = __builtin_popcountll(upper_bound);
+	ones = rte_popcount64(upper_bound);
 
 	/* Handle power-of-2 upper_bound as a special case, since it
 	 * has no bias issues.
@@ -168,7 +170,7 @@ rte_rand_max(uint64_t upper_bound)
 	 * the value and generate a new one.
 	 */
 
-	leading_zeros = __builtin_clzll(upper_bound);
+	leading_zeros = rte_clz64(upper_bound);
 	mask >>= leading_zeros;
 
 	do {

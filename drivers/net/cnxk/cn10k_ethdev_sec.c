@@ -9,6 +9,7 @@
 #include <rte_pmd_cnxk.h>
 
 #include <cn10k_ethdev.h>
+#include <cn10k_rx.h>
 #include <cnxk_ethdev_mcs.h>
 #include <cnxk_security.h>
 #include <roc_priv.h>
@@ -303,7 +304,7 @@ static struct rte_cryptodev_capabilities cn10k_eth_sec_crypto_caps[] = {
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
 
-static const struct rte_security_capability cn10k_eth_sec_capabilities[] = {
+static const struct rte_security_capability cn10k_eth_sec_ipsec_capabilities[] = {
 	{	/* IPsec Inline Protocol ESP Tunnel Ingress */
 		.action = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
 		.protocol = RTE_SECURITY_PROTOCOL_IPSEC,
@@ -324,6 +325,7 @@ static const struct rte_security_capability cn10k_eth_sec_capabilities[] = {
 				.l4_csum_enable = 1,
 				.stats = 1,
 				.esn = 1,
+				.ingress_oop = 1,
 			},
 		},
 		.crypto_capabilities = cn10k_eth_sec_crypto_caps,
@@ -373,6 +375,7 @@ static const struct rte_security_capability cn10k_eth_sec_capabilities[] = {
 				.l4_csum_enable = 1,
 				.stats = 1,
 				.esn = 1,
+				.ingress_oop = 1,
 			},
 		},
 		.crypto_capabilities = cn10k_eth_sec_crypto_caps,
@@ -396,15 +399,105 @@ static const struct rte_security_capability cn10k_eth_sec_capabilities[] = {
 				.l4_csum_enable = 1,
 				.stats = 1,
 				.esn = 1,
+				.ingress_oop = 1,
 			},
 		},
 		.crypto_capabilities = cn10k_eth_sec_crypto_caps,
 		.ol_flags = RTE_SECURITY_TX_OLOAD_NEED_MDATA
 	},
-	{
-		.action = RTE_SECURITY_ACTION_TYPE_NONE
-	}
 };
+
+static const struct rte_security_capability cn10k_eth_sec_macsec_capabilities[] = {
+	{	/* MACsec Inline Protocol, AES-GCM-128 algo */
+		.action = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_MACSEC,
+		.macsec = {
+			.mtu = ROC_MCS_MAX_MTU,
+			.alg = RTE_SECURITY_MACSEC_ALG_GCM_128,
+			.max_nb_sc = 128,
+			.max_nb_sa = 256,
+			.max_nb_sess = 256,
+			.replay_win_sz = ROC_MCS_MAX_AR_WINSZ,
+			.relative_sectag_insert = 1,
+			.fixed_sectag_insert = 1,
+			.icv_include_da_sa = 1,
+			.ctrl_port_enable = 1,
+			.preserve_sectag = 1,
+			.preserve_icv = 1,
+			.validate_frames = 1,
+			.re_key = 1,
+			.anti_replay = 1,
+		},
+	},
+	{	/* MACsec Inline Protocol, AES-GCM-256 algo */
+		.action = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_MACSEC,
+		.macsec = {
+			.mtu = ROC_MCS_MAX_MTU,
+			.alg = RTE_SECURITY_MACSEC_ALG_GCM_256,
+			.max_nb_sc = 128,
+			.max_nb_sa = 256,
+			.max_nb_sess = 256,
+			.replay_win_sz = ROC_MCS_MAX_AR_WINSZ,
+			.relative_sectag_insert = 1,
+			.fixed_sectag_insert = 1,
+			.icv_include_da_sa = 1,
+			.ctrl_port_enable = 1,
+			.preserve_sectag = 1,
+			.preserve_icv = 1,
+			.validate_frames = 1,
+			.re_key = 1,
+			.anti_replay = 1,
+		},
+	},
+	{	/* MACsec Inline Protocol, AES-GCM-XPN-128 algo */
+		.action = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_MACSEC,
+		.macsec = {
+			.mtu = ROC_MCS_MAX_MTU,
+			.alg = RTE_SECURITY_MACSEC_ALG_GCM_XPN_128,
+			.max_nb_sc = 128,
+			.max_nb_sa = 256,
+			.max_nb_sess = 256,
+			.replay_win_sz = ROC_MCS_MAX_AR_WINSZ,
+			.relative_sectag_insert = 1,
+			.fixed_sectag_insert = 1,
+			.icv_include_da_sa = 1,
+			.ctrl_port_enable = 1,
+			.preserve_sectag = 1,
+			.preserve_icv = 1,
+			.validate_frames = 1,
+			.re_key = 1,
+			.anti_replay = 1,
+		},
+	},
+	{	/* MACsec Inline Protocol, AES-GCM-XPN-256 algo */
+		.action = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_MACSEC,
+		.macsec = {
+			.mtu = ROC_MCS_MAX_MTU,
+			.alg = RTE_SECURITY_MACSEC_ALG_GCM_XPN_256,
+			.max_nb_sc = 128,
+			.max_nb_sa = 256,
+			.max_nb_sess = 256,
+			.replay_win_sz = ROC_MCS_MAX_AR_WINSZ,
+			.relative_sectag_insert = 1,
+			.fixed_sectag_insert = 1,
+			.icv_include_da_sa = 1,
+			.ctrl_port_enable = 1,
+			.preserve_sectag = 1,
+			.preserve_icv = 1,
+			.validate_frames = 1,
+			.re_key = 1,
+			.anti_replay = 1,
+		},
+	},
+};
+
+#define SEC_CAPS_LEN (RTE_DIM(cn10k_eth_sec_ipsec_capabilities) + \
+		RTE_DIM(cn10k_eth_sec_macsec_capabilities) + 1)
+
+static struct rte_security_capability cn10k_eth_sec_capabilities[SEC_CAPS_LEN];
 
 static inline void
 cnxk_pktmbuf_free_no_cache(struct rte_mbuf *mbuf)
@@ -522,7 +615,7 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 			plt_warn("Outbound error, bad ip pkt, mbuf %p,"
 				 " sa_index %u (total warnings %" PRIu64 ")",
 				 mbuf, sess_priv.sa_idx, warn_cnt);
-		desc.subtype = RTE_ETH_EVENT_IPSEC_UNKNOWN;
+		desc.subtype = -res->uc_compcode;
 		break;
 	default:
 		warn_cnt++;
@@ -532,7 +625,7 @@ cn10k_eth_sec_sso_work_cb(uint64_t *gw, void *args, uint32_t soft_exp_event)
 				 " (total warnings %" PRIu64 ")",
 				 mbuf, sess_priv.sa_idx, res->compcode,
 				 res->uc_compcode, warn_cnt);
-		desc.subtype = RTE_ETH_EVENT_IPSEC_UNKNOWN;
+		desc.subtype = -res->uc_compcode;
 		break;
 	}
 
@@ -657,6 +750,20 @@ cn10k_eth_sec_session_create(void *device,
 			return -rte_errno;
 	}
 
+	if (conf->ipsec.options.ingress_oop &&
+	    rte_security_oop_dynfield_offset < 0) {
+		/* Register for security OOP dynfield if required */
+		if (rte_security_oop_dynfield_register() < 0)
+			return -rte_errno;
+	}
+
+	/* We cannot support inbound reassembly and OOP together */
+	if (conf->ipsec.options.ip_reassembly_en &&
+	    conf->ipsec.options.ingress_oop) {
+		plt_err("Cannot support Inbound reassembly and OOP together");
+		return -ENOTSUP;
+	}
+
 	ipsec = &conf->ipsec;
 	crypto = conf->crypto_xform;
 	inbound = !!(ipsec->direction == RTE_SECURITY_IPSEC_SA_DIR_INGRESS);
@@ -743,6 +850,12 @@ cn10k_eth_sec_session_create(void *device,
 			inb_sa_dptr->w0.s.count_mib_bytes = 1;
 			inb_sa_dptr->w0.s.count_mib_pkts = 1;
 		}
+
+		/* Enable out-of-place processing */
+		if (ipsec->options.ingress_oop)
+			inb_sa_dptr->w0.s.pkt_format =
+				ROC_IE_OT_SA_PKT_FMT_FULL;
+
 		/* Prepare session priv */
 		sess_priv.inb_sa = 1;
 		sess_priv.sa_idx = ipsec->spi & spi_mask;
@@ -754,6 +867,7 @@ cn10k_eth_sec_session_create(void *device,
 		eth_sec->spi = ipsec->spi;
 		eth_sec->inl_dev = !!dev->inb.inl_dev;
 		eth_sec->inb = true;
+		eth_sec->inb_oop = !!ipsec->options.ingress_oop;
 
 		TAILQ_INSERT_TAIL(&dev->inb.list, eth_sec, entry);
 		dev->inb.nb_sess++;
@@ -769,6 +883,15 @@ cn10k_eth_sec_session_create(void *device,
 			inb_priv->reass_dynflag_bit = dev->reass_dynflag_bit;
 		}
 
+		if (ipsec->options.ingress_oop)
+			dev->inb.nb_oop++;
+
+		/* Update function pointer to handle OOP sessions */
+		if (dev->inb.nb_oop &&
+		    !(dev->rx_offload_flags & NIX_RX_REAS_F)) {
+			dev->rx_offload_flags |= NIX_RX_REAS_F;
+			cn10k_eth_set_rx_function(eth_dev);
+		}
 	} else {
 		struct roc_ot_ipsec_outb_sa *outb_sa, *outb_sa_dptr;
 		struct cn10k_outb_priv_data *outb_priv;
@@ -918,6 +1041,15 @@ cn10k_eth_sec_session_destroy(void *device, struct rte_security_session *sess)
 				      sizeof(struct roc_ot_ipsec_inb_sa));
 		TAILQ_REMOVE(&dev->inb.list, eth_sec, entry);
 		dev->inb.nb_sess--;
+		if (eth_sec->inb_oop)
+			dev->inb.nb_oop--;
+
+		/* Clear offload flags if was used by OOP */
+		if (!dev->inb.nb_oop && !dev->inb.reass_en &&
+		    dev->rx_offload_flags & NIX_RX_REAS_F) {
+			dev->rx_offload_flags &= ~NIX_RX_REAS_F;
+			cn10k_eth_set_rx_function(eth_dev);
+		}
 	} else {
 		/* Disable SA */
 		sa_dptr = dev->outb.sa_dptr;
@@ -1093,14 +1225,37 @@ cn10k_eth_sec_session_stats_get(void *device, struct rte_security_session *sess,
 	return 0;
 }
 
+static void
+eth_sec_caps_add(struct rte_security_capability eth_sec_caps[], uint32_t *idx,
+		 const struct rte_security_capability *caps, uint32_t nb_caps)
+{
+	PLT_VERIFY(*idx + nb_caps < SEC_CAPS_LEN);
+
+	rte_memcpy(&eth_sec_caps[*idx], caps, nb_caps * sizeof(caps[0]));
+	*idx += nb_caps;
+}
+
 void
 cn10k_eth_sec_ops_override(void)
 {
 	static int init_once;
+	uint32_t idx = 0;
 
 	if (init_once)
 		return;
 	init_once = 1;
+
+	if (roc_feature_nix_has_inl_ipsec())
+		eth_sec_caps_add(cn10k_eth_sec_capabilities, &idx,
+				 cn10k_eth_sec_ipsec_capabilities,
+				 RTE_DIM(cn10k_eth_sec_ipsec_capabilities));
+
+	if (roc_feature_nix_has_macsec())
+		eth_sec_caps_add(cn10k_eth_sec_capabilities, &idx,
+				 cn10k_eth_sec_macsec_capabilities,
+				 RTE_DIM(cn10k_eth_sec_macsec_capabilities));
+
+	cn10k_eth_sec_capabilities[idx].action = RTE_SECURITY_ACTION_TYPE_NONE;
 
 	/* Update platform specific ops */
 	cnxk_eth_sec_ops.macsec_sa_create = cnxk_eth_macsec_sa_create;

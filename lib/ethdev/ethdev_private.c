@@ -11,11 +11,8 @@
 
 static const char *MZ_RTE_ETH_DEV_DATA = "rte_eth_dev_data";
 
-/* Shared memory between primary and secondary processes. */
+static const struct rte_memzone *eth_dev_shared_mz;
 struct eth_dev_shared *eth_dev_shared_data;
-
-/* spinlock for shared data allocation */
-static rte_spinlock_t eth_dev_shared_data_lock = RTE_SPINLOCK_INITIALIZER;
 
 /* spinlock for eth device callbacks */
 rte_spinlock_t eth_dev_cb_lock = RTE_SPINLOCK_INITIALIZER;
@@ -277,6 +274,8 @@ eth_dev_fp_ops_setup(struct rte_eth_fp_ops *fpo,
 	fpo->rx_queue_count = dev->rx_queue_count;
 	fpo->rx_descriptor_status = dev->rx_descriptor_status;
 	fpo->tx_descriptor_status = dev->tx_descriptor_status;
+	fpo->recycle_tx_mbufs_reuse = dev->recycle_tx_mbufs_reuse;
+	fpo->recycle_rx_descriptors_refill = dev->recycle_rx_descriptors_refill;
 
 	fpo->rxq.data = dev->data->rx_queues;
 	fpo->rxq.clbk = (void **)(uintptr_t)dev->post_rx_burst_cbs;
@@ -322,15 +321,13 @@ rte_eth_call_tx_callbacks(uint16_t port_id, uint16_t queue_id,
 	return nb_pkts;
 }
 
-void
+void *
 eth_dev_shared_data_prepare(void)
 {
 	const unsigned int flags = 0;
 	const struct rte_memzone *mz;
 
-	rte_spinlock_lock(&eth_dev_shared_data_lock);
-
-	if (eth_dev_shared_data == NULL) {
+	if (eth_dev_shared_mz == NULL) {
 		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 			/* Allocate port data and ownership shared memory. */
 			mz = rte_memzone_reserve(MZ_RTE_ETH_DEV_DATA,
@@ -338,20 +335,39 @@ eth_dev_shared_data_prepare(void)
 					rte_socket_id(), flags);
 		} else
 			mz = rte_memzone_lookup(MZ_RTE_ETH_DEV_DATA);
-		if (mz == NULL)
-			rte_panic("Cannot allocate ethdev shared data\n");
+		if (mz == NULL) {
+			RTE_ETHDEV_LOG(ERR, "Cannot allocate ethdev shared data\n");
+			goto out;
+		}
 
+		eth_dev_shared_mz = mz;
 		eth_dev_shared_data = mz->addr;
 		if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
+			eth_dev_shared_data->allocated_owners = 0;
 			eth_dev_shared_data->next_owner_id =
 					RTE_ETH_DEV_NO_OWNER + 1;
-			rte_spinlock_init(&eth_dev_shared_data->ownership_lock);
+			eth_dev_shared_data->allocated_ports = 0;
 			memset(eth_dev_shared_data->data, 0,
 			       sizeof(eth_dev_shared_data->data));
 		}
 	}
+out:
+	return eth_dev_shared_data;
+}
 
-	rte_spinlock_unlock(&eth_dev_shared_data_lock);
+void
+eth_dev_shared_data_release(void)
+{
+	RTE_ASSERT(rte_eal_process_type() == RTE_PROC_PRIMARY);
+
+	if (eth_dev_shared_data->allocated_ports != 0)
+		return;
+	if (eth_dev_shared_data->allocated_owners != 0)
+		return;
+
+	rte_memzone_free(eth_dev_shared_mz);
+	eth_dev_shared_mz = NULL;
+	eth_dev_shared_data = NULL;
 }
 
 void

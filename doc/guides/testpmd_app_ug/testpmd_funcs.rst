@@ -318,7 +318,7 @@ set fwd
 Set the packet forwarding mode::
 
    testpmd> set fwd (io|mac|macswap|flowgen| \
-                     rxonly|txonly|csum|icmpecho|noisy|5tswap|shared-rxq) (""|retry)
+                     rxonly|txonly|csum|icmpecho|noisy|5tswap|shared-rxq|recycle_mbufs) (""|retry)
 
 ``retry`` can be specified for forwarding engines except ``rx_only``.
 
@@ -363,6 +363,9 @@ The available information categories are:
 
 * ``shared-rxq``: Receive only for shared Rx queue.
   Resolve packet source port from mbuf and update stream statistics accordingly.
+
+* ``recycle_mbufs``:  Recycle Tx queue used mbufs for Rx queue mbuf ring.
+  This mode uses fast path mbuf recycle feature and forwards packets in I/O mode.
 
 Example::
 
@@ -1320,6 +1323,13 @@ filtered by port::
 
    testpmd> mcast_addr remove (port_id) (mcast_addr)
 
+mcast_addr flush
+~~~~~~~~~~~~~~~~
+
+Flush all multicast MAC addresses on port_id::
+
+   testpmd> mcast_addr flush (port_id)
+
 mac_addr add (for VF)
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -1907,7 +1917,7 @@ For example, to attach a port created by pcap PMD.
 In this case, identifier is ``net_pcap0``.
 This identifier format is the same as ``--vdev`` format of DPDK applications.
 
-For example, to re-attach a bonded port which has been previously detached,
+For example, to re-attach a bonding port which has been previously detached,
 the mode and slave parameters must be given.
 
 .. code-block:: console
@@ -1915,7 +1925,7 @@ the mode and slave parameters must be given.
    testpmd> port attach net_bond_0,mode=0,slave=1
    Attaching a new port...
    EAL: Initializing pmd_bond for net_bond_0
-   EAL: Create bonded device net_bond_0 on port 0 in mode 0 on socket 0.
+   EAL: Create bonding device net_bond_0 on port 0 in mode 0 on socket 0.
    Port 0 is attached. Now total ports is 1
    Done
 
@@ -3273,6 +3283,28 @@ The usual error message is shown when operations results cannot be pulled::
 
    Caught error type [...] ([...]): [...]
 
+Calculating hash
+~~~~~~~~~~~~~~~~
+
+``flow hash`` calculates the hash for a given pattern.
+It is bound to ``rte_flow_calc_table_hash()``::
+
+   flow hash {port_id} template_table {table_id}
+       pattern_template {pattern_template_index}
+       actions_template {actions_template_index}
+       pattern {item} [/ {item} [...]] / end
+
+If successful, it will show the calculated hash result as seen below::
+
+   Hash results 0x[...]
+
+Otherwise, it will show an error message of the form::
+
+   Caught error type [...] ([...]): [...]
+
+This command uses the same pattern items as ``flow create``,
+their format is described in `Creating flow rules`_.
+
 Creating a tunnel stub for offload
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -3805,6 +3837,10 @@ This section lists supported pattern items and their attributes, if any.
 
 - ``send_to_kernel``: send packets to kernel.
 
+- ``ptype``: match the packet type (L2/L3/L4 and tunnel information).
+
+        - ``packet_type {unsigned}``: packet type.
+
 
 Actions list
 ^^^^^^^^^^^^
@@ -4093,6 +4129,27 @@ This section lists supported actions and their attributes, if any.
   - ``mtr_color_mode {unsigned}``: meter color-awareness mode (blind/aware)
   - ``mtr_init_color {value}``: initial color value (green/yellow/red)
   - ``mtr_state {unsigned}``: meter state (disabled/enabled)
+
+- ``modify_field``:  Modify packet field
+
+  - ``op``: modify operation (set/add/sub)
+  - ``dst_type``: the destination field to be modified, the supported fields as
+    ``enum rte_flow_field_id`` listed.
+  - ``dst_level``: destination field level.
+  - ``dst_tag_index``: destination field tag array.
+  - ``dst_type_id``: destination field type ID.
+  - ``dst_class``: destination field class ID.
+  - ``dst_offset``: destination field bit offset.
+  - ``src_type``: the modify source field, the supported fields as
+    ``enum rte_flow_field_id`` listed.
+  - ``src_level``: source field level.
+  - ``src_tag_index``: source field tag array.
+  - ``src_type_id``: source field type ID.
+  - ``src_class``: source field class ID.
+  - ``src_offset``: source field bit offset.
+  - ``src_value``: source immediate value.
+  - ``src_ptr``: pointer to source immediate value.
+  - ``width``: number of bits to copy.
 
 Destroying flow rules
 ~~~~~~~~~~~~~~~~~~~~~

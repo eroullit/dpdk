@@ -12,6 +12,7 @@
  * using Galois Fields New Instructions.
  */
 
+#include <rte_bitops.h>
 #include <rte_compat.h>
 #include <rte_vect.h>
 
@@ -110,7 +111,7 @@ __rte_thash_gfni(const uint64_t *mtrx, const uint8_t *tuple,
 				secondary_tuple);
 		}
 
-		chunk_len = __builtin_popcountll(load_mask);
+		chunk_len = rte_popcount64(load_mask);
 		for (i = 0; i < ((chunk_len + prepend) / 8); i++, mtrx += 8) {
 			perm_bytes = _mm512_mask_permutexvar_epi8(perm_bytes,
 				permute_mask, permute_idx, tuple_bytes);

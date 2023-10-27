@@ -3,20 +3,15 @@
  * All rights reserved.
  */
 
-#include <rte_common.h>
-#include <rte_service.h>
-#include <ethdev_pci.h>
+#include "nfp_flower_ctrl.h"
 
-#include "../nfp_common.h"
-#include "../nfp_logs.h"
-#include "../nfp_ctrl.h"
-#include "../nfp_rxtx.h"
+#include <rte_service.h>
+
 #include "../nfd3/nfp_nfd3.h"
 #include "../nfdk/nfp_nfdk.h"
-#include "nfp_flower.h"
-#include "nfp_flower_ctrl.h"
-#include "nfp_flower_cmsg.h"
+#include "../nfp_logs.h"
 #include "nfp_flower_representor.h"
+#include "nfp_mtr.h"
 
 #define MAX_PKT_BURST 32
 
@@ -39,7 +34,7 @@ nfp_flower_ctrl_vnic_recv(void *rx_queue,
 	if (unlikely(rxq == NULL)) {
 		/*
 		 * DPDK just checks the queue is lower than max queues
-		 * enabled. But the queue needs to be configured
+		 * enabled. But the queue needs to be configured.
 		 */
 		PMD_RX_LOG(ERR, "RX Bad queue");
 		return 0;
@@ -65,20 +60,19 @@ nfp_flower_ctrl_vnic_recv(void *rx_queue,
 
 		/*
 		 * We got a packet. Let's alloc a new mbuf for refilling the
-		 * free descriptor ring as soon as possible
+		 * free descriptor ring as soon as possible.
 		 */
 		new_mb = rte_pktmbuf_alloc(rxq->mem_pool);
 		if (unlikely(new_mb == NULL)) {
-			PMD_RX_LOG(ERR,
-				"RX mbuf alloc failed port_id=%u queue_id=%hu",
-				rxq->port_id, rxq->qidx);
+			PMD_RX_LOG(ERR, "RX mbuf alloc failed port_id=%u queue_id=%hu",
+					rxq->port_id, rxq->qidx);
 			nfp_net_mbuf_alloc_failed(rxq);
 			break;
 		}
 
 		/*
 		 * Grab the mbuf and refill the descriptor with the
-		 * previously allocated mbuf
+		 * previously allocated mbuf.
 		 */
 		mb = rxb->mbuf;
 		rxb->mbuf = new_mb;
@@ -92,23 +86,15 @@ nfp_flower_ctrl_vnic_recv(void *rx_queue,
 			/*
 			 * This should not happen and the user has the
 			 * responsibility of avoiding it. But we have
-			 * to give some info about the error
+			 * to give some info about the error.
 			 */
-			PMD_RX_LOG(ERR,
-				"mbuf overflow likely due to the RX offset.\n"
-				"\t\tYour mbuf size should have extra space for"
-				" RX offset=%u bytes.\n"
-				"\t\tCurrently you just have %u bytes available"
-				" but the received packet is %u bytes long",
-				hw->rx_offset,
-				rxq->mbuf_size - hw->rx_offset,
-				mb->data_len);
+			PMD_RX_LOG(ERR, "mbuf overflow likely due to the RX offset.");
 			rte_pktmbuf_free(mb);
 			break;
 		}
 
 		/* Filling the received mbuf with packet info */
-		if (hw->rx_offset)
+		if (hw->rx_offset != 0)
 			mb->data_off = RTE_PKTMBUF_HEADROOM + hw->rx_offset;
 		else
 			mb->data_off = RTE_PKTMBUF_HEADROOM + NFP_DESC_META_LEN(rxds);
@@ -130,7 +116,7 @@ nfp_flower_ctrl_vnic_recv(void *rx_queue,
 		nb_hold++;
 
 		rxq->rd_p++;
-		if (unlikely(rxq->rd_p == rxq->rx_count)) /* wrapping?*/
+		if (unlikely(rxq->rd_p == rxq->rx_count)) /* Wrapping */
 			rxq->rd_p = 0;
 	}
 
@@ -146,7 +132,7 @@ nfp_flower_ctrl_vnic_recv(void *rx_queue,
 	rte_wmb();
 	if (nb_hold >= rxq->rx_free_thresh) {
 		PMD_RX_LOG(DEBUG, "port=%hu queue=%hu nb_hold=%hu avail=%hu",
-			rxq->port_id, rxq->qidx, nb_hold, avail);
+				rxq->port_id, rxq->qidx, nb_hold, avail);
 		nfp_qcp_ptr_add(rxq->qcp_fl, NFP_QCP_WRITE_PTR, nb_hold);
 		nb_hold = 0;
 	}
@@ -177,7 +163,7 @@ nfp_flower_ctrl_vnic_nfd3_xmit(struct nfp_app_fw_flower *app_fw_flower,
 	if (unlikely(txq == NULL)) {
 		/*
 		 * DPDK just checks the queue is lower than max queues
-		 * enabled. But the queue needs to be configured
+		 * enabled. But the queue needs to be configured.
 		 */
 		PMD_TX_LOG(ERR, "ctrl dev TX Bad queue");
 		goto xmit_end;
@@ -200,7 +186,7 @@ nfp_flower_ctrl_vnic_nfd3_xmit(struct nfp_app_fw_flower *app_fw_flower,
 
 	lmbuf = &txq->txbufs[txq->wr_p].mbuf;
 	RTE_MBUF_PREFETCH_TO_FREE(*lmbuf);
-	if (*lmbuf)
+	if (*lmbuf != NULL)
 		rte_pktmbuf_free_seg(*lmbuf);
 
 	*lmbuf = mbuf;
@@ -213,7 +199,7 @@ nfp_flower_ctrl_vnic_nfd3_xmit(struct nfp_app_fw_flower *app_fw_flower,
 	txds->offset_eop = FLOWER_PKT_DATA_OFFSET | NFD3_DESC_TX_EOP;
 
 	txq->wr_p++;
-	if (unlikely(txq->wr_p == txq->tx_count)) /* wrapping?*/
+	if (unlikely(txq->wr_p == txq->tx_count)) /* Wrapping */
 		txq->wr_p = 0;
 
 	cnt++;
@@ -342,7 +328,7 @@ nfp_flower_ctrl_vnic_nfdk_xmit(struct nfp_app_fw_flower *app_fw_flower,
 	}
 
 	txq->wr_p = D_IDX(txq, txq->wr_p + used_descs);
-	if (txq->wr_p % NFDK_TX_DESC_BLOCK_CNT)
+	if (txq->wr_p % NFDK_TX_DESC_BLOCK_CNT != 0)
 		txq->data_pending += mbuf->pkt_len;
 	else
 		txq->data_pending = 0;
@@ -527,7 +513,7 @@ nfp_flower_ctrl_vnic_poll(struct nfp_app_fw_flower *app_fw_flower)
 	ctrl_hw = app_fw_flower->ctrl_hw;
 	ctrl_eth_dev = ctrl_hw->eth_dev;
 
-	/* ctrl vNIC only has a single Rx queue */
+	/* Ctrl vNIC only has a single Rx queue */
 	rxq = ctrl_eth_dev->data->rx_queues[0];
 
 	while (rte_service_runstate_get(app_fw_flower->ctrl_vnic_id) != 0) {

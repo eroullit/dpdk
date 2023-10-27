@@ -176,7 +176,9 @@ nix_inl_cpt_setup(struct nix_inl_dev *inl_dev, bool inl_dev_sso)
 {
 	struct roc_cpt_lf *lf = &inl_dev->cpt_lf;
 	struct dev *dev = &inl_dev->dev;
+	bool ctx_ilen_valid = false;
 	uint8_t eng_grpmask;
+	uint8_t ctx_ilen = 0;
 	int rc;
 
 	if (!inl_dev->attach_cptlf)
@@ -186,7 +188,13 @@ nix_inl_cpt_setup(struct nix_inl_dev *inl_dev, bool inl_dev_sso)
 	eng_grpmask = (1ULL << ROC_CPT_DFLT_ENG_GRP_SE |
 		       1ULL << ROC_CPT_DFLT_ENG_GRP_SE_IE |
 		       1ULL << ROC_CPT_DFLT_ENG_GRP_AE);
-	rc = cpt_lfs_alloc(dev, eng_grpmask, RVU_BLOCK_ADDR_CPT0, inl_dev_sso);
+	if (roc_errata_cpt_has_ctx_fetch_issue()) {
+		ctx_ilen = (ROC_NIX_INL_OT_IPSEC_INB_HW_SZ / 128) - 1;
+		ctx_ilen_valid = true;
+	}
+
+	rc = cpt_lfs_alloc(dev, eng_grpmask, RVU_BLOCK_ADDR_CPT0, inl_dev_sso, ctx_ilen_valid,
+			   ctx_ilen);
 	if (rc) {
 		plt_err("Failed to alloc CPT LF resources, rc=%d", rc);
 		return rc;
@@ -285,7 +293,7 @@ nix_inl_sso_setup(struct nix_inl_dev *inl_dev)
 	}
 
 	/* Setup hwgrp->hws link */
-	sso_hws_link_modify(0, inl_dev->ssow_base, NULL, hwgrp, 1, true);
+	sso_hws_link_modify(0, inl_dev->ssow_base, NULL, hwgrp, 1, 0, true);
 
 	/* Enable HWGRP */
 	plt_write64(0x1, inl_dev->sso_base + SSO_LF_GGRP_QCTL);
@@ -315,7 +323,7 @@ nix_inl_sso_release(struct nix_inl_dev *inl_dev)
 	nix_inl_sso_unregister_irqs(inl_dev);
 
 	/* Unlink hws */
-	sso_hws_link_modify(0, inl_dev->ssow_base, NULL, hwgrp, 1, false);
+	sso_hws_link_modify(0, inl_dev->ssow_base, NULL, hwgrp, 1, 0, false);
 
 	/* Release XAQ aura */
 	sso_hwgrp_release_xaq(&inl_dev->dev, 1);
@@ -670,7 +678,8 @@ no_pool:
 	}
 
 	/* Setup xaq for hwgrps */
-	rc = sso_hwgrp_alloc_xaq(&inl_dev->dev, inl_dev->xaq.aura_handle, 1);
+	rc = sso_hwgrp_alloc_xaq(&inl_dev->dev,
+				 roc_npa_aura_handle_to_aura(inl_dev->xaq.aura_handle), 1);
 	if (rc) {
 		plt_err("Failed to setup hwgrp xaq aura, rc=%d", rc);
 		return rc;
@@ -746,7 +755,7 @@ inl_outb_soft_exp_poll(struct nix_inl_dev *inl_dev, uint32_t ring_idx)
 	}
 }
 
-static void *
+static uint32_t
 nix_inl_outb_poll_thread(void *args)
 {
 	struct nix_inl_dev *inl_dev = args;
@@ -816,9 +825,8 @@ nix_inl_outb_poll_thread_setup(struct nix_inl_dev *inl_dev)
 
 	soft_exp_consumer_cnt = 0;
 	soft_exp_poll_thread_exit = false;
-	rc = plt_ctrl_thread_create(&inl_dev->soft_exp_poll_thread,
-				    "OUTB_SOFT_EXP_POLL_THREAD", NULL,
-				    nix_inl_outb_poll_thread, inl_dev);
+	rc = plt_thread_create_control(&inl_dev->soft_exp_poll_thread,
+			"outb-poll", nix_inl_outb_poll_thread, inl_dev);
 	if (rc) {
 		plt_bitmap_free(inl_dev->soft_exp_ring_bmap);
 		plt_free(inl_dev->soft_exp_ring_bmap_mem);
@@ -1020,7 +1028,7 @@ roc_nix_inl_dev_fini(struct roc_nix_inl_dev *roc_inl_dev)
 
 	if (inl_dev->set_soft_exp_poll) {
 		soft_exp_poll_thread_exit = true;
-		pthread_join(inl_dev->soft_exp_poll_thread, NULL);
+		plt_thread_join(inl_dev->soft_exp_poll_thread, NULL);
 		plt_bitmap_free(inl_dev->soft_exp_ring_bmap);
 		plt_free(inl_dev->soft_exp_ring_bmap_mem);
 		plt_free(inl_dev->sa_soft_exp_ring);

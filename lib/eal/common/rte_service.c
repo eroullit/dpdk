@@ -505,8 +505,8 @@ service_runner_func(void *arg)
 		if (service_mask == 0)
 			continue;
 
-		start_id = __builtin_ctzl(service_mask);
-		end_id = 64 - __builtin_clzl(service_mask);
+		start_id = rte_ctz64(service_mask);
+		end_id = 64 - rte_clz64(service_mask);
 
 		for (i = start_id; i < end_id; i++) {
 			/* return value ignored as no change to code flow */
@@ -586,7 +586,7 @@ rte_service_lcore_count_services(uint32_t lcore)
 	if (!cs->is_service_core)
 		return -ENOTSUP;
 
-	return __builtin_popcountll(cs->service_mask);
+	return rte_popcount64(cs->service_mask);
 }
 
 int32_t

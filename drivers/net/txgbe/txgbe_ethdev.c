@@ -1499,6 +1499,19 @@ txgbe_check_mq_mode(struct rte_eth_dev *dev)
 				return -EINVAL;
 			}
 		}
+
+		/*
+		 * When DCB/VT is off, maximum number of queues changes
+		 */
+		if (dev_conf->txmode.mq_mode == RTE_ETH_MQ_TX_NONE) {
+			if (nb_tx_q > TXGBE_NONE_MODE_TX_NB_QUEUES) {
+				PMD_INIT_LOG(ERR,
+					     "Neither VT nor DCB are enabled, "
+					     "nb_tx_q > %d.",
+					     TXGBE_NONE_MODE_TX_NB_QUEUES);
+				return -EINVAL;
+			}
+		}
 	}
 	return 0;
 }
@@ -1916,7 +1929,7 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 	struct txgbe_tm_conf *tm_conf = TXGBE_DEV_TM_CONF(dev);
 
 	if (hw->adapter_stopped)
-		return 0;
+		goto out;
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1939,14 +1952,6 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 
 	for (vf = 0; vfinfo != NULL && vf < pci_dev->max_vfs; vf++)
 		vfinfo[vf].clear_to_send = false;
-
-	if (hw->phy.media_type == txgbe_media_type_copper) {
-		/* Turn off the copper */
-		hw->phy.set_phy_power(hw, false);
-	} else {
-		/* Turn off the laser */
-		hw->mac.disable_tx_laser(hw);
-	}
 
 	txgbe_dev_clear_queues(dev);
 
@@ -1977,6 +1982,16 @@ txgbe_dev_stop(struct rte_eth_dev *dev)
 	hw->adapter_stopped = true;
 	dev->data->dev_started = 0;
 	hw->dev_start = false;
+
+out:
+	/* close phy to prevent reset in dev_close from restarting physical link */
+	if (hw->phy.media_type == txgbe_media_type_copper) {
+		/* Turn off the copper */
+		hw->phy.set_phy_power(hw, false);
+	} else {
+		/* Turn off the laser */
+		hw->mac.disable_tx_laser(hw);
+	}
 
 	return 0;
 }
@@ -2036,6 +2051,9 @@ txgbe_dev_close(struct rte_eth_dev *dev)
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	txgbe_pf_reset_hw(hw);
 
@@ -2896,9 +2914,9 @@ txgbe_dev_link_update_share(struct rte_eth_dev *dev,
 				 * when there is no link thread running.
 				 */
 				intr->flags |= TXGBE_FLAG_NEED_LINK_CONFIG;
-				if (rte_thread_create_control(&ad->link_thread_tid,
-					"txgbe-link-thread", NULL,
-					txgbe_dev_setup_link_thread_handler, dev) < 0) {
+				if (rte_thread_create_internal_control(&ad->link_thread_tid,
+						"txgbe-link",
+						txgbe_dev_setup_link_thread_handler, dev) < 0) {
 					PMD_DRV_LOG(ERR, "Create link thread failed!");
 					__atomic_clear(&ad->link_thread_running, __ATOMIC_SEQ_CST);
 				}
@@ -2943,6 +2961,11 @@ txgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		link.link_speed = RTE_ETH_SPEED_NUM_10G;
 		break;
 	}
+
+	/* Re configure MAC RX */
+	if (hw->mac.type == txgbe_mac_raptor)
+		wr32m(hw, TXGBE_MACRXFLT, TXGBE_MACRXFLT_PROMISC,
+			TXGBE_MACRXFLT_PROMISC);
 
 	return rte_eth_linkstatus_set(dev, &link);
 }

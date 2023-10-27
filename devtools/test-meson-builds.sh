@@ -120,10 +120,10 @@ config () # <dir> <builddir> <meson options>
 		return
 	fi
 	options=
-	# deprecated libs may be disabled by default, so for complete builds ensure
-	# no libs are disabled
-	if ! echo $* | grep -q -- 'disable_libs' ; then
-		options="$options -Ddisable_libs="
+	# deprecated libs are disabled by default, so for complete builds
+	# enable them
+	if ! echo $* | grep -q -- 'enable_deprecated_libs' ; then
+		options="$options -Denable_deprecated_libs=*"
 	fi
 	if echo $* | grep -qw -- '--default-library=shared' ; then
 		options="$options -Dexamples=all"
@@ -227,11 +227,13 @@ for c in gcc clang ; do
 	for s in static shared ; do
 		if [ $s = shared ] ; then
 			abicheck=ABI
+			stdatomic=-Denable_stdatomic=true
 		else
 			abicheck=skipABI # save time and disk space
+			stdatomic=-Denable_stdatomic=false
 		fi
 		export CC="$CCACHE $c"
-		build build-$c-$s $c $abicheck --default-library=$s
+		build build-$c-$s $c $abicheck $stdatomic --default-library=$s
 		unset CC
 	done
 done
@@ -282,6 +284,9 @@ build build-loongarch64-generic-gcc $f ABI $use_shared
 
 # IBM POWER
 f=$srcdir/config/ppc/ppc64le-power8-linux-gcc
+if grep -q 'NAME="Ubuntu"' /etc/os-release ; then
+	f=$f-ubuntu
+fi
 build build-ppc64-power8-gcc $f ABI $use_shared
 
 # generic RISC-V

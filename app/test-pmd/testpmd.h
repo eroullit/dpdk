@@ -188,6 +188,8 @@ struct fwd_stream {
 	struct pkt_burst_stats rx_burst_stats;
 	struct pkt_burst_stats tx_burst_stats;
 	struct fwd_lcore *lcore; /**< Lcore being scheduled. */
+	/**< Rx queue information for recycling mbufs */
+	struct rte_eth_recycle_rxq_info recycle_rxq_info;
 };
 
 /**
@@ -337,7 +339,7 @@ struct rte_port {
 	uint32_t                mc_addr_nb; /**< nb. of addr. in mc_addr_pool */
 	queueid_t               queue_nb; /**< nb. of queues for flow rules */
 	uint32_t                queue_sz; /**< size of a queue for flow rules */
-	uint8_t                 slave_flag : 1, /**< bonding slave port */
+	uint8_t                 member_flag : 1, /**< bonding member port */
 				bond_flag : 1, /**< port is bond device */
 				fwd_mac_swap : 1, /**< swap packet MAC before forward */
 				update_conf : 1; /**< need to update bonding device configuration */
@@ -449,6 +451,7 @@ extern struct fwd_engine csum_fwd_engine;
 extern struct fwd_engine icmp_echo_engine;
 extern struct fwd_engine noisy_vnf_engine;
 extern struct fwd_engine five_tuple_swap_fwd_engine;
+extern struct fwd_engine recycle_mbufs_engine;
 #ifdef RTE_LIBRTE_IEEE1588
 extern struct fwd_engine ieee1588_fwd_engine;
 #endif
@@ -979,6 +982,8 @@ int port_flow_template_table_create(portid_t port_id, uint32_t id,
 int port_flow_template_table_destroy(portid_t port_id,
 			    uint32_t n, const uint32_t *table);
 int port_flow_template_table_flush(portid_t port_id);
+int port_queue_group_set_miss_actions(portid_t port_id, const struct rte_flow_attr *attr,
+				      const struct rte_flow_action *actions);
 int port_queue_flow_create(portid_t port_id, queueid_t queue_id,
 			   bool postpone, uint32_t table_id, uint32_t rule_idx,
 			   uint32_t pattern_idx, uint32_t actions_idx,
@@ -1009,6 +1014,8 @@ port_queue_action_handle_query_update(portid_t port_id,
 				      const struct rte_flow_action *action);
 int port_queue_flow_push(portid_t port_id, queueid_t queue_id);
 int port_queue_flow_pull(portid_t port_id, queueid_t queue_id);
+int port_flow_hash_calc(portid_t port_id, uint32_t table_id,
+			uint8_t pattern_template_index, const struct rte_flow_item pattern[]);
 void port_queue_flow_aged(portid_t port_id, uint32_t queue_id, uint8_t destroy);
 int port_flow_validate(portid_t port_id,
 		       const struct rte_flow_attr *attr,
@@ -1107,9 +1114,9 @@ void stop_packet_forwarding(void);
 void dev_set_link_up(portid_t pid);
 void dev_set_link_down(portid_t pid);
 void init_port_config(void);
-void set_port_slave_flag(portid_t slave_pid);
-void clear_port_slave_flag(portid_t slave_pid);
-uint8_t port_is_bonding_slave(portid_t slave_pid);
+void set_port_member_flag(portid_t member_pid);
+void clear_port_member_flag(portid_t member_pid);
+uint8_t port_is_bonding_member(portid_t member_pid);
 
 int init_port_dcb_config(portid_t pid, enum dcb_mode_enable dcb_mode,
 		     enum rte_eth_nb_tcs num_tcs,
@@ -1176,6 +1183,7 @@ void show_mcast_macs(portid_t port_id);
 /* Functions to manage the set of filtered Multicast MAC addresses */
 void mcast_addr_add(portid_t port_id, struct rte_ether_addr *mc_addr);
 void mcast_addr_remove(portid_t port_id, struct rte_ether_addr *mc_addr);
+void mcast_addr_flush(portid_t port_id);
 void port_dcb_info_display(portid_t port_id);
 
 uint8_t *open_file(const char *file_path, uint32_t *size);

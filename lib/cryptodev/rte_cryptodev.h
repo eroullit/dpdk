@@ -181,7 +181,16 @@ struct rte_cryptodev_asymmetric_xform_capability {
 		/**< Range of modulus length supported by modulus based xform.
 		 * Value 0 mean implementation default
 		 */
+
+		uint8_t internal_rng;
+		/**< Availability of random number generator for Elliptic curve based xform.
+		 * Value 0 means unavailable, and application should pass the required
+		 * random value. Otherwise, PMD would internally compute the random number.
+		 */
 	};
+
+	uint64_t hash_algos;
+	/**< Bitmask of hash algorithms supported for op_type. */
 };
 
 /**
@@ -339,6 +348,22 @@ int
 rte_cryptodev_asym_xform_capability_check_modlen(
 	const struct rte_cryptodev_asymmetric_xform_capability *capability,
 		uint16_t modlen);
+
+/**
+ * Check if hash algorithm is supported.
+ *
+ * @param	capability	Asymmetric crypto capability.
+ * @param	hash		Hash algorithm.
+ *
+ * @return
+ *   - Return true if the hash algorithm is supported.
+ *   - Return false if the hash algorithm is not supported.
+ */
+__rte_experimental
+bool
+rte_cryptodev_asym_xform_capability_check_hash(
+	const struct rte_cryptodev_asymmetric_xform_capability *capability,
+	enum rte_crypto_auth_algorithm hash);
 
 /**
  * Provide the cipher algorithm enum, given an algorithm string
@@ -534,6 +559,8 @@ rte_cryptodev_asym_get_xform_string(enum rte_crypto_asym_xform_type xform_enum);
 /**< Support wrapped key in cipher xform  */
 #define RTE_CRYPTODEV_FF_SECURITY_INNER_CSUM		(1ULL << 27)
 /**< Support inner checksum computation/verification */
+#define RTE_CRYPTODEV_FF_SECURITY_RX_INJECT		(1ULL << 28)
+/**< Support Rx injection after security processing */
 
 /**
  * Get the name of a crypto device feature flag
@@ -971,6 +998,15 @@ struct rte_cryptodev_cb_rcu {
 	/**< RCU QSBR variable per queue pair */
 };
 
+/**
+ * Get the security context for the cryptodev.
+ *
+ * @param dev_id
+ *   The device identifier.
+ * @return
+ *   - NULL on error.
+ *   - Pointer to security context on success.
+ */
 void *
 rte_cryptodev_get_sec_ctx(uint8_t dev_id);
 

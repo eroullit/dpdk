@@ -40,6 +40,7 @@ enum roc_npc_item_type {
 	ROC_NPC_ITEM_TYPE_RAW,
 	ROC_NPC_ITEM_TYPE_MARK,
 	ROC_NPC_ITEM_TYPE_TX_QUEUE,
+	ROC_NPC_ITEM_TYPE_IPV6_ROUTING_EXT,
 	ROC_NPC_ITEM_TYPE_END,
 };
 
@@ -128,6 +129,22 @@ struct roc_ipv6_fragment_ext {
 	uint32_t id;	     /**< Packet ID */
 } __plt_packed;
 
+struct roc_ipv6_routing_ext {
+	uint8_t next_hdr;	/**< Protocol, next header. */
+	uint8_t hdr_len;	/**< Header length. */
+	uint8_t type;		/**< Extension header type. */
+	uint8_t segments_left;	/**< Valid segments number. */
+	union {
+		uint32_t flags; /**< Packet control data per type. */
+		struct {
+			uint8_t last_entry; /**< The last_entry field of SRH */
+			uint8_t flag;	    /**< Packet flag. */
+			uint16_t tag;	    /**< Packet tag. */
+		};
+	};
+	/* Next are 128-bit IPv6 address fields to describe segments. */
+} __plt_packed;
+
 struct roc_flow_item_ipv6_ext {
 	uint8_t next_hdr; /**< Next header. */
 };
@@ -177,6 +194,7 @@ enum roc_npc_action_type {
 	ROC_NPC_ACTION_TYPE_VLAN_PCP_INSERT = (1 << 15),
 	ROC_NPC_ACTION_TYPE_PORT_ID = (1 << 16),
 	ROC_NPC_ACTION_TYPE_METER = (1 << 17),
+	ROC_NPC_ACTION_TYPE_AGE = (1 << 18),
 };
 
 struct roc_npc_action {
@@ -198,6 +216,13 @@ struct roc_npc_action_port_id {
 	uint32_t original : 1;	/**< Use original port ID if possible. */
 	uint32_t reserved : 31; /**< Reserved, must be zero. */
 	uint32_t id;		/**< port ID. */
+};
+
+struct roc_npc_action_age {
+	uint32_t timeout : 24; /**< Time in seconds. */
+	uint32_t reserved : 8; /**< Reserved, must be zero. */
+	/** The user flow context, NULL means the flow pointer. */
+	void *context;
 };
 
 /**
@@ -292,6 +317,9 @@ struct roc_npc_flow {
 	uint16_t match_id;
 	uint8_t is_inline_dev;
 	bool use_pre_alloc;
+	uint64_t timeout_cycles;
+	void *age_context;
+	uint32_t timeout;
 
 	TAILQ_ENTRY(roc_npc_flow) next;
 };
@@ -324,6 +352,19 @@ enum flow_vtag_cfg_dir { VTAG_TX, VTAG_RX };
 #define ROC_ETHER_TYPE_VLAN 0x8100 /**< IEEE 802.1Q VLAN tagging. */
 #define ROC_ETHER_TYPE_QINQ 0x88A8 /**< IEEE 802.1ad QinQ tagging. */
 
+struct roc_npc_flow_age {
+	plt_seqcount_t seq_cnt;
+	uint32_t aging_poll_freq;
+	uint32_t age_flow_refcnt;
+	uint32_t aged_flows_cnt;
+	uint32_t start_id;
+	uint32_t end_id;
+	plt_thread_t aged_flows_poll_thread;
+	struct plt_bitmap *aged_flows;
+	void *age_mem;
+	bool aged_flows_get_thread_exit;
+};
+
 struct roc_npc {
 	struct roc_nix *roc_nix;
 	uint8_t switch_header_type;
@@ -346,10 +387,13 @@ struct roc_npc {
 	bool is_sdp_mask_set;
 	uint16_t sdp_channel;
 	uint16_t sdp_channel_mask;
+	struct roc_npc_flow_age flow_age;
 
 #define ROC_NPC_MEM_SZ (6 * 1024)
 	uint8_t reserved[ROC_NPC_MEM_SZ];
 } __plt_cache_aligned;
+
+#define ROC_NPC_AGE_POLL_FREQ_MIN 10
 
 int __roc_api roc_npc_init(struct roc_npc *roc_npc);
 int __roc_api roc_npc_fini(struct roc_npc *roc_npc);
@@ -394,4 +438,5 @@ int __roc_api roc_npc_validate_portid_action(struct roc_npc *roc_npc_src,
 					     struct roc_npc *roc_npc_dst);
 int __roc_api roc_npc_mcam_init(struct roc_npc *roc_npc, struct roc_npc_flow *flow, int mcam_id);
 int __roc_api roc_npc_mcam_move(struct roc_npc *roc_npc, uint16_t old_ent, uint16_t new_ent);
+void *__roc_api roc_npc_aged_flow_ctx_get(struct roc_npc *roc_npc, uint32_t mcam_id);
 #endif /* _ROC_NPC_H_ */

@@ -186,12 +186,11 @@ _iavf_tx_queue_release_mbufs_vec(struct iavf_tx_queue *txq)
 		return;
 
 	i = txq->next_dd - txq->rs_thresh + 1;
-	if (txq->tx_tail < i) {
-		for (; i < txq->nb_tx_desc; i++) {
-			rte_pktmbuf_free_seg(txq->sw_ring[i].mbuf);
-			txq->sw_ring[i].mbuf = NULL;
-		}
-		i = 0;
+	while (i != txq->tx_tail) {
+		rte_pktmbuf_free_seg(txq->sw_ring[i].mbuf);
+		txq->sw_ring[i].mbuf = NULL;
+		if (++i == txq->nb_tx_desc)
+			i = 0;
 	}
 }
 
@@ -396,7 +395,7 @@ iavf_txd_enable_offload(__rte_unused struct rte_mbuf *tx_pkt,
 	*txd_hi |= ((uint64_t)td_cmd) << IAVF_TXD_QW1_CMD_SHIFT;
 }
 
-#ifdef CC_AVX2_SUPPORT
+#ifdef RTE_ARCH_X86
 static __rte_always_inline void
 iavf_rxq_rearm_common(struct iavf_rx_queue *rxq, __rte_unused bool avx512)
 {

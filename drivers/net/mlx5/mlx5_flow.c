@@ -3198,6 +3198,11 @@ mlx5_flow_validate_item_vxlan_gpe(const struct rte_flow_item *item,
 		uint8_t vni[4];
 	} id = { .vlan_id = 0, };
 
+	struct rte_flow_item_vxlan_gpe nic_mask = {
+		.vni = "\xff\xff\xff",
+		.protocol = 0xff,
+	};
+
 	if (!priv->sh->config.l3_vxlan_en)
 		return rte_flow_error_set(error, ENOTSUP,
 					  RTE_FLOW_ERROR_TYPE_ITEM, item,
@@ -3221,18 +3226,12 @@ mlx5_flow_validate_item_vxlan_gpe(const struct rte_flow_item *item,
 		mask = &rte_flow_item_vxlan_gpe_mask;
 	ret = mlx5_flow_item_acceptable
 		(item, (const uint8_t *)mask,
-		 (const uint8_t *)&rte_flow_item_vxlan_gpe_mask,
+		 (const uint8_t *)&nic_mask,
 		 sizeof(struct rte_flow_item_vxlan_gpe),
 		 MLX5_ITEM_RANGE_NOT_ACCEPTED, error);
 	if (ret < 0)
 		return ret;
 	if (spec) {
-		if (spec->hdr.proto)
-			return rte_flow_error_set(error, ENOTSUP,
-						  RTE_FLOW_ERROR_TYPE_ITEM,
-						  item,
-						  "VxLAN-GPE protocol"
-						  " not supported");
 		memcpy(&id.vni[1], spec->hdr.vni, 3);
 		memcpy(&id.vni[1], mask->hdr.vni, 3);
 	}
@@ -3904,6 +3903,45 @@ mlx5_flow_validate_item_ecpri(const struct rte_flow_item *item,
 						  : (const uint8_t *)&nic_mask,
 					 sizeof(struct rte_flow_item_ecpri),
 					 MLX5_ITEM_RANGE_NOT_ACCEPTED, error);
+}
+
+/**
+ * Validate the NSH item.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device on which flow rule is being created on.
+ * @param[out] error
+ *   Pointer to error structure.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_flow_validate_item_nsh(struct rte_eth_dev *dev,
+			    const struct rte_flow_item *item,
+			    struct rte_flow_error *error)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (item->mask) {
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "NSH fields matching is not supported");
+	}
+
+	if (!priv->sh->config.dv_flow_en) {
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
+					  NULL, "NSH support requires DV flow interface");
+	}
+
+	if (!priv->sh->cdev->config.hca_attr.tunnel_stateless_vxlan_gpe_nsh) {
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "Current FW does not support matching on NSH");
+	}
+
+	return 0;
 }
 
 static int
@@ -5853,7 +5891,7 @@ flow_meter_split_prep(struct rte_eth_dev *dev,
 					"Failed to allocate meter flow id.");
 		flow_id = tag_id - 1;
 		flow_id_bits = (!flow_id) ? 1 :
-				(MLX5_REG_BITS - __builtin_clz(flow_id));
+				(MLX5_REG_BITS - rte_clz32(flow_id));
 		if ((flow_id_bits + priv->sh->mtrmng->max_mtr_bits) >
 		    mtr_reg_bits) {
 			mlx5_ipool_free(fm->flow_ipool, tag_id);

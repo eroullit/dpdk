@@ -588,7 +588,7 @@ nix_tm_topology_reg_prep(struct nix *nix, struct nix_tm_node *node,
 			reg[k] = NIX_AF_TL4X_SDP_LINK_CFG(schq);
 			regval[k] = BIT_ULL(12);
 			regval[k] |= BIT_ULL(13);
-			regval[k] |= relchan;
+			regval[k] |= (uint64_t)relchan;
 			k++;
 		}
 		break;
@@ -606,7 +606,7 @@ nix_tm_topology_reg_prep(struct nix *nix, struct nix_tm_node *node,
 		if (!nix->sdp_link &&
 		    nix->tm_link_cfg_lvl == NIX_TXSCH_LVL_TL3) {
 			reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(schq, link);
-			regval[k] = BIT_ULL(12) | relchan;
+			regval[k] = BIT_ULL(12) | (uint64_t)relchan;
 			k++;
 		}
 
@@ -625,7 +625,7 @@ nix_tm_topology_reg_prep(struct nix *nix, struct nix_tm_node *node,
 		if (!nix->sdp_link &&
 		    nix->tm_link_cfg_lvl == NIX_TXSCH_LVL_TL2) {
 			reg[k] = NIX_AF_TL3_TL2X_LINKX_CFG(schq, link);
-			regval[k] = BIT_ULL(12) | relchan;
+			regval[k] = BIT_ULL(12) | (uint64_t)relchan;
 			k++;
 		}
 
@@ -927,7 +927,7 @@ nix_tm_resource_avail(struct nix *nix, uint8_t hw_lvl, bool contig)
 	/* Count bit set */
 	start_pos = pos;
 	do {
-		count += __builtin_popcountll(slab);
+		count += plt_popcount64(slab);
 		if (!plt_bitmap_scan(bmp, &pos, &slab))
 			break;
 	} while (pos != start_pos);

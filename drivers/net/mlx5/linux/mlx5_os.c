@@ -675,6 +675,9 @@ void
 mlx5_os_free_shared_dr(struct mlx5_priv *priv)
 {
 	struct mlx5_dev_ctx_shared *sh = priv->sh;
+#ifdef HAVE_MLX5DV_DR
+	int i;
+#endif
 
 	MLX5_ASSERT(sh && sh->refcnt);
 	if (sh->refcnt > 1)
@@ -703,18 +706,20 @@ mlx5_os_free_shared_dr(struct mlx5_priv *priv)
 		mlx5_glue->destroy_flow_action(sh->pop_vlan_action);
 		sh->pop_vlan_action = NULL;
 	}
-	if (sh->send_to_kernel_action.action) {
-		void *action = sh->send_to_kernel_action.action;
+	for (i = 0; i < MLX5DR_TABLE_TYPE_MAX; i++) {
+		if (sh->send_to_kernel_action[i].action) {
+			void *action = sh->send_to_kernel_action[i].action;
 
-		mlx5_glue->destroy_flow_action(action);
-		sh->send_to_kernel_action.action = NULL;
-	}
-	if (sh->send_to_kernel_action.tbl) {
-		struct mlx5_flow_tbl_resource *tbl =
-				sh->send_to_kernel_action.tbl;
+			mlx5_glue->destroy_flow_action(action);
+			sh->send_to_kernel_action[i].action = NULL;
+		}
+		if (sh->send_to_kernel_action[i].tbl) {
+			struct mlx5_flow_tbl_resource *tbl =
+					sh->send_to_kernel_action[i].tbl;
 
-		flow_dv_tbl_resource_release(sh, tbl);
-		sh->send_to_kernel_action.tbl = NULL;
+			flow_dv_tbl_resource_release(sh, tbl);
+			sh->send_to_kernel_action[i].tbl = NULL;
+		}
 	}
 #endif /* HAVE_MLX5DV_DR */
 	if (sh->default_miss_action)
@@ -1311,7 +1316,7 @@ err_secondary:
 			 * REG_C_0 and REG_C_1 is reserved for metadata feature.
 			 */
 			reg_c_mask &= 0xfc;
-			if (__builtin_popcount(reg_c_mask) < 1) {
+			if (rte_popcount32(reg_c_mask) < 1) {
 				priv->mtr_en = 0;
 				DRV_LOG(WARNING, "No available register for"
 					" meter.");
@@ -1592,8 +1597,8 @@ err_secondary:
 				err = ENOTSUP;
 				goto error;
 			}
-			usable_bits = __builtin_popcount(priv->sh->dv_regc0_mask);
-			required_bits = __builtin_popcount(priv->vport_meta_mask);
+			usable_bits = rte_popcount32(priv->sh->dv_regc0_mask);
+			required_bits = rte_popcount32(priv->vport_meta_mask);
 			if (usable_bits < required_bits) {
 				DRV_LOG(ERR, "Not enough bits available in reg_c[0] to provide "
 					     "representor matching.");

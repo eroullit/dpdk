@@ -89,14 +89,18 @@
 	 * VIRTCHNL2_OP_GET_PTYPE_INFO_RAW
 	 */
 	/* opcodes 529, 530, and 531 are reserved */
-#define		VIRTCHNL2_OP_CREATE_ADI			532
-#define		VIRTCHNL2_OP_DESTROY_ADI		533
+#define		VIRTCHNL2_OP_NON_FLEX_CREATE_ADI	532
+#define		VIRTCHNL2_OP_NON_FLEX_DESTROY_ADI	533
 #define		VIRTCHNL2_OP_LOOPBACK			534
 #define		VIRTCHNL2_OP_ADD_MAC_ADDR		535
 #define		VIRTCHNL2_OP_DEL_MAC_ADDR		536
 #define		VIRTCHNL2_OP_CONFIG_PROMISCUOUS_MODE	537
 #define		VIRTCHNL2_OP_ADD_QUEUE_GROUPS		538
 #define		VIRTCHNL2_OP_DEL_QUEUE_GROUPS		539
+#define		VIRTCHNL2_OP_GET_PORT_STATS		540
+	/* TimeSync opcodes */
+#define		VIRTCHNL2_OP_GET_PTP_CAPS		541
+#define		VIRTCHNL2_OP_GET_PTP_TX_TSTAMP_LATCHES	542
 
 #define VIRTCHNL2_RDMA_INVALID_QUEUE_IDX	0xFFFF
 
@@ -230,6 +234,10 @@
 #define VIRTCHNL2_CAP_RX_FLEX_DESC		BIT(17)
 #define VIRTCHNL2_CAP_PTYPE			BIT(18)
 #define VIRTCHNL2_CAP_LOOPBACK			BIT(19)
+/* Enable miss completion types plus ability to detect a miss completion if a
+ * reserved bit is set in a standared completion's tag.
+ */
+#define VIRTCHNL2_CAP_MISS_COMPL_TAG		BIT(20)
 /* this must be the last capability */
 #define VIRTCHNL2_CAP_OEM			BIT(63)
 
@@ -286,6 +294,7 @@
 /* These messages are only sent to PF from CP */
 #define VIRTCHNL2_EVENT_START_RESET_ADI		2
 #define VIRTCHNL2_EVENT_FINISH_RESET_ADI	3
+#define VIRTCHNL2_EVENT_ADI_ACTIVE		4
 
 /* VIRTCHNL2_QUEUE_TYPE
  * Transmit and Receive queue types are valid in legacy as well as split queue
@@ -539,7 +548,8 @@ struct virtchnl2_get_capabilities {
 	u8 max_sg_bufs_per_tx_pkt;
 
 	u8 reserved1;
-	__le16 pad1;
+	/* upper bound of number of ADIs supported */
+	__le16 max_adis;
 
 	/* version of Control Plane that is running */
 	__le16 oem_cp_ver_major;
@@ -582,6 +592,9 @@ struct virtchnl2_queue_reg_chunks {
 
 VIRTCHNL2_CHECK_STRUCT_LEN(40, virtchnl2_queue_reg_chunks);
 
+/* VIRTCHNL2_VPORT_FLAGS */
+#define VIRTCHNL2_VPORT_UPLINK_PORT	BIT(0)
+
 #define VIRTCHNL2_ETH_LENGTH_OF_ADDRESS  6
 
 /* VIRTCHNL2_OP_CREATE_VPORT
@@ -620,7 +633,8 @@ struct virtchnl2_create_vport {
 	__le16 max_mtu;
 	__le32 vport_id;
 	u8 default_mac_addr[VIRTCHNL2_ETH_LENGTH_OF_ADDRESS];
-	__le16 pad;
+	/* see VIRTCHNL2_VPORT_FLAGS definitions */
+	__le16 vport_flags;
 	/* see VIRTCHNL2_RX_DESC_IDS definitions */
 	__le64 rx_desc_ids;
 	/* see VIRTCHNL2_TX_DESC_IDS definitions */
@@ -1047,14 +1061,34 @@ struct virtchnl2_sriov_vfs_info {
 
 VIRTCHNL2_CHECK_STRUCT_LEN(4, virtchnl2_sriov_vfs_info);
 
-/* VIRTCHNL2_OP_CREATE_ADI
+/* structure to specify single chunk of queue */
+/* 'chunks' is fixed size(not flexible) and will be deprecated at some point */
+struct virtchnl2_non_flex_queue_reg_chunks {
+	__le16 num_chunks;
+	u8 reserved[6];
+	struct virtchnl2_queue_reg_chunk chunks[1];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(40, virtchnl2_non_flex_queue_reg_chunks);
+
+/* structure to specify single chunk of interrupt vector */
+/* 'vchunks' is fixed size(not flexible) and will be deprecated at some point */
+struct virtchnl2_non_flex_vector_chunks {
+	__le16 num_vchunks;
+	u8 reserved[14];
+	struct virtchnl2_vector_chunk vchunks[1];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(48, virtchnl2_non_flex_vector_chunks);
+
+/* VIRTCHNL2_OP_NON_FLEX_CREATE_ADI
  * PF sends this message to CP to create ADI by filling in required
- * fields of virtchnl2_create_adi structure.
- * CP responds with the updated virtchnl2_create_adi structure containing the
- * necessary fields followed by chunks which in turn will have an array of
+ * fields of virtchnl2_non_flex_create_adi structure.
+ * CP responds with the updated virtchnl2_non_flex_create_adi structure containing
+ * the necessary fields followed by chunks which in turn will have an array of
  * num_chunks entries of virtchnl2_queue_chunk structures.
  */
-struct virtchnl2_create_adi {
+struct virtchnl2_non_flex_create_adi {
 	/* PF sends PASID to CP */
 	__le32 pasid;
 	/*
@@ -1064,29 +1098,31 @@ struct virtchnl2_create_adi {
 	__le16 mbx_id;
 	/* PF sends mailbox vector id to CP */
 	__le16 mbx_vec_id;
+	/* PF populates this ADI index */
+	__le16 adi_index;
 	/* CP populates ADI id */
 	__le16 adi_id;
 	u8 reserved[64];
-	u8 pad[6];
+	u8 pad[4];
 	/* CP populates queue chunks */
-	struct virtchnl2_queue_reg_chunks chunks;
+	struct virtchnl2_non_flex_queue_reg_chunks chunks;
 	/* PF sends vector chunks to CP */
-	struct virtchnl2_vector_chunks vchunks;
+	struct virtchnl2_non_flex_vector_chunks vchunks;
 };
 
-VIRTCHNL2_CHECK_STRUCT_LEN(168, virtchnl2_create_adi);
+VIRTCHNL2_CHECK_STRUCT_LEN(168, virtchnl2_non_flex_create_adi);
 
 /* VIRTCHNL2_OP_DESTROY_ADI
  * PF sends this message to CP to destroy ADI by filling
  * in the adi_id in virtchnl2_destropy_adi structure.
  * CP responds with the status of the requested operation.
  */
-struct virtchnl2_destroy_adi {
+struct virtchnl2_non_flex_destroy_adi {
 	__le16 adi_id;
 	u8 reserved[2];
 };
 
-VIRTCHNL2_CHECK_STRUCT_LEN(4, virtchnl2_destroy_adi);
+VIRTCHNL2_CHECK_STRUCT_LEN(4, virtchnl2_non_flex_destroy_adi);
 
 /* Based on the descriptor type the PF supports, CP fills ptype_id_10 or
  * ptype_id_8 for flex and base descriptor respectively. If ptype_id_10 value
@@ -1158,6 +1194,74 @@ struct virtchnl2_vport_stats {
 };
 
 VIRTCHNL2_CHECK_STRUCT_LEN(128, virtchnl2_vport_stats);
+
+/* physical port statistics */
+struct virtchnl2_phy_port_stats {
+	__le64 rx_bytes;
+	__le64 rx_unicast_pkts;
+	__le64 rx_multicast_pkts;
+	__le64 rx_broadcast_pkts;
+	__le64 rx_size_64_pkts;
+	__le64 rx_size_127_pkts;
+	__le64 rx_size_255_pkts;
+	__le64 rx_size_511_pkts;
+	__le64 rx_size_1023_pkts;
+	__le64 rx_size_1518_pkts;
+	__le64 rx_size_jumbo_pkts;
+	__le64 rx_xon_events;
+	__le64 rx_xoff_events;
+	__le64 rx_undersized_pkts;
+	__le64 rx_fragmented_pkts;
+	__le64 rx_oversized_pkts;
+	__le64 rx_jabber_pkts;
+	__le64 rx_csum_errors;
+	__le64 rx_length_errors;
+	__le64 rx_dropped_pkts;
+	__le64 rx_crc_errors;
+	/* Frames with length < 64 and a bad CRC */
+	__le64 rx_runt_errors;
+	__le64 rx_illegal_bytes;
+	__le64 rx_total_pkts;
+	u8 rx_reserved[128];
+
+	__le64 tx_bytes;
+	__le64 tx_unicast_pkts;
+	__le64 tx_multicast_pkts;
+	__le64 tx_broadcast_pkts;
+	__le64 tx_errors;
+	__le64 tx_timeout_events;
+	__le64 tx_size_64_pkts;
+	__le64 tx_size_127_pkts;
+	__le64 tx_size_255_pkts;
+	__le64 tx_size_511_pkts;
+	__le64 tx_size_1023_pkts;
+	__le64 tx_size_1518_pkts;
+	__le64 tx_size_jumbo_pkts;
+	__le64 tx_xon_events;
+	__le64 tx_xoff_events;
+	__le64 tx_dropped_link_down_pkts;
+	__le64 tx_total_pkts;
+	u8 tx_reserved[128];
+	__le64 mac_local_faults;
+	__le64 mac_remote_faults;
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(600, virtchnl2_phy_port_stats);
+
+/* VIRTCHNL2_OP_GET_PORT_STATS
+ * PF/VF sends this message to CP to get the updated stats by specifying the
+ * vport_id. CP responds with stats in struct virtchnl2_port_stats that
+ * includes both physical port as well as vport statistics.
+ */
+struct virtchnl2_port_stats {
+	__le32 vport_id;
+	u8 pad[4];
+
+	struct virtchnl2_phy_port_stats phy_port_stats;
+	struct virtchnl2_vport_stats virt_port_stats;
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(736, virtchnl2_port_stats);
 
 /* VIRTCHNL2_OP_EVENT
  * CP sends this message to inform the PF/VF driver of events that may affect
@@ -1318,6 +1422,112 @@ struct virtchnl2_promisc_info {
 
 VIRTCHNL2_CHECK_STRUCT_LEN(8, virtchnl2_promisc_info);
 
+/* VIRTCHNL2_PTP_CAPS
+ * PTP capabilities
+ */
+#define VIRTCHNL2_PTP_CAP_LEGACY_CROSS_TIME	BIT(0)
+#define VIRTCHNL2_PTP_CAP_PTM			BIT(1)
+#define VIRTCHNL2_PTP_CAP_DEVICE_CLOCK_CONTROL	BIT(2)
+#define VIRTCHNL2_PTP_CAP_TX_TSTAMPS_DIRECT	BIT(3)
+#define	VIRTCHNL2_PTP_CAP_TX_TSTAMPS_VIRTCHNL	BIT(4)
+
+/* Legacy cross time registers offsets */
+struct virtchnl2_ptp_legacy_cross_time_reg {
+	__le32 shadow_time_0;
+	__le32 shadow_time_l;
+	__le32 shadow_time_h;
+	__le32 cmd_sync;
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(16, virtchnl2_ptp_legacy_cross_time_reg);
+
+/* PTM cross time registers offsets */
+struct virtchnl2_ptp_ptm_cross_time_reg {
+	__le32 art_l;
+	__le32 art_h;
+	__le32 cmd_sync;
+	u8 pad[4];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(16, virtchnl2_ptp_ptm_cross_time_reg);
+
+/* Registers needed to control the main clock */
+struct virtchnl2_ptp_device_clock_control {
+	__le32 cmd;
+	__le32 incval_l;
+	__le32 incval_h;
+	__le32 shadj_l;
+	__le32 shadj_h;
+	u8 pad[4];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(24, virtchnl2_ptp_device_clock_control);
+
+/* Structure that defines tx tstamp entry - index and register offset */
+struct virtchnl2_ptp_tx_tstamp_entry {
+	__le32 tx_latch_register_base;
+	__le32 tx_latch_register_offset;
+	u8 index;
+	u8 pad[7];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(16, virtchnl2_ptp_tx_tstamp_entry);
+
+/* Structure that defines tx tstamp entries - total number of latches
+ * and the array of entries.
+ */
+struct virtchnl2_ptp_tx_tstamp {
+	__le16 num_latches;
+	/* latch size expressed in bits */
+	__le16 latch_size;
+	u8 pad[4];
+	struct virtchnl2_ptp_tx_tstamp_entry ptp_tx_tstamp_entries[1];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(24, virtchnl2_ptp_tx_tstamp);
+
+/* VIRTCHNL2_OP_GET_PTP_CAPS
+ * PV/VF sends this message to negotiate PTP capabilities. CP updates bitmap
+ * with supported features and fulfills appropriate structures.
+ */
+struct virtchnl2_get_ptp_caps {
+	/* PTP capability bitmap */
+	/* see VIRTCHNL2_PTP_CAPS definitions */
+	__le32 ptp_caps;
+	u8 pad[4];
+
+	struct virtchnl2_ptp_legacy_cross_time_reg legacy_cross_time_reg;
+	struct virtchnl2_ptp_ptm_cross_time_reg ptm_cross_time_reg;
+	struct virtchnl2_ptp_device_clock_control device_clock_control;
+	struct virtchnl2_ptp_tx_tstamp tx_tstamp;
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(88, virtchnl2_get_ptp_caps);
+
+/* Structure that describes tx tstamp values, index and validity */
+struct virtchnl2_ptp_tx_tstamp_latch {
+	__le32 tstamp_h;
+	__le32 tstamp_l;
+	u8 index;
+	u8 valid;
+	u8 pad[6];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(16, virtchnl2_ptp_tx_tstamp_latch);
+
+/* VIRTCHNL2_OP_GET_PTP_TX_TSTAMP_LATCHES
+ * PF/VF sends this message to receive a specified number of timestamps
+ * entries.
+ */
+struct virtchnl2_ptp_tx_tstamp_latches {
+	__le16 num_latches;
+	/* latch size expressed in bits */
+	__le16 latch_size;
+	u8 pad[4];
+	struct virtchnl2_ptp_tx_tstamp_latch tstamp_latches[1];
+};
+
+VIRTCHNL2_CHECK_STRUCT_LEN(24, virtchnl2_ptp_tx_tstamp_latches);
 
 static inline const char *virtchnl2_op_str(__le32 v_opcode)
 {
@@ -1376,14 +1586,20 @@ static inline const char *virtchnl2_op_str(__le32 v_opcode)
 		return "VIRTCHNL2_OP_EVENT";
 	case VIRTCHNL2_OP_RESET_VF:
 		return "VIRTCHNL2_OP_RESET_VF";
-	case VIRTCHNL2_OP_CREATE_ADI:
-		return "VIRTCHNL2_OP_CREATE_ADI";
-	case VIRTCHNL2_OP_DESTROY_ADI:
-		return "VIRTCHNL2_OP_DESTROY_ADI";
+	case VIRTCHNL2_OP_NON_FLEX_CREATE_ADI:
+		return "VIRTCHNL2_OP_NON_FLEX_CREATE_ADI";
+	case VIRTCHNL2_OP_NON_FLEX_DESTROY_ADI:
+		return "VIRTCHNL2_OP_NON_FLEX_DESTROY_ADI";
 	case VIRTCHNL2_OP_ADD_QUEUE_GROUPS:
 		return "VIRTCHNL2_OP_ADD_QUEUE_GROUPS";
 	case VIRTCHNL2_OP_DEL_QUEUE_GROUPS:
 		return "VIRTCHNL2_OP_DEL_QUEUE_GROUPS";
+	case VIRTCHNL2_OP_GET_PORT_STATS:
+		return "VIRTCHNL2_OP_GET_PORT_STATS";
+	case VIRTCHNL2_OP_GET_PTP_CAPS:
+		return "VIRTCHNL2_OP_GET_PTP_CAPS";
+	case VIRTCHNL2_OP_GET_PTP_TX_TSTAMP_LATCHES:
+		return "VIRTCHNL2_OP_GET_PTP_TX_TSTAMP_LATCHES";
 	default:
 		return "Unsupported (update virtchnl2.h)";
 	}
@@ -1428,11 +1644,11 @@ virtchnl2_vc_validate_vf_msg(__rte_unused struct virtchnl2_version_info *ver, u3
 				      sizeof(struct virtchnl2_queue_reg_chunk);
 		}
 		break;
-	case VIRTCHNL2_OP_CREATE_ADI:
-		valid_len = sizeof(struct virtchnl2_create_adi);
+	case VIRTCHNL2_OP_NON_FLEX_CREATE_ADI:
+		valid_len = sizeof(struct virtchnl2_non_flex_create_adi);
 		if (msglen >= valid_len) {
-			struct virtchnl2_create_adi *cadi =
-				(struct virtchnl2_create_adi *)msg;
+			struct virtchnl2_non_flex_create_adi *cadi =
+				(struct virtchnl2_non_flex_create_adi *)msg;
 
 			if (cadi->chunks.num_chunks == 0) {
 				/* zero chunks is allowed as input */
@@ -1449,8 +1665,8 @@ virtchnl2_vc_validate_vf_msg(__rte_unused struct virtchnl2_version_info *ver, u3
 				      sizeof(struct virtchnl2_vector_chunk);
 		}
 		break;
-	case VIRTCHNL2_OP_DESTROY_ADI:
-		valid_len = sizeof(struct virtchnl2_destroy_adi);
+	case VIRTCHNL2_OP_NON_FLEX_DESTROY_ADI:
+		valid_len = sizeof(struct virtchnl2_non_flex_destroy_adi);
 		break;
 	case VIRTCHNL2_OP_DESTROY_VPORT:
 	case VIRTCHNL2_OP_ENABLE_VPORT:
@@ -1648,7 +1864,42 @@ virtchnl2_vc_validate_vf_msg(__rte_unused struct virtchnl2_version_info *ver, u3
 	case VIRTCHNL2_OP_GET_STATS:
 		valid_len = sizeof(struct virtchnl2_vport_stats);
 		break;
+	case VIRTCHNL2_OP_GET_PORT_STATS:
+		valid_len = sizeof(struct virtchnl2_port_stats);
+		break;
 	case VIRTCHNL2_OP_RESET_VF:
+		break;
+	case VIRTCHNL2_OP_GET_PTP_CAPS:
+		valid_len = sizeof(struct virtchnl2_get_ptp_caps);
+
+		if (msglen >= valid_len) {
+			struct virtchnl2_get_ptp_caps *ptp_caps =
+			(struct virtchnl2_get_ptp_caps *)msg;
+
+			if (ptp_caps->tx_tstamp.num_latches == 0) {
+				err_msg_format = true;
+				break;
+			}
+
+			valid_len += ((ptp_caps->tx_tstamp.num_latches - 1) *
+				      sizeof(struct virtchnl2_ptp_tx_tstamp_entry));
+		}
+		break;
+	case VIRTCHNL2_OP_GET_PTP_TX_TSTAMP_LATCHES:
+		valid_len = sizeof(struct virtchnl2_ptp_tx_tstamp_latches);
+
+		if (msglen >= valid_len) {
+			struct virtchnl2_ptp_tx_tstamp_latches *tx_tstamp_latches =
+			(struct virtchnl2_ptp_tx_tstamp_latches *)msg;
+
+			if (tx_tstamp_latches->num_latches == 0) {
+				err_msg_format = true;
+				break;
+			}
+
+			valid_len += ((tx_tstamp_latches->num_latches - 1) *
+				      sizeof(struct virtchnl2_ptp_tx_tstamp_latch));
+		}
 		break;
 	/* These are always errors coming from the VF. */
 	case VIRTCHNL2_OP_EVENT:

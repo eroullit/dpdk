@@ -1197,8 +1197,8 @@ cnxk_nix_configure(struct rte_eth_dev *eth_dev)
 	char ea_fmt[RTE_ETHER_ADDR_FMT_SIZE];
 	struct roc_nix_fc_cfg fc_cfg = {0};
 	struct roc_nix *nix = &dev->nix;
+	uint16_t nb_rxq, nb_txq, nb_cq;
 	struct rte_ether_addr *ea;
-	uint16_t nb_rxq, nb_txq;
 	uint64_t rx_cfg;
 	void *qs;
 	int rc;
@@ -1301,6 +1301,15 @@ cnxk_nix_configure(struct rte_eth_dev *eth_dev)
 		goto fail_configure;
 	}
 
+	if (!roc_nix_is_vf_or_sdp(nix)) {
+		/* Sync same MAC address to CGX/RPM table */
+		rc = roc_nix_mac_addr_set(nix, dev->mac_addr);
+		if (rc) {
+			plt_err("Failed to set mac addr, rc=%d", rc);
+			goto fail_configure;
+		}
+	}
+
 	/* Check if ptp is enable in PF owning this VF*/
 	if (!roc_nix_is_pf(nix) && (!roc_nix_is_sdp(nix)))
 		dev->ptp_en = roc_nix_ptp_is_enable(nix);
@@ -1309,6 +1318,9 @@ cnxk_nix_configure(struct rte_eth_dev *eth_dev)
 
 	nb_rxq = data->nb_rx_queues;
 	nb_txq = data->nb_tx_queues;
+	nb_cq = nb_rxq;
+	if (nix->tx_compl_ena)
+		nb_cq += nb_txq;
 	rc = -ENOMEM;
 	if (nb_rxq) {
 		/* Allocate memory for roc rq's and cq's */
@@ -1318,13 +1330,6 @@ cnxk_nix_configure(struct rte_eth_dev *eth_dev)
 			goto free_nix_lf;
 		}
 		dev->rqs = qs;
-
-		qs = plt_zmalloc(sizeof(struct roc_nix_cq) * nb_rxq, 0);
-		if (!qs) {
-			plt_err("Failed to alloc cqs");
-			goto free_nix_lf;
-		}
-		dev->cqs = qs;
 	}
 
 	if (nb_txq) {
@@ -1335,15 +1340,15 @@ cnxk_nix_configure(struct rte_eth_dev *eth_dev)
 			goto free_nix_lf;
 		}
 		dev->sqs = qs;
+	}
 
-		if (nix->tx_compl_ena) {
-			qs = plt_zmalloc(sizeof(struct roc_nix_cq) * nb_txq, 0);
-			if (!qs) {
-				plt_err("Failed to alloc cqs");
-				goto free_nix_lf;
-			}
-			dev->cqs = qs;
+	if (nb_cq) {
+		qs = plt_zmalloc(sizeof(struct roc_nix_cq) * nb_cq, 0);
+		if (!qs) {
+			plt_err("Failed to alloc cqs");
+			goto free_nix_lf;
 		}
+		dev->cqs = qs;
 	}
 
 	/* Re-enable NIX LF error interrupts */
@@ -1925,6 +1930,13 @@ cnxk_eth_dev_init(struct rte_eth_dev *eth_dev)
 		goto dev_fini;
 	}
 
+	dev->dmac_idx_map = rte_zmalloc("dmac_idx_map", max_entries * sizeof(int), 0);
+	if (dev->dmac_idx_map == NULL) {
+		plt_err("Failed to allocate memory for dmac idx map");
+		rc = -ENOMEM;
+		goto free_mac_addrs;
+	}
+
 	dev->max_mac_entries = max_entries;
 	dev->dmac_filter_count = 1;
 
@@ -1937,15 +1949,6 @@ cnxk_eth_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* Update the mac address */
 	memcpy(eth_dev->data->mac_addrs, dev->mac_addr, RTE_ETHER_ADDR_LEN);
-
-	if (!roc_nix_is_vf_or_sdp(nix)) {
-		/* Sync same MAC address to CGX/RPM table */
-		rc = roc_nix_mac_addr_set(nix, dev->mac_addr);
-		if (rc) {
-			plt_err("Failed to set mac addr, rc=%d", rc);
-			goto free_mac_addrs;
-		}
-	}
 
 	/* Union of all capabilities supported by CNXK.
 	 * Platform specific capabilities will be
@@ -1982,6 +1985,7 @@ cnxk_eth_dev_init(struct rte_eth_dev *eth_dev)
 
 free_mac_addrs:
 	rte_free(eth_dev->data->mac_addrs);
+	rte_free(dev->dmac_idx_map);
 dev_fini:
 	roc_nix_dev_fini(nix);
 error:
@@ -2098,6 +2102,9 @@ cnxk_eth_dev_uninit(struct rte_eth_dev *eth_dev, bool reset)
 	rc = roc_nix_lf_free(nix);
 	if (rc)
 		plt_err("Failed to free nix lf, rc=%d", rc);
+
+	rte_free(dev->dmac_idx_map);
+	dev->dmac_idx_map = NULL;
 
 	rte_free(eth_dev->data->mac_addrs);
 	eth_dev->data->mac_addrs = NULL;

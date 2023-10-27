@@ -903,6 +903,12 @@ given below.
 |RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_LOOPBACK                        |
 | Set if a device supports loopback access to HARQ internal memory   |
 +--------------------------------------------------------------------+
+|RTE_BBDEV_LDPC_INTERNAL_HARQ_MEMORY_FILLERS                         |
+| Set if a device includes LLR filler bits in HARQ circular buffer   |
++--------------------------------------------------------------------+
+|RTE_BBDEV_LDPC_HARQ_4BIT_COMPRESSION                                |
+|Set if a device supports input/output 4 bits HARQ compression       |
++--------------------------------------------------------------------+
 
 The structure passed for each LDPC decode operation is given below,
 with the operation flags forming a bitmask in the ``op_flags`` field.
@@ -1111,6 +1117,18 @@ with the operation flags forming a bitmask in the ``op_flags`` field.
 |RTE_BBDEV_FFT_FP16_OUTPUT                                           |
 | Set if the output data shall use FP16 format instead of INT16      |
 +--------------------------------------------------------------------+
+|RTE_BBDEV_FFT_TIMING_OFFSET_PER_CS                                  |
+| Set if device supports adjusting time offset per CS                |
++--------------------------------------------------------------------+
+|RTE_BBDEV_FFT_TIMING_ERROR                                          |
+| Set if device supports correcting for timing error                 |
++--------------------------------------------------------------------+
+|RTE_BBDEV_FFT_DEWINDOWING                                           |
+| Set if enabling the option FFT Dewindowing in Frequency domain     |
++--------------------------------------------------------------------+
+|RTE_BBDEV_FFT_FREQ_RESAMPLING                                       |
+| Set if device supports the optional frequency resampling           |
++--------------------------------------------------------------------+
 
 The FFT parameters are set out in the table below.
 
@@ -1120,6 +1138,8 @@ The FFT parameters are set out in the table below.
 |base_input               |input data                                                    |
 +-------------------------+--------------------------------------------------------------+
 |base_output              |output data                                                   |
++-------------------------+--------------------------------------------------------------+
+|dewindowing_input        |optional frequency domain dewindowing input data              |
 +-------------------------+--------------------------------------------------------------+
 |power_meas_output        |optional output data with power measurement on DFT output     |
 +-------------------------+--------------------------------------------------------------+
@@ -1155,6 +1175,16 @@ The FFT parameters are set out in the table below.
 +-------------------------+--------------------------------------------------------------+
 |fp16_exp_adjust          |value added to FP16 exponent at conversion from INT16         |
 +-------------------------+--------------------------------------------------------------+
+|freq_resample_mode       |frequency ressampling mode (0:transparent, 1-2: resample)     |
++-------------------------+--------------------------------------------------------------+
+| output_depadded_size    |output depadded size prior to frequency resampling            |
++-------------------------+--------------------------------------------------------------+
+|cs_theta_0               |timing error correction initial phase                         |
++-------------------------+--------------------------------------------------------------+
+|cs_theta_d               |timing error correction phase increment                       |
++-------------------------+--------------------------------------------------------------+
+|time_offset              |time offset per CS of time domain samples                     |
++-------------------------+--------------------------------------------------------------+
 
 The mbuf input ``base_input`` is mandatory for all bbdev PMDs and
 is the incoming data for the processing. Its size may not fit into an actual mbuf,
@@ -1164,6 +1194,59 @@ Each point is a complex number of 32bits :
 either as 2 INT16 or as 2 FP16 based when the option supported.
 The data layout is based on contiguous concatenation of output data
 first by cyclic shift then by antenna.
+
+BBDEV MLD-TS Operation
+~~~~~~~~~~~~~~~~~~~~~~
+
+This operation allows to run the Tree Search (TS) portion of a Maximum Likelihood processing (MLD).
+
+This alternate equalization option accelerates the exploration of the best combination of
+transmitted symbols across layers minimizing the Euclidean distance between the received and
+reconstructed signal, then generates the LLRs to be used by the LDPC Decoder.
+The input is the results of the Q R decomposition: Q^Hy signal and R matrix.
+
+The structure passed for each MLD-TS operation is given below,
+with the operation flags forming a bitmask in the ``op_flags`` field.
+
+  **NOTE:** The actual operation flags that may be used with a specific
+  bbdev PMD are dependent on the driver capabilities as reported via
+  ``rte_bbdev_info_get()``, and may be a subset of those below.
+
+.. literalinclude:: ../../../lib/bbdev/rte_bbdev_op.h
+   :language: c
+   :start-after: Structure rte_bbdev_op_mldts 8<
+   :end-before: >8 End of structure rte_bbdev_op_mldts.
+
++--------------------------------------------------------------------+
+|Description of MLD-TS capability flags                              |
++====================================================================+
+|RTE_BBDEV_MLDTS_REP                                                 |
+| Set if the option to use repeated data from R channel is supported |
++--------------------------------------------------------------------+
+
+The MLD-TS parameters are set out in the table below.
+
++-------------------------+--------------------------------------------------------------+
+|Parameter                |Description                                                   |
++=========================+==============================================================+
+|qhy_input                |input data qHy                                                |
++-------------------------+--------------------------------------------------------------+
+|r_input                  |input data R triangular matrix                                |
++-------------------------+--------------------------------------------------------------+
+|output                   |output data (LLRs)                                            |
++-------------------------+--------------------------------------------------------------+
+|op_flags                 |bitmask of all active operation capabilities                  |
++-------------------------+--------------------------------------------------------------+
+|num_rbs                  |number of Resource Blocks                                     |
++-------------------------+--------------------------------------------------------------+
+|num_layers               |number of overlapping layers                                  |
++-------------------------+--------------------------------------------------------------+
+|q_m                      |array of modulation order for each layer                      |
++-------------------------+--------------------------------------------------------------+
+|r_rep                    |optional row repetition for the R matrix (subcarriers)        |
++-------------------------+--------------------------------------------------------------+
+|c_rep                    |optional column repetition for the R matrix (symbols)         |
++-------------------------+--------------------------------------------------------------+
 
 Sample code
 -----------

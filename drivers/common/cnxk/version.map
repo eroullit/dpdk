@@ -7,6 +7,7 @@ INTERNAL {
 	cnxk_ipsec_outb_roundup_byte;
 	cnxk_logtype_base;
 	cnxk_logtype_cpt;
+	cnxk_logtype_dpi;
 	cnxk_logtype_mbox;
 	cnxk_logtype_ml;
 	cnxk_logtype_nix;
@@ -170,6 +171,7 @@ INTERNAL {
 	roc_mcs_rx_sc_sa_map_write;
 	roc_mcs_sa_policy_read;
 	roc_mcs_sa_policy_write;
+	roc_mcs_sa_port_map_update;
 	roc_mcs_sc_stats_get;
 	roc_mcs_secy_policy_read;
 	roc_mcs_secy_policy_write;
@@ -214,6 +216,7 @@ INTERNAL {
 	roc_nix_get_base_chan;
 	roc_nix_get_pf;
 	roc_nix_get_pf_func;
+	roc_nix_get_rx_chan_cnt;
 	roc_nix_get_vf;
 	roc_nix_get_vwqe_interval;
 	roc_nix_inl_cb_register;
@@ -379,6 +382,7 @@ INTERNAL {
 	roc_nix_tm_node_suspend_resume;
 	roc_nix_tm_prealloc_res;
 	roc_nix_tm_pfc_prepare_tree;
+	roc_nix_tm_pfc_rlimit_sq;
 	roc_nix_tm_prepare_rate_limited_tree;
 	roc_nix_tm_rlimit_sq;
 	roc_nix_tm_root_has_sp;
@@ -425,6 +429,7 @@ INTERNAL {
 	roc_npa_pool_op_range_set;
 	roc_npa_pool_range_update_check;
 	roc_npa_zero_aura_handle;
+	roc_npc_aged_flow_ctx_get;
 	roc_npc_fini;
 	roc_npc_flow_create;
 	roc_npc_flow_destroy;
@@ -457,8 +462,10 @@ INTERNAL {
 	roc_npc_validate_portid_action;
 	roc_ot_ipsec_inb_sa_init;
 	roc_ot_ipsec_outb_sa_init;
+	roc_plt_control_lmt_id_get;
 	roc_plt_init;
 	roc_plt_init_cb_register;
+	roc_plt_lmt_validate;
 	roc_sso_dev_fini;
 	roc_sso_dev_init;
 	roc_sso_dump;
@@ -475,6 +482,7 @@ INTERNAL {
 	roc_sso_hws_base_get;
 	roc_sso_hws_link;
 	roc_sso_hws_stats_get;
+	roc_sso_hws_gwc_invalidate;
 	roc_sso_hws_unlink;
 	roc_sso_ns_to_gw;
 	roc_sso_rsrc_fini;

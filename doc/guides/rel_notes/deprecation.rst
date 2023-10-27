@@ -17,9 +17,12 @@ Other API and ABI deprecation notices are to be posted below.
 Deprecation Notices
 -------------------
 
-* build: Enabling deprecated libraries
-  won't be possible anymore through the use of the ``disable_libs`` build option.
-  A new build option for deprecated libraries will be introduced instead.
+* build: The ``enable_kmods`` option is deprecated and will be removed in a future release.
+  Setting/clearing the option has no impact on the build.
+  Instead, kernel modules will be always built for OS's where out-of-tree kernel modules
+  are required for DPDK operation.
+  Currently, this means that modules will only be built for FreeBSD.
+  No modules are shipped with DPDK for either Linux or Windows.
 
 * kvargs: The function ``rte_kvargs_process`` will get a new parameter
   for returning key match count. It will ease handling of no-match case.
@@ -32,14 +35,6 @@ Deprecation Notices
   used by telemetry callbacks for adding unsigned integer values to be returned to the user,
   are renamed to ``rte_tel_data_add_array_uint`` and ``rte_tel_data_add_dict_uint`` respectively.
   As such, the old function names are deprecated and will be removed in a future release.
-
-* eal: The functions ``rte_thread_setname`` and ``rte_ctrl_thread_create``
-  are planned to be deprecated starting with the 23.07 release, subject to
-  the replacement API rte_thread_set_name and rte_thread_create_control being
-  marked as stable, and planned to be removed by the 23.11 release.
-
-* eal: ``RTE_CPUFLAG_NUMFLAGS`` will be removed in DPDK 23.11 release.
-  This is to allow new CPU features to be added without ABI breakage.
 
 * rte_atomicNN_xxx: These APIs do not take memory order parameter. This does
   not allow for writing optimized code for all the CPU architectures supported
@@ -124,44 +119,10 @@ Deprecation Notices
   The legacy actions should be removed
   once ``MODIFY_FIELD`` alternative is implemented in drivers.
 
-* bonding: The macro ``RTE_ETH_DEV_BONDED_SLAVE`` will be
-  deprecated in DPDK 23.07, and removed in DPDK 23.11.
-  The relevant code can be updated using ``RTE_ETH_DEV_BONDING_MEMBER``.
-  The data structure ``struct rte_eth_bond_8023ad_slave_info`` will be
-  renamed to ``struct rte_eth_bond_8023ad_member_info`` in DPDK 23.11.
-  The following functions will be removed in DPDK 23.11.
-  The old functions:
-  ``rte_eth_bond_8023ad_slave_info``,
-  ``rte_eth_bond_active_slaves_get``,
-  ``rte_eth_bond_slave_add``,
-  ``rte_eth_bond_slave_remove``, and
-  ``rte_eth_bond_slaves_get``
-  will be replaced by:
-  ``rte_eth_bond_8023ad_member_info``,
-  ``rte_eth_bond_active_members_get``,
-  ``rte_eth_bond_member_add``,
-  ``rte_eth_bond_member_remove``, and
-  ``rte_eth_bond_members_get``.
-
 * cryptodev: The function ``rte_cryptodev_cb_fn`` will be updated
   to have another parameter ``qp_id`` to return the queue pair ID
   which got error interrupt to the application,
   so that application can reset that particular queue pair.
-
-* cryptodev: The arrays of algorithm strings ``rte_crypto_cipher_algorithm_strings``,
-  ``rte_crypto_auth_algorithm_strings``, ``rte_crypto_aead_algorithm_strings`` and
-  ``rte_crypto_asym_xform_strings`` are deprecated and will be removed in DPDK 23.11.
-  Application can use the new APIs ``rte_cryptodev_get_cipher_algo_string``,
-  ``rte_cryptodev_get_auth_algo_string``, ``rte_cryptodev_get_aead_algo_string`` and
-  ``rte_cryptodev_asym_get_xform_string`` respectively.
-
-* security: Hide structures ``rte_security_ops`` and ``rte_security_ctx``
-  as these are internal to DPDK library and drivers.
-
-* security: New SA option ``ingress_oop`` would be added in structure
-  ``rte_security_ipsec_sa_options`` to support out of place processing
-  for inline inbound SA from DPDK 23.11. ``reserved_opts`` field in the
-  same struct would be removed as discussed in techboard meeting.
 
 * eventdev: The single-event (non-burst) enqueue and dequeue operations,
   used by static inline burst enqueue and dequeue functions in ``rte_eventdev.h``,

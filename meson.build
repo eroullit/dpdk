@@ -44,6 +44,7 @@ dpdk_drivers = []
 dpdk_extra_ldflags = []
 dpdk_libs_deprecated = []
 dpdk_apps_disabled = []
+dpdk_apps_enabled = []
 dpdk_libs_disabled = []
 dpdk_libs_enabled = []
 dpdk_drvs_disabled = []
@@ -94,10 +95,8 @@ install_subdir('examples',
         install_dir: get_option('datadir') + '/dpdk',
         exclude_files: ex_file_excludes)
 
-# build kernel modules if enabled
-if get_option('enable_kmods')
-    subdir('kernel')
-endif
+# build kernel modules
+subdir('kernel')
 
 # check header includes if requested
 if get_option('check_includes')
@@ -123,7 +122,7 @@ endif
 output_message = '\n=================\nApplications Enabled\n=================\n'
 output_message += '\napps:\n\t'
 output_count = 0
-foreach app:enabled_apps
+foreach app:dpdk_apps_enabled
     output_message += app + ', '
     output_count += 1
     if output_count == 8

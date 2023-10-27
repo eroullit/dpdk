@@ -183,13 +183,15 @@ typedef enum {
 struct roc_se_enc_context {
 	uint64_t iv_source : 1;
 	uint64_t aes_key : 2;
-	uint64_t rsvd_60 : 1;
+	uint64_t rsvd_59 : 1;
 	uint64_t enc_cipher : 4;
 	uint64_t auth_input_type : 1;
-	uint64_t rsvd_52_54 : 3;
+	uint64_t auth_key_src : 1;
+	uint64_t rsvd_50_51 : 2;
 	uint64_t hash_type : 4;
 	uint64_t mac_len : 8;
-	uint64_t rsvd_39_0 : 40;
+	uint64_t rsvd_16_39 : 24;
+	uint64_t hmac_key_sz : 16;
 	uint8_t encr_key[32];
 	uint8_t encr_iv[16];
 };
@@ -321,6 +323,8 @@ struct roc_se_ctx {
 	uint64_t ciph_then_auth : 1;
 	uint64_t auth_then_ciph : 1;
 	uint64_t eia2 : 1;
+	/* auth_iv_offset passed to PDCP_CHAIN opcode based on FVC bit */
+	uint8_t pdcp_iv_offset;
 	union cpt_inst_w4 template_w4;
 	/* Below fields are accessed by hardware */
 	struct se_ctx_s {
@@ -358,12 +362,13 @@ struct roc_se_fc_params {
 			struct roc_se_iov_ptr *dst_iov;
 		};
 	};
-	void *iv_buf;
-	void *auth_iv_buf;
+	const void *iv_buf;
+	const void *auth_iv_buf;
 	struct roc_se_ctx *ctx;
 	struct roc_se_buf_ptr meta_buf;
 	uint8_t cipher_iv_len;
 	uint8_t auth_iv_len;
+	uint8_t pdcp_iv_offset;
 
 	struct roc_se_buf_ptr aad_buf;
 	struct roc_se_buf_ptr mac_buf;

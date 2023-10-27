@@ -740,13 +740,13 @@ test_graph_model_mcore_dispatch_core_bind_unbind(void)
 	ret = rte_graph_worker_model_set(RTE_GRAPH_MODEL_MCORE_DISPATCH);
 	if (ret != 0) {
 		printf("Set graph mcore dispatch model failed\n");
-		ret = -1;
+		goto fail;
 	}
 
 	ret = rte_graph_model_mcore_dispatch_core_bind(cloned_graph_id, worker_lcore);
 	if (ret != 0) {
 		printf("bind graph %d to lcore %u failed\n", graph_id, worker_lcore);
-		ret = -1;
+		goto fail;
 	}
 
 	graph = rte_graph_lookup("worker0-cloned-test2");
@@ -755,6 +755,7 @@ test_graph_model_mcore_dispatch_core_bind_unbind(void)
 		printf("bind graph %s(id:%d) with lcore %u failed\n",
 		       graph->name, graph->id, worker_lcore);
 		ret = -1;
+		goto fail;
 	}
 
 	rte_graph_model_mcore_dispatch_core_unbind(cloned_graph_id);
@@ -764,6 +765,7 @@ test_graph_model_mcore_dispatch_core_bind_unbind(void)
 		ret = -1;
 	}
 
+fail:
 	rte_graph_destroy(cloned_graph_id);
 
 	return ret;
@@ -781,7 +783,7 @@ test_graph_worker_model_set_get(void)
 	ret = rte_graph_worker_model_set(RTE_GRAPH_MODEL_MCORE_DISPATCH);
 	if (ret != 0) {
 		printf("Set graph mcore dispatch model failed\n");
-		ret = -1;
+		goto fail;
 	}
 
 	graph = rte_graph_lookup("worker0-cloned-test3");
@@ -790,9 +792,10 @@ test_graph_worker_model_set_get(void)
 		ret = -1;
 	}
 
+fail:
 	rte_graph_destroy(cloned_graph_id);
 
-	return 0;
+	return ret;
 }
 
 static int
@@ -989,7 +992,7 @@ graph_autotest_fn(void)
 	return unit_test_suite_runner(&graph_testsuite);
 }
 
-REGISTER_TEST_COMMAND(graph_autotest, graph_autotest_fn);
+REGISTER_FAST_TEST(graph_autotest, true, true, graph_autotest_fn);
 
 static int
 test_node_list_dump(void)
@@ -1001,4 +1004,4 @@ test_node_list_dump(void)
 
 #endif /* !RTE_EXEC_ENV_WINDOWS */
 
-REGISTER_TEST_COMMAND(node_list_dump, test_node_list_dump);
+REGISTER_FAST_TEST(node_list_dump, true, true, test_node_list_dump);

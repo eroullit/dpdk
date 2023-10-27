@@ -3,8 +3,8 @@
  * All rights reserved.
  */
 
-#ifndef _NFP_FLOWER_H_
-#define _NFP_FLOWER_H_
+#ifndef __NFP_FLOWER_H__
+#define __NFP_FLOWER_H__
 
 #include "../nfp_common.h"
 
@@ -34,7 +34,9 @@
 #define MAX_FLOWER_PHYPORTS 8
 #define MAX_FLOWER_VFS 64
 
+/* Forward declaration */
 struct nfp_app_fw_flower;
+struct nfp_flower_representor;
 
 /* The function pointers for different NFD version */
 struct nfp_flower_nfd_func {
@@ -51,49 +53,49 @@ struct nfp_flower_nfd_func {
 
 /* The flower application's private structure */
 struct nfp_app_fw_flower {
-	/* switch domain for this app */
+	/** Switch domain for this app */
 	uint16_t switch_domain_id;
 
-	/* Number of VF representors */
+	/** Number of VF representors */
 	uint8_t num_vf_reprs;
 
-	/* Number of phyport representors */
+	/** Number of phyport representors */
 	uint8_t num_phyport_reprs;
 
-	/* Pointer to the PF vNIC */
+	/** Pointer to the PF vNIC */
 	struct nfp_net_hw *pf_hw;
 
-	/* Pointer to a mempool for the ctrlvNIC */
+	/** Pointer to a mempool for the Ctrl vNIC */
 	struct rte_mempool *ctrl_pktmbuf_pool;
 
-	/* Pointer to the ctrl vNIC */
+	/** Pointer to the ctrl vNIC */
 	struct nfp_net_hw *ctrl_hw;
 
-	/* Ctrl vNIC Rx counter */
+	/** Ctrl vNIC Rx counter */
 	uint64_t ctrl_vnic_rx_count;
 
-	/* Ctrl vNIC Tx counter */
+	/** Ctrl vNIC Tx counter */
 	uint64_t ctrl_vnic_tx_count;
 
-	/* Array of phyport representors */
+	/** Array of phyport representors */
 	struct nfp_flower_representor *phy_reprs[MAX_FLOWER_PHYPORTS];
 
-	/* Array of VF representors */
+	/** Array of VF representors */
 	struct nfp_flower_representor *vf_reprs[MAX_FLOWER_VFS];
 
-	/* PF representor */
+	/** PF representor */
 	struct nfp_flower_representor *pf_repr;
 
-	/* service id of ctrl vnic service */
+	/** Service id of Ctrl vNIC service */
 	uint32_t ctrl_vnic_id;
 
-	/* Flower extra features */
+	/** Flower extra features */
 	uint64_t ext_features;
 
 	struct nfp_flow_priv *flow_priv;
 	struct nfp_mtr_priv *mtr_priv;
 
-	/* Function pointers for different NFD version */
+	/** Function pointers for different NFD version */
 	struct nfp_flower_nfd_func nfd_func;
 };
 
@@ -103,7 +105,8 @@ nfp_flower_support_decap_v2(const struct nfp_app_fw_flower *app_fw_flower)
 	return app_fw_flower->ext_features & NFP_FL_FEATS_DECAP_V2;
 }
 
-int nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev);
+int nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev,
+		const struct nfp_dev_info *dev_info);
 int nfp_secondary_init_app_fw_flower(struct nfp_cpp *cpp);
 bool nfp_flower_pf_dispatch_pkts(struct nfp_net_hw *hw,
 		struct rte_mbuf *mbuf,
@@ -115,4 +118,4 @@ int nfp_flower_pf_stop(struct rte_eth_dev *dev);
 uint32_t nfp_flower_pkt_add_metadata(struct nfp_app_fw_flower *app_fw_flower,
 		struct rte_mbuf *mbuf, uint32_t port_id);
 
-#endif /* _NFP_FLOWER_H_ */
+#endif /* __NFP_FLOWER_H__ */

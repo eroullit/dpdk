@@ -1280,7 +1280,7 @@ bnxt_receive_function(struct rte_eth_dev *eth_dev)
 	if (bp->ieee_1588)
 		goto use_scalar_rx;
 
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
+#if defined(RTE_ARCH_X86)
 	if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
 	    rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1) {
 		PMD_DRV_LOG(INFO,
@@ -1332,7 +1332,7 @@ bnxt_transmit_function(struct rte_eth_dev *eth_dev)
 	    BNXT_TRUFLOW_EN(bp) || bp->ieee_1588)
 		goto use_scalar_tx;
 
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
+#if defined(RTE_ARCH_X86)
 	if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
 	    rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1) {
 		PMD_DRV_LOG(INFO,
@@ -1507,6 +1507,7 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct rte_eth_link link;
+	uint16_t i;
 	int ret;
 
 	eth_dev->data->dev_started = 0;
@@ -1566,6 +1567,11 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 		bp->flow_stat->flow_count = 0;
 
 	eth_dev->data->scattered_rx = 0;
+
+	for (i = 0; i < eth_dev->data->nb_rx_queues; i++)
+		eth_dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
+	for (i = 0; i < eth_dev->data->nb_tx_queues; i++)
+		eth_dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	return 0;
 }
@@ -3018,8 +3024,6 @@ static const struct {
 	{bnxt_recv_pkts,		"Scalar"},
 #if defined(RTE_ARCH_X86)
 	{bnxt_recv_pkts_vec,		"Vector SSE"},
-#endif
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
 	{bnxt_recv_pkts_vec_avx2,	"Vector AVX2"},
 #endif
 #if defined(RTE_ARCH_ARM64)
@@ -3052,8 +3056,6 @@ static const struct {
 	{bnxt_xmit_pkts,		"Scalar"},
 #if defined(RTE_ARCH_X86)
 	{bnxt_xmit_pkts_vec,		"Vector SSE"},
-#endif
-#if defined(RTE_ARCH_X86) && defined(CC_AVX2_SUPPORT)
 	{bnxt_xmit_pkts_vec_avx2,	"Vector AVX2"},
 #endif
 #if defined(RTE_ARCH_ARM64)

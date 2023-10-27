@@ -572,7 +572,6 @@ tx_desc_ol_flags_to_ptype(uint64_t oflags)
 		ptype |= RTE_PTYPE_L2_ETHER |
 			 RTE_PTYPE_L3_IPV4 |
 			 RTE_PTYPE_TUNNEL_GRE;
-		ptype |= RTE_PTYPE_INNER_L2_ETHER;
 		break;
 	case RTE_MBUF_F_TX_TUNNEL_GENEVE:
 		ptype |= RTE_PTYPE_L2_ETHER |
@@ -705,22 +704,24 @@ txgbe_get_tun_len(struct rte_mbuf *mbuf)
 static inline uint8_t
 txgbe_parse_tun_ptid(struct rte_mbuf *tx_pkt)
 {
-	uint64_t l2_none, l2_mac, l2_mac_vlan;
+	uint64_t l2_vxlan, l2_vxlan_mac, l2_vxlan_mac_vlan;
+	uint64_t l2_gre, l2_gre_mac, l2_gre_mac_vlan;
 	uint8_t ptid = 0;
 
-	if ((tx_pkt->ol_flags & (RTE_MBUF_F_TX_TUNNEL_VXLAN |
-				RTE_MBUF_F_TX_TUNNEL_VXLAN_GPE)) == 0)
-		return ptid;
+	l2_vxlan = sizeof(struct txgbe_udphdr) + sizeof(struct txgbe_vxlanhdr);
+	l2_vxlan_mac = l2_vxlan + sizeof(struct rte_ether_hdr);
+	l2_vxlan_mac_vlan = l2_vxlan_mac + sizeof(struct rte_vlan_hdr);
 
-	l2_none = sizeof(struct txgbe_udphdr) + sizeof(struct txgbe_vxlanhdr);
-	l2_mac = l2_none + sizeof(struct rte_ether_hdr);
-	l2_mac_vlan = l2_mac + sizeof(struct rte_vlan_hdr);
+	l2_gre = sizeof(struct txgbe_grehdr);
+	l2_gre_mac = l2_gre + sizeof(struct rte_ether_hdr);
+	l2_gre_mac_vlan = l2_gre_mac + sizeof(struct rte_vlan_hdr);
 
-	if (tx_pkt->l2_len == l2_none)
+	if (tx_pkt->l2_len == l2_vxlan || tx_pkt->l2_len == l2_gre)
 		ptid = TXGBE_PTID_TUN_EIG;
-	else if (tx_pkt->l2_len == l2_mac)
+	else if (tx_pkt->l2_len == l2_vxlan_mac || tx_pkt->l2_len == l2_gre_mac)
 		ptid = TXGBE_PTID_TUN_EIGM;
-	else if (tx_pkt->l2_len == l2_mac_vlan)
+	else if (tx_pkt->l2_len == l2_vxlan_mac_vlan ||
+			tx_pkt->l2_len == l2_gre_mac_vlan)
 		ptid = TXGBE_PTID_TUN_EIGMV;
 
 	return ptid;
@@ -2805,6 +2806,8 @@ txgbe_dev_clear_queues(struct rte_eth_dev *dev)
 			txq->ops->release_mbufs(txq);
 			txq->ops->reset(txq);
 		}
+
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 	}
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
@@ -2814,6 +2817,8 @@ txgbe_dev_clear_queues(struct rte_eth_dev *dev)
 			txgbe_rx_queue_release_mbufs(rxq);
 			txgbe_reset_rx_queue(adapter, rxq);
 		}
+
+		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 	}
 }
 
@@ -5004,6 +5009,8 @@ txgbevf_dev_rxtx_start(struct rte_eth_dev *dev)
 		} while (--poll_ms && !(txdctl & TXGBE_TXCFG_ENA));
 		if (!poll_ms)
 			PMD_INIT_LOG(ERR, "Could not enable Tx Queue %d", i);
+		else
+			dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
 	}
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		rxq = dev->data->rx_queues[i];
@@ -5018,6 +5025,8 @@ txgbevf_dev_rxtx_start(struct rte_eth_dev *dev)
 		} while (--poll_ms && !(rxdctl & TXGBE_RXCFG_ENA));
 		if (!poll_ms)
 			PMD_INIT_LOG(ERR, "Could not enable Rx Queue %d", i);
+		else
+			dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
 		rte_wmb();
 		wr32(hw, TXGBE_RXWP(i), rxq->nb_rx_desc - 1);
 	}

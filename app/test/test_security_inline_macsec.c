@@ -136,7 +136,7 @@ init_packet(struct rte_mempool *mp, const uint8_t *data, unsigned int len)
 static int
 init_mempools(unsigned int nb_mbuf)
 {
-	struct rte_security_ctx *sec_ctx;
+	void *sec_ctx;
 	uint16_t nb_sess = 512;
 	uint32_t sess_sz;
 	char s[64];
@@ -482,7 +482,7 @@ test_macsec_post_process(struct rte_mbuf *m, const struct mcs_test_vector *td,
 }
 
 static void
-mcs_stats_dump(struct rte_security_ctx *ctx, enum mcs_op op,
+mcs_stats_dump(void *ctx, enum mcs_op op,
 	       void *rx_sess, void *tx_sess,
 	       uint8_t rx_sc_id, uint8_t tx_sc_id,
 	       uint16_t rx_sa_id[], uint16_t tx_sa_id[])
@@ -667,7 +667,7 @@ mcs_stats_dump(struct rte_security_ctx *ctx, enum mcs_op op,
 }
 
 static int
-mcs_stats_check(struct rte_security_ctx *ctx, enum mcs_op op,
+mcs_stats_check(void *ctx, enum mcs_op op,
 		const struct mcs_test_opts *opts,
 		const struct mcs_test_vector *td,
 		void *rx_sess, void *tx_sess,
@@ -838,9 +838,59 @@ test_macsec_event_callback(uint16_t port_id, enum rte_eth_event_type type,
 }
 
 static int
+test_macsec_sec_caps_verify(const struct mcs_test_opts *opts,
+		const struct rte_security_capability *sec_cap, bool silent)
+{
+	if (opts->mtu > sec_cap->macsec.mtu) {
+		if (!silent)
+			RTE_LOG(INFO, USER1, "MTU size is not supported\n");
+		return -ENOTSUP;
+	}
+
+	if (opts->replay_protect == 1 && sec_cap->macsec.anti_replay == 0) {
+		if (!silent)
+			RTE_LOG(INFO, USER1, "Anti replay is not supported\n");
+		return -ENOTSUP;
+	}
+
+	if (opts->replay_win_sz > sec_cap->macsec.replay_win_sz) {
+		if (!silent)
+			RTE_LOG(INFO, USER1, "Replay window size is not "
+					"supported\n");
+		return -ENOTSUP;
+	}
+
+	if (opts->rekey_en == 1 && sec_cap->macsec.re_key == 0) {
+		if (!silent)
+			RTE_LOG(INFO, USER1, "Rekey is not supported\n");
+		return -ENOTSUP;
+	}
+
+	if (opts->sectag_insert_mode == 0 &&
+			sec_cap->macsec.relative_sectag_insert == 0) {
+		if (!silent)
+			RTE_LOG(INFO, USER1, "Relative offset sectag insert "
+					"not supported\n");
+		return -ENOTSUP;
+	}
+
+	if (opts->sectag_insert_mode == 1 &&
+			sec_cap->macsec.fixed_sectag_insert == 0) {
+		if (!silent)
+			RTE_LOG(INFO, USER1, "Fixed offset sectag insert "
+					"not supported\n");
+		return -ENOTSUP;
+	}
+
+	return 0;
+}
+
+static int
 test_macsec(const struct mcs_test_vector *td[], enum mcs_op op, const struct mcs_test_opts *opts)
 {
 	uint16_t rx_sa_id[MCS_MAX_FLOWS][RTE_SECURITY_MACSEC_NUM_AN] = {{0}};
+	struct rte_security_capability_idx sec_cap_idx;
+	const struct rte_security_capability *sec_cap;
 	uint16_t tx_sa_id[MCS_MAX_FLOWS][2] = {{0}};
 	uint16_t rx_sc_id[MCS_MAX_FLOWS] = {0};
 	uint16_t tx_sc_id[MCS_MAX_FLOWS] = {0};
@@ -850,7 +900,7 @@ test_macsec(const struct mcs_test_vector *td[], enum mcs_op op, const struct mcs
 	struct rte_security_macsec_sa sa_conf = {0};
 	struct rte_security_macsec_sc sc_conf = {0};
 	struct mcs_err_vector err_vector = {0};
-	struct rte_security_ctx *ctx;
+	void *ctx;
 	int nb_rx = 0, nb_sent;
 	int i, j = 0, ret, id, an = 0;
 	uint8_t tci_off;
@@ -858,10 +908,34 @@ test_macsec(const struct mcs_test_vector *td[], enum mcs_op op, const struct mcs
 
 	memset(rx_pkts_burst, 0, sizeof(rx_pkts_burst[0]) * opts->nb_td);
 
-	ctx = (struct rte_security_ctx *)rte_eth_dev_get_sec_ctx(port_id);
+	ctx = rte_eth_dev_get_sec_ctx(port_id);
 	if (ctx == NULL) {
 		printf("Ethernet device doesn't support security features.\n");
 		return TEST_SKIPPED;
+	}
+
+	sec_cap_idx.action = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL;
+	sec_cap_idx.protocol = RTE_SECURITY_PROTOCOL_MACSEC;
+	sec_cap_idx.macsec.alg = td[0]->alg;
+	sec_cap = rte_security_capability_get(ctx, &sec_cap_idx);
+	if (sec_cap == NULL) {
+		printf("No capabilities registered\n");
+		return TEST_SKIPPED;
+	}
+
+	if (test_macsec_sec_caps_verify(opts, sec_cap, false) != 0)
+		return TEST_SKIPPED;
+
+	if (opts->rekey_en) {
+		/* Verify the rekey td */
+		sec_cap_idx.macsec.alg = opts->rekey_td->alg;
+		sec_cap = rte_security_capability_get(ctx, &sec_cap_idx);
+		if (sec_cap == NULL) {
+			printf("No capabilities registered\n");
+			return TEST_SKIPPED;
+		}
+		if (test_macsec_sec_caps_verify(opts, sec_cap, false) != 0)
+			return TEST_SKIPPED;
 	}
 
 	tci_off = (opts->sectag_insert_mode == 1) ? RTE_ETHER_HDR_LEN :
@@ -1181,11 +1255,12 @@ out:
 }
 
 static int
-test_inline_macsec_encap_all(const void *data __rte_unused)
+test_inline_macsec_encap_all(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1200,7 +1275,11 @@ test_inline_macsec_encap_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_ENCAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Cipher Auth Encryption case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nCipher Auth Encryption case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1209,17 +1288,19 @@ test_inline_macsec_encap_all(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_decap_all(const void *data __rte_unused)
+test_inline_macsec_decap_all(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1232,7 +1313,11 @@ test_inline_macsec_decap_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Cipher Auth Decryption case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nCipher Auth Decryption case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1241,17 +1326,19 @@ test_inline_macsec_decap_all(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_auth_only_all(const void *data __rte_unused)
+test_inline_macsec_auth_only_all(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1266,7 +1353,11 @@ test_inline_macsec_auth_only_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_integrity_vectors[i];
 		err = test_macsec(&cur_td, MCS_AUTH_ONLY, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Auth Generate case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nAuth Generate case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1275,17 +1366,19 @@ test_inline_macsec_auth_only_all(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_verify_only_all(const void *data __rte_unused)
+test_inline_macsec_verify_only_all(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1299,7 +1392,11 @@ test_inline_macsec_verify_only_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_integrity_vectors[i];
 		err = test_macsec(&cur_td, MCS_VERIFY_ONLY, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Auth Verify case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nAuth Verify case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1308,17 +1405,19 @@ test_inline_macsec_verify_only_all(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_encap_decap_all(const void *data __rte_unused)
+test_inline_macsec_encap_decap_all(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1334,7 +1433,11 @@ test_inline_macsec_encap_decap_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_ENCAP_DECAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Cipher Auth Encap-decap case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nCipher Auth Encap-decap case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1343,18 +1446,20 @@ test_inline_macsec_encap_decap_all(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 
 static int
-test_inline_macsec_auth_verify_all(const void *data __rte_unused)
+test_inline_macsec_auth_verify_all(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1369,7 +1474,11 @@ test_inline_macsec_auth_verify_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_integrity_vectors[i];
 		err = test_macsec(&cur_td, MCS_AUTH_VERIFY, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Auth Generate + Verify case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nAuth Generate + Verify case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1378,13 +1487,14 @@ test_inline_macsec_auth_verify_all(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_multi_flow(const void *data __rte_unused)
+test_inline_macsec_multi_flow(void)
 {
 	const struct mcs_test_vector *tv[MCS_MAX_FLOWS];
 	struct mcs_test_vector iter[MCS_MAX_FLOWS];
@@ -1418,7 +1528,9 @@ test_inline_macsec_multi_flow(const void *data __rte_unused)
 		tv[i] = (const struct mcs_test_vector *)&iter[i];
 	}
 	err = test_macsec(tv, MCS_ENCAP_DECAP, &opts);
-	if (err) {
+	if (err == TEST_SKIPPED) {
+		printf("Cipher Auth Encryption multi flow skipped\n");
+	} else if (err) {
 		printf("\nCipher Auth Encryption multi flow failed");
 		err = -1;
 	} else {
@@ -1429,11 +1541,12 @@ test_inline_macsec_multi_flow(const void *data __rte_unused)
 }
 
 static int
-test_inline_macsec_with_vlan(const void *data __rte_unused)
+test_inline_macsec_with_vlan(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1456,7 +1569,11 @@ test_inline_macsec_with_vlan(const void *data __rte_unused)
 			opts.nb_vlan = 2;
 		}
 		err = test_macsec(&cur_td, MCS_ENCAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("VLAN Encap case %d skipped", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\n VLAN Encap case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1477,7 +1594,11 @@ test_inline_macsec_with_vlan(const void *data __rte_unused)
 			opts.nb_vlan = 2;
 		}
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("VLAN Decap case %d skipped", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\n VLAN Decap case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1487,16 +1608,18 @@ test_inline_macsec_with_vlan(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, (2 * size) + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			2 * size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_pkt_drop(const void *data __rte_unused)
+test_inline_macsec_pkt_drop(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1512,7 +1635,11 @@ test_inline_macsec_pkt_drop(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_err_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Packet drop case %d skipped", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nPacket drop case %d passed", cur_td->test_idx);
 			err = 0;
 		} else {
@@ -1521,17 +1648,19 @@ test_inline_macsec_pkt_drop(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_untagged_rx(const void *data __rte_unused)
+test_inline_macsec_untagged_rx(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1547,7 +1676,10 @@ test_inline_macsec_untagged_rx(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_untagged_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = 0;
 		else
 			err = -1;
@@ -1559,24 +1691,29 @@ test_inline_macsec_untagged_rx(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_untagged_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = 0;
 		else
 			err = -1;
 
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			2 * size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_bad_tag_rx(const void *data __rte_unused)
+test_inline_macsec_bad_tag_rx(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1592,7 +1729,10 @@ test_inline_macsec_bad_tag_rx(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_bad_tag_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
@@ -1600,17 +1740,19 @@ test_inline_macsec_bad_tag_rx(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_sa_not_in_use(const void *data __rte_unused)
+test_inline_macsec_sa_not_in_use(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1626,7 +1768,10 @@ test_inline_macsec_sa_not_in_use(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
@@ -1634,17 +1779,19 @@ test_inline_macsec_sa_not_in_use(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_decap_stats(const void *data __rte_unused)
+test_inline_macsec_decap_stats(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1660,7 +1807,11 @@ test_inline_macsec_decap_stats(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Decap stats case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nDecap stats case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1669,17 +1820,19 @@ test_inline_macsec_decap_stats(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_verify_only_stats(const void *data __rte_unused)
+test_inline_macsec_verify_only_stats(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1695,7 +1848,11 @@ test_inline_macsec_verify_only_stats(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_integrity_vectors[i];
 		err = test_macsec(&cur_td, MCS_VERIFY_ONLY, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Verify only stats case %d skipped\n", cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("\nVerify only stats case %d failed", cur_td->test_idx);
 			err = -1;
 		} else {
@@ -1704,17 +1861,19 @@ test_inline_macsec_verify_only_stats(const void *data __rte_unused)
 		}
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
 
-	return all_err;
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_pkts_invalid_stats(const void *data __rte_unused)
+test_inline_macsec_pkts_invalid_stats(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1729,23 +1888,28 @@ test_inline_macsec_pkts_invalid_stats(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_err_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = 0;
 		else
 			err = -1;
 
 		all_err += err;
 	}
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_pkts_unchecked_stats(const void *data __rte_unused)
+test_inline_macsec_pkts_unchecked_stats(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_DISABLE;
@@ -1761,7 +1925,10 @@ test_inline_macsec_pkts_unchecked_stats(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_integrity_vectors[i];
 		err = test_macsec(&cur_td, MCS_VERIFY_ONLY, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
@@ -1769,16 +1936,18 @@ test_inline_macsec_pkts_unchecked_stats(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_out_pkts_untagged(const void *data __rte_unused)
+test_inline_macsec_out_pkts_untagged(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1794,7 +1963,10 @@ test_inline_macsec_out_pkts_untagged(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_ENCAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
@@ -1802,16 +1974,18 @@ test_inline_macsec_out_pkts_untagged(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_out_pkts_toolong(const void *data __rte_unused)
+test_inline_macsec_out_pkts_toolong(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_NO_DISCARD;
@@ -1827,7 +2001,10 @@ test_inline_macsec_out_pkts_toolong(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_ENCAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
@@ -1835,16 +2012,18 @@ test_inline_macsec_out_pkts_toolong(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_encap_stats(const void *data __rte_unused)
+test_inline_macsec_encap_stats(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1860,23 +2039,29 @@ test_inline_macsec_encap_stats(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_cipher_vectors[i];
 		err = test_macsec(&cur_td, MCS_ENCAP, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
+
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_auth_only_stats(const void *data __rte_unused)
+test_inline_macsec_auth_only_stats(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1892,23 +2077,29 @@ test_inline_macsec_auth_only_stats(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_integrity_vectors[i];
 		err = test_macsec(&cur_td, MCS_AUTH_ONLY, &opts);
-		if (err)
+		if (err == TEST_SKIPPED) {
+			skipped += 1;
+			err = 0;
+		} else if (err)
 			err = -1;
 		else
 			err = 0;
+
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_interrupts_all(const void *data __rte_unused)
+test_inline_macsec_interrupts_all(void)
 {
 	struct mcs_err_vector err_vector = {0};
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
+	int skipped = 0;
 	int i, size;
 	int err, all_err = 0;
 	enum rte_eth_event_macsec_subtype subtype[] =  {
@@ -1937,8 +2128,13 @@ test_inline_macsec_interrupts_all(const void *data __rte_unused)
 	for (i = 0; i < size; i++) {
 		cur_td = &list_mcs_intr_test_vectors[i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if ((err_vector.event == RTE_ETH_EVENT_MACSEC_SECTAG_VAL_ERR) &&
-		    (err_vector.event_subtype == subtype[i])) {
+		if (err == TEST_SKIPPED) {
+			printf("Sectag val err interrupt test case %d skipped",
+			       cur_td->test_idx);
+			skipped += 1;
+			err = 0;
+		} else if ((err_vector.event == RTE_ETH_EVENT_MACSEC_SECTAG_VAL_ERR) &&
+			   (err_vector.event_subtype == subtype[i])) {
 			printf("\nSectag val err interrupt test case %d passed",
 			       cur_td->test_idx);
 			err = 0;
@@ -1952,16 +2148,18 @@ test_inline_macsec_interrupts_all(const void *data __rte_unused)
 	rte_eth_dev_callback_unregister(port_id, RTE_ETH_EVENT_MACSEC,
 			test_macsec_event_callback, &err_vector);
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_rekey_tx(const void *data __rte_unused)
+test_inline_macsec_rekey_tx(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -1979,7 +2177,11 @@ test_inline_macsec_rekey_tx(const void *data __rte_unused)
 		cur_td = &list_mcs_rekey_vectors[i];
 		opts.rekey_td = &list_mcs_rekey_vectors[++i];
 		err = test_macsec(&cur_td, MCS_ENCAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Tx hw rekey test case %d skipped\n", i);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("Tx hw rekey test case %d failed\n", i);
 			err = -1;
 		} else {
@@ -1989,16 +2191,18 @@ test_inline_macsec_rekey_tx(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size / 2 + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_rekey_rx(const void *data __rte_unused)
+test_inline_macsec_rekey_rx(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 
 	opts.val_frames = RTE_SECURITY_MACSEC_VALIDATE_STRICT;
@@ -2014,7 +2218,11 @@ test_inline_macsec_rekey_rx(const void *data __rte_unused)
 		cur_td = &list_mcs_rekey_vectors[i];
 		opts.rekey_td = &list_mcs_rekey_vectors[++i];
 		err = test_macsec(&cur_td, MCS_DECAP, &opts);
-		if (err) {
+		if (err == TEST_SKIPPED) {
+			printf("Rx rekey test case %d skipped\n", i);
+			skipped += 1;
+			err = 0;
+		} else if (err) {
 			printf("Rx rekey test case %d failed\n", i);
 			err = -1;
 		} else {
@@ -2024,17 +2232,19 @@ test_inline_macsec_rekey_rx(const void *data __rte_unused)
 		all_err += err;
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size / 2 + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int
-test_inline_macsec_anti_replay(const void *data __rte_unused)
+test_inline_macsec_anti_replay(void)
 {
 	const struct mcs_test_vector *cur_td;
 	struct mcs_test_opts opts = {0};
 	uint16_t replay_win_sz[2] = {32, 0};
 	int err, all_err = 0;
+	int skipped = 0;
 	int i, size;
 	int j;
 
@@ -2055,21 +2265,30 @@ test_inline_macsec_anti_replay(const void *data __rte_unused)
 			opts.ar_td[1] = &list_mcs_anti_replay_vectors[++i];
 			opts.ar_td[2] = &list_mcs_anti_replay_vectors[++i];
 			err = test_macsec(&cur_td, MCS_DECAP, &opts);
-			if (err) {
-				printf("Replay window: %u, Anti replay test case %d failed\n",
-				       opts.replay_win_sz, i);
+			if (err == TEST_SKIPPED) {
+				printf("Replay window: %u, Anti replay test "
+				       "case %d skipped\n", opts.replay_win_sz,
+				       i);
+				skipped += 1;
+				err = 0;
+			} else if (err) {
+				printf("Replay window: %u, Anti replay test "
+				       "case %d failed\n", opts.replay_win_sz,
+				       i);
 				err = -1;
 			} else {
-				printf("Replay window: %u, Anti replay test case %d passed\n",
-				       opts.replay_win_sz, i);
+				printf("Replay window: %u, Anti replay test "
+				       "case %d passed\n", opts.replay_win_sz,
+				       i);
 				err = 0;
 			}
 			all_err += err;
 		}
 	}
 
-	printf("\n%s: Success: %d, Failure: %d\n", __func__, size + all_err, -all_err);
-	return all_err;
+	printf("\n%s: Success: %d, Failure: %d, Skipped: %d\n", __func__,
+			size / 2 + all_err - skipped, -all_err, skipped);
+	return skipped > 0 ? TEST_SKIPPED : all_err;
 }
 
 static int

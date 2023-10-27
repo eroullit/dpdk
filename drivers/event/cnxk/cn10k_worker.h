@@ -59,9 +59,9 @@ cn10k_process_vwqe(uintptr_t vwqe, uint16_t port_id, const uint32_t flags, struc
 	uint16_t lmt_id, d_off;
 	struct rte_mbuf **wqe;
 	struct rte_mbuf *mbuf;
+	uint64_t sa_base = 0;
 	uintptr_t cpth = 0;
 	uint8_t loff = 0;
-	uint64_t sa_base;
 	int i;
 
 	mbuf_init |= ((uint64_t)port_id) << 48;
@@ -124,6 +124,11 @@ cn10k_process_vwqe(uintptr_t vwqe, uint16_t port_id, const uint32_t flags, struc
 			const uint64_t cq_w5 = *((const uint64_t *)cqe + 5);
 
 			cpth = ((uintptr_t)mbuf + (uint16_t)d_off);
+
+			/* Update mempool pointer for full mode pkt */
+			if ((flags & NIX_RX_REAS_F) && (cq_w1 & BIT(11)) &&
+			    !((*(uint64_t *)cpth) & BIT(15)))
+				mbuf->pool = mp;
 
 			mbuf = nix_sec_meta_to_mbuf_sc(cq_w1, cq_w5, sa_base, laddr,
 						       &loff, mbuf, d_off,
@@ -199,6 +204,11 @@ cn10k_sso_hws_post_process(struct cn10k_sso_hws *ws, uint64_t *u64,
 			mp = (struct rte_mempool *)cnxk_nix_inl_metapool_get(port, lookup_mem);
 			meta_aura = mp ? mp->pool_id : m->pool->pool_id;
 
+			/* Update mempool pointer for full mode pkt */
+			if (mp && (flags & NIX_RX_REAS_F) && (cq_w1 & BIT(11)) &&
+			    !((*(uint64_t *)cpth) & BIT(15)))
+				((struct rte_mbuf *)mbuf)->pool = mp;
+
 			mbuf = (uint64_t)nix_sec_meta_to_mbuf_sc(
 				cq_w1, cq_w5, sa_base, (uintptr_t)&iova, &loff,
 				(struct rte_mbuf *)mbuf, d_off, flags,
@@ -239,7 +249,8 @@ cn10k_sso_hws_get_work(struct cn10k_sso_hws *ws, struct rte_event *ev,
 	} gw;
 
 	gw.get_work = ws->gw_wdata;
-#if defined(RTE_ARCH_ARM64) && !defined(__clang__)
+#if defined(RTE_ARCH_ARM64)
+#if !defined(__clang__)
 	asm volatile(
 		PLT_CPU_FEATURE_PREAMBLE
 		"caspal %[wdata], %H[wdata], %[wdata], %H[wdata], [%[gw_loc]]\n"
@@ -247,11 +258,23 @@ cn10k_sso_hws_get_work(struct cn10k_sso_hws *ws, struct rte_event *ev,
 		: [gw_loc] "r"(ws->base + SSOW_LF_GWS_OP_GET_WORK0)
 		: "memory");
 #else
+	register uint64_t x0 __asm("x0") = (uint64_t)gw.u64[0];
+	register uint64_t x1 __asm("x1") = (uint64_t)gw.u64[1];
+	asm volatile(".arch armv8-a+lse\n"
+		     "caspal %[x0], %[x1], %[x0], %[x1], [%[dst]]\n"
+		     : [x0] "+r"(x0), [x1] "+r"(x1)
+		     : [dst] "r"(ws->base + SSOW_LF_GWS_OP_GET_WORK0)
+		     : "memory");
+	gw.u64[0] = x0;
+	gw.u64[1] = x1;
+#endif
+#else
 	plt_write64(gw.u64[0], ws->base + SSOW_LF_GWS_OP_GET_WORK0);
 	do {
 		roc_load_pair(gw.u64[0], gw.u64[1],
 			      ws->base + SSOW_LF_GWS_WQE0);
 	} while (gw.u64[0] & BIT_ULL(63));
+	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
 #endif
 	ws->gw_rdata = gw.u64[0];
 	if (gw.u64[1])
@@ -316,6 +339,7 @@ uint16_t __rte_hot cn10k_sso_hws_enq_new_burst(void *port,
 uint16_t __rte_hot cn10k_sso_hws_enq_fwd_burst(void *port,
 					       const struct rte_event ev[],
 					       uint16_t nb_events);
+int __rte_hot cn10k_sso_hws_profile_switch(void *port, uint8_t profile);
 
 #define R(name, flags)                                                         \
 	uint16_t __rte_hot cn10k_sso_hws_deq_##name(                           \

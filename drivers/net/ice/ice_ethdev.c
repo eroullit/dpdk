@@ -27,7 +27,6 @@
 
 /* devargs */
 #define ICE_SAFE_MODE_SUPPORT_ARG "safe-mode-support"
-#define ICE_PIPELINE_MODE_SUPPORT_ARG  "pipeline-mode-support"
 #define ICE_DEFAULT_MAC_DISABLE   "default-mac-disable"
 #define ICE_PROTO_XTR_ARG         "proto_xtr"
 #define ICE_FIELD_OFFS_ARG		  "field_offs"
@@ -43,7 +42,6 @@ int ice_timestamp_dynfield_offset = -1;
 
 static const char * const ice_valid_args[] = {
 	ICE_SAFE_MODE_SUPPORT_ARG,
-	ICE_PIPELINE_MODE_SUPPORT_ARG,
 	ICE_PROTO_XTR_ARG,
 	ICE_FIELD_OFFS_ARG,
 	ICE_FIELD_NAME_ARG,
@@ -2103,11 +2101,6 @@ static int ice_parse_devargs(struct rte_eth_dev *dev)
 	if (ret)
 		goto bail;
 
-	ret = rte_kvargs_process(kvlist, ICE_PIPELINE_MODE_SUPPORT_ARG,
-				 &parse_bool, &ad->devargs.pipe_mode_support);
-	if (ret)
-		goto bail;
-
 	ret = rte_kvargs_process(kvlist, ICE_DEFAULT_MAC_DISABLE,
 				&parse_bool, &ad->devargs.default_mac_disable);
 	if (ret)
@@ -2449,6 +2442,7 @@ ice_dev_init(struct rte_eth_dev *dev)
 	}
 
 	if (!ad->is_safe_mode) {
+		ad->disabled_engine_mask |= BIT(ICE_FLOW_ENGINE_ACL);
 		ret = ice_flow_init(ad);
 		if (ret) {
 			PMD_INIT_LOG(ERR, "Failed to initialize flow");
@@ -3646,6 +3640,8 @@ ice_get_init_link_status(struct rte_eth_dev *dev)
 
 	if (link_status.link_info & ICE_AQ_LINK_UP)
 		pf->init_link_up = true;
+	else
+		pf->init_link_up = false;
 }
 
 static int
@@ -6549,7 +6545,6 @@ RTE_PMD_REGISTER_PARAM_STRING(net_ice,
 			      ICE_HW_DEBUG_MASK_ARG "=0xXXX"
 			      ICE_PROTO_XTR_ARG "=[queue:]<vlan|ipv4|ipv6|ipv6_flow|tcp|ip_offset>"
 			      ICE_SAFE_MODE_SUPPORT_ARG "=<0|1>"
-			      ICE_PIPELINE_MODE_SUPPORT_ARG "=<0|1>"
 			      ICE_DEFAULT_MAC_DISABLE "=<0|1>"
 			      ICE_RX_LOW_LATENCY_ARG "=<0|1>");
 

@@ -136,7 +136,7 @@ static struct rte_flow *default_flow[RTE_MAX_ETHPORTS];
 /* Create Inline IPsec session */
 static int
 create_inline_ipsec_session(struct ipsec_test_data *sa, uint16_t portid,
-		void **sess, struct rte_security_ctx **ctx,
+		void **sess, void **ctx,
 		uint32_t *ol_flags, const struct ipsec_test_flags *flags,
 		struct rte_security_session_conf *sess_conf)
 {
@@ -149,7 +149,7 @@ create_inline_ipsec_session(struct ipsec_test_data *sa, uint16_t portid,
 	struct rte_security_capability_idx sec_cap_idx;
 	const struct rte_security_capability *sec_cap;
 	enum rte_security_ipsec_sa_direction dir;
-	struct rte_security_ctx *sec_ctx;
+	void *sec_ctx;
 	uint32_t verify;
 
 	sess_conf->action_type = RTE_SECURITY_ACTION_TYPE_INLINE_PROTOCOL;
@@ -221,7 +221,7 @@ create_inline_ipsec_session(struct ipsec_test_data *sa, uint16_t portid,
 
 	sess_conf->userdata = (void *) sa;
 
-	sec_ctx = (struct rte_security_ctx *)rte_eth_dev_get_sec_ctx(portid);
+	sec_ctx = rte_eth_dev_get_sec_ctx(portid);
 	if (sec_ctx == NULL) {
 		printf("Ethernet device doesn't support security features.\n");
 		return TEST_SKIPPED;
@@ -503,7 +503,7 @@ error:
 static int
 init_mempools(unsigned int nb_mbuf)
 {
-	struct rte_security_ctx *sec_ctx;
+	void *sec_ctx;
 	uint16_t nb_sess = 512;
 	uint32_t sess_sz;
 	char s[64];
@@ -785,6 +785,51 @@ event_rx_burst(struct rte_mbuf **rx_pkts, uint16_t nb_pkts_to_rx)
 }
 
 static int
+verify_inbound_oop(struct ipsec_test_data *td,
+		   bool silent, struct rte_mbuf *mbuf)
+{
+	int ret = TEST_SUCCESS, rc;
+	struct rte_mbuf *orig;
+	uint32_t len;
+	void *data;
+
+	orig = *rte_security_oop_dynfield(mbuf);
+	if (!orig) {
+		if (!silent)
+			printf("\nUnable to get orig buffer OOP session");
+		return TEST_FAILED;
+	}
+
+	/* Skip Ethernet header comparison */
+	rte_pktmbuf_adj(orig, RTE_ETHER_HDR_LEN);
+
+	len = td->input_text.len;
+	if (orig->pkt_len != len) {
+		if (!silent)
+			printf("\nOriginal packet length mismatch, expected %u, got %u ",
+			       len, orig->pkt_len);
+		ret = TEST_FAILED;
+	}
+
+	data = rte_pktmbuf_mtod(orig, void *);
+	rc = memcmp(data, td->input_text.data, len);
+	if (rc) {
+		ret = TEST_FAILED;
+		if (silent)
+			goto exit;
+
+		printf("TestCase %s line %d: %s\n", __func__, __LINE__,
+		       "output text not as expected\n");
+
+		rte_hexdump(stdout, "expected", td->input_text.data, len);
+		rte_hexdump(stdout, "actual", data, len);
+	}
+exit:
+	rte_pktmbuf_free(orig);
+	return ret;
+}
+
+static int
 test_ipsec_with_reassembly(struct reassembly_vector *vector,
 		const struct ipsec_test_flags *flags)
 {
@@ -801,7 +846,7 @@ test_ipsec_with_reassembly(struct reassembly_vector *vector,
 	struct rte_crypto_sym_xform auth_in = {0};
 	struct rte_crypto_sym_xform aead_in = {0};
 	struct ipsec_test_data sa_data;
-	struct rte_security_ctx *ctx;
+	void *ctx;
 	unsigned int i, nb_rx = 0, j;
 	uint32_t ol_flags;
 	bool outer_ipv4;
@@ -1068,7 +1113,7 @@ test_ipsec_inline_proto_process(struct ipsec_test_data *td,
 	struct rte_crypto_sym_xform auth = {0};
 	struct rte_crypto_sym_xform aead = {0};
 	struct sa_expiry_vector vector = {0};
-	struct rte_security_ctx *ctx;
+	void *ctx;
 	int nb_rx = 0, nb_sent;
 	uint32_t ol_flags;
 	int i, j = 0, ret;
@@ -1106,6 +1151,12 @@ test_ipsec_inline_proto_process(struct ipsec_test_data *td,
 					  &ol_flags, flags, &sess_conf);
 	if (ret)
 		return ret;
+
+	if (flags->inb_oop && rte_security_oop_dynfield_offset < 0) {
+		printf("\nDynamic field not available for inline inbound OOP");
+		ret = TEST_FAILED;
+		goto out;
+	}
 
 	if (td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_INGRESS) {
 		ret = create_default_flow(port_id);
@@ -1196,6 +1247,15 @@ test_ipsec_inline_proto_process(struct ipsec_test_data *td,
 			for ( ; i < nb_rx; i++)
 				rte_pktmbuf_free(rx_pkts_burst[i]);
 			goto out;
+		}
+
+		if (flags->inb_oop) {
+			ret = verify_inbound_oop(td, silent, rx_pkts_burst[i]);
+			if (ret != TEST_SUCCESS) {
+				for ( ; i < nb_rx; i++)
+					rte_pktmbuf_free(rx_pkts_burst[i]);
+				goto out;
+			}
 		}
 
 		rte_pktmbuf_free(rx_pkts_burst[i]);
@@ -1338,7 +1398,7 @@ test_ipsec_inline_proto_process_with_esn(struct ipsec_test_data td[],
 	struct rte_mbuf *tx_pkt = NULL;
 	int nb_rx, nb_sent;
 	void *ses;
-	struct rte_security_ctx *ctx;
+	void *ctx;
 	uint32_t ol_flags;
 	bool outer_ipv4;
 	int i, ret;
@@ -2076,7 +2136,27 @@ test_ipsec_inline_proto_known_vec_inb(const void *test_data)
 }
 
 static int
-test_ipsec_inline_proto_display_list(const void *data __rte_unused)
+test_ipsec_inline_proto_oop_inb(const void *test_data)
+{
+	const struct ipsec_test_data *td = test_data;
+	struct ipsec_test_flags flags;
+	struct ipsec_test_data td_inb;
+
+	memset(&flags, 0, sizeof(flags));
+	flags.inb_oop = true;
+
+	if (td->ipsec_xform.direction == RTE_SECURITY_IPSEC_SA_DIR_EGRESS)
+		test_ipsec_td_in_from_out(td, &td_inb);
+	else
+		memcpy(&td_inb, td, sizeof(td_inb));
+
+	td_inb.ipsec_xform.options.ingress_oop = true;
+
+	return test_ipsec_inline_proto_process(&td_inb, NULL, 1, false, &flags);
+}
+
+static int
+test_ipsec_inline_proto_display_list(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2089,7 +2169,7 @@ test_ipsec_inline_proto_display_list(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_udp_encap(const void *data __rte_unused)
+test_ipsec_inline_proto_udp_encap(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2102,7 +2182,7 @@ test_ipsec_inline_proto_udp_encap(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_udp_ports_verify(const void *data __rte_unused)
+test_ipsec_inline_proto_udp_ports_verify(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2116,7 +2196,7 @@ test_ipsec_inline_proto_udp_ports_verify(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_err_icv_corrupt(const void *data __rte_unused)
+test_ipsec_inline_proto_err_icv_corrupt(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2129,7 +2209,7 @@ test_ipsec_inline_proto_err_icv_corrupt(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_tunnel_dst_addr_verify(const void *data __rte_unused)
+test_ipsec_inline_proto_tunnel_dst_addr_verify(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2142,7 +2222,7 @@ test_ipsec_inline_proto_tunnel_dst_addr_verify(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_tunnel_src_dst_addr_verify(const void *data __rte_unused)
+test_ipsec_inline_proto_tunnel_src_dst_addr_verify(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2155,7 +2235,7 @@ test_ipsec_inline_proto_tunnel_src_dst_addr_verify(const void *data __rte_unused
 }
 
 static int
-test_ipsec_inline_proto_inner_ip_csum(const void *data __rte_unused)
+test_ipsec_inline_proto_inner_ip_csum(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2168,7 +2248,7 @@ test_ipsec_inline_proto_inner_ip_csum(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_inner_l4_csum(const void *data __rte_unused)
+test_ipsec_inline_proto_inner_l4_csum(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2181,7 +2261,7 @@ test_ipsec_inline_proto_inner_l4_csum(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_tunnel_v4_in_v4(const void *data __rte_unused)
+test_ipsec_inline_proto_tunnel_v4_in_v4(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2195,7 +2275,7 @@ test_ipsec_inline_proto_tunnel_v4_in_v4(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_tunnel_v6_in_v6(const void *data __rte_unused)
+test_ipsec_inline_proto_tunnel_v6_in_v6(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2209,7 +2289,7 @@ test_ipsec_inline_proto_tunnel_v6_in_v6(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_tunnel_v4_in_v6(const void *data __rte_unused)
+test_ipsec_inline_proto_tunnel_v4_in_v6(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2223,7 +2303,7 @@ test_ipsec_inline_proto_tunnel_v4_in_v6(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_tunnel_v6_in_v4(const void *data __rte_unused)
+test_ipsec_inline_proto_tunnel_v6_in_v4(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2237,7 +2317,7 @@ test_ipsec_inline_proto_tunnel_v6_in_v4(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_transport_v4(const void *data __rte_unused)
+test_ipsec_inline_proto_transport_v4(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2251,7 +2331,7 @@ test_ipsec_inline_proto_transport_v4(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_transport_l4_csum(const void *data __rte_unused)
+test_ipsec_inline_proto_transport_l4_csum(void)
 {
 	struct ipsec_test_flags flags = {
 		.l4_csum = true,
@@ -2263,7 +2343,7 @@ test_ipsec_inline_proto_transport_l4_csum(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_stats(const void *data __rte_unused)
+test_ipsec_inline_proto_stats(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2276,7 +2356,7 @@ test_ipsec_inline_proto_stats(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_pkt_fragment(const void *data __rte_unused)
+test_ipsec_inline_proto_pkt_fragment(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2290,7 +2370,7 @@ test_ipsec_inline_proto_pkt_fragment(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_copy_df_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_copy_df_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2303,7 +2383,7 @@ test_ipsec_inline_proto_copy_df_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_copy_df_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_copy_df_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2316,7 +2396,7 @@ test_ipsec_inline_proto_copy_df_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_set_df_0_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_set_df_0_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2329,7 +2409,7 @@ test_ipsec_inline_proto_set_df_0_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_set_df_1_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_set_df_1_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2342,7 +2422,7 @@ test_ipsec_inline_proto_set_df_1_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv4_copy_dscp_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv4_copy_dscp_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2355,7 +2435,7 @@ test_ipsec_inline_proto_ipv4_copy_dscp_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv4_copy_dscp_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv4_copy_dscp_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2368,7 +2448,7 @@ test_ipsec_inline_proto_ipv4_copy_dscp_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv4_set_dscp_0_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv4_set_dscp_0_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2381,7 +2461,7 @@ test_ipsec_inline_proto_ipv4_set_dscp_0_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv4_set_dscp_1_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv4_set_dscp_1_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2394,7 +2474,7 @@ test_ipsec_inline_proto_ipv4_set_dscp_1_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_copy_dscp_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_copy_dscp_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2409,7 +2489,7 @@ test_ipsec_inline_proto_ipv6_copy_dscp_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_copy_dscp_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_copy_dscp_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2424,7 +2504,7 @@ test_ipsec_inline_proto_ipv6_copy_dscp_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_set_dscp_0_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_set_dscp_0_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2439,7 +2519,7 @@ test_ipsec_inline_proto_ipv6_set_dscp_0_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_set_dscp_1_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_set_dscp_1_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2454,7 +2534,7 @@ test_ipsec_inline_proto_ipv6_set_dscp_1_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_copy_flabel_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_copy_flabel_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2468,7 +2548,7 @@ test_ipsec_inline_proto_ipv6_copy_flabel_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_copy_flabel_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_copy_flabel_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2482,7 +2562,7 @@ test_ipsec_inline_proto_ipv6_copy_flabel_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_set_flabel_0_inner_1(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_set_flabel_0_inner_1(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2496,7 +2576,7 @@ test_ipsec_inline_proto_ipv6_set_flabel_0_inner_1(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_set_flabel_1_inner_0(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_set_flabel_1_inner_0(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2510,7 +2590,7 @@ test_ipsec_inline_proto_ipv6_set_flabel_1_inner_0(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv4_ttl_decrement(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv4_ttl_decrement(void)
 {
 	struct ipsec_test_flags flags = {
 		.dec_ttl_or_hop_limit = true,
@@ -2521,7 +2601,7 @@ test_ipsec_inline_proto_ipv4_ttl_decrement(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_ipv6_hop_limit_decrement(const void *data __rte_unused)
+test_ipsec_inline_proto_ipv6_hop_limit_decrement(void)
 {
 	struct ipsec_test_flags flags = {
 		.ipv6 = true,
@@ -2533,7 +2613,7 @@ test_ipsec_inline_proto_ipv6_hop_limit_decrement(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_iv_gen(const void *data __rte_unused)
+test_ipsec_inline_proto_iv_gen(void)
 {
 	struct ipsec_test_flags flags;
 
@@ -2546,7 +2626,7 @@ test_ipsec_inline_proto_iv_gen(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_sa_pkt_soft_expiry(const void *data __rte_unused)
+test_ipsec_inline_proto_sa_pkt_soft_expiry(void)
 {
 	struct ipsec_test_flags flags = {
 		.sa_expiry_pkts_soft = true,
@@ -2555,7 +2635,7 @@ test_ipsec_inline_proto_sa_pkt_soft_expiry(const void *data __rte_unused)
 	return test_ipsec_inline_proto_all(&flags);
 }
 static int
-test_ipsec_inline_proto_sa_byte_soft_expiry(const void *data __rte_unused)
+test_ipsec_inline_proto_sa_byte_soft_expiry(void)
 {
 	struct ipsec_test_flags flags = {
 		.sa_expiry_bytes_soft = true,
@@ -2565,7 +2645,7 @@ test_ipsec_inline_proto_sa_byte_soft_expiry(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_sa_pkt_hard_expiry(const void *data __rte_unused)
+test_ipsec_inline_proto_sa_pkt_hard_expiry(void)
 {
 	struct ipsec_test_flags flags = {
 		.sa_expiry_pkts_hard = true
@@ -2575,7 +2655,7 @@ test_ipsec_inline_proto_sa_pkt_hard_expiry(const void *data __rte_unused)
 }
 
 static int
-test_ipsec_inline_proto_sa_byte_hard_expiry(const void *data __rte_unused)
+test_ipsec_inline_proto_sa_byte_hard_expiry(void)
 {
 	struct ipsec_test_flags flags = {
 		.sa_expiry_bytes_hard = true
@@ -3165,6 +3245,11 @@ static struct unit_test_suite inline_ipsec_testsuite  = {
 			"IPv4 Reassembly with burst of 4 fragments",
 			ut_setup_inline_ipsec_reassembly, ut_teardown_inline_ipsec_reassembly,
 			test_inline_ip_reassembly, &ipv4_4frag_burst_vector),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Inbound Out-Of-Place processing",
+			ut_setup_inline_ipsec, ut_teardown_inline_ipsec,
+			test_ipsec_inline_proto_oop_inb,
+			&pkt_aes_128_gcm),
 
 		TEST_CASES_END() /**< NULL terminate unit test array */
 	},

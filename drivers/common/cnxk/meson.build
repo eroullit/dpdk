@@ -8,7 +8,6 @@ if not is_linux or not dpdk_conf.get('RTE_ARCH_64')
     subdir_done()
 endif
 
-config_flag_fmt = 'RTE_LIBRTE_@0@_COMMON'
 deps = ['eal', 'pci', 'bus_pci', 'mbuf', 'security']
 sources = files(
         'roc_ae.c',
@@ -57,6 +56,7 @@ sources = files(
         'roc_npa_irq.c',
         'roc_npa_type.c',
         'roc_npc.c',
+        'roc_npc_aging.c',
         'roc_npc_mcam.c',
         'roc_npc_mcam_dump.c',
         'roc_npc_parse.c',

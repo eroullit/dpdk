@@ -761,6 +761,7 @@ enum {
 	MLX5_MODIFICATION_TYPE_REMOVE = 0x5,
 	MLX5_MODIFICATION_TYPE_NOP = 0x6,
 	MLX5_MODIFICATION_TYPE_REMOVE_WORDS = 0x7,
+	MLX5_MODIFICATION_TYPE_ADD_FIELD = 0x8,
 	MLX5_MODIFICATION_TYPE_MAX,
 };
 
@@ -857,6 +858,10 @@ enum modify_reg {
 	REG_C_5,
 	REG_C_6,
 	REG_C_7,
+	REG_C_8,
+	REG_C_9,
+	REG_C_10,
+	REG_C_11,
 };
 
 /* Modification sub command. */
@@ -1964,7 +1969,9 @@ struct mlx5_ifc_per_protocol_networking_offload_caps_bits {
 	u8 swp_lso[0x1];
 	u8 reserved_at_23[0x8];
 	u8 tunnel_stateless_gtp[0x1];
-	u8 reserved_at_25[0x4];
+	u8 reserved_at_25[0x2];
+	u8 tunnel_stateless_vxlan_gpe_nsh[0x1];
+	u8 reserved_at_28[0x1];
 	u8 max_vxlan_udp_ports[0x8];
 	u8 reserved_at_38[0x6];
 	u8 max_geneve_opt_len[0x1];
@@ -2080,7 +2087,10 @@ struct mlx5_ifc_flow_table_prop_layout_bits {
 	u8 reparse[0x1];
 	u8 reserved_at_6b[0x1];
 	u8 cross_vhca_object[0x1];
-	u8 reserved_at_6d[0xb];
+	u8 reformat_l2_to_l3_audp_tunnel[0x1];
+	u8 reformat_l3_audp_tunnel_to_l2[0x1];
+	u8 ignore_flow_level_rtc_valid[0x1];
+	u8 reserved_at_70[0x8];
 	u8 log_max_ft_num[0x8];
 	u8 reserved_at_80[0x10];
 	u8 log_max_flow_counter[0x8];
@@ -3438,6 +3448,7 @@ enum mlx5_ifc_stc_action_type {
 	MLX5_IFC_STC_ACTION_TYPE_ACC_MODIFY_LIST = 0x0e,
 	MLX5_IFC_STC_ACTION_TYPE_ASO = 0x12,
 	MLX5_IFC_STC_ACTION_TYPE_COUNTER = 0x14,
+	MLX5_IFC_STC_ACTION_TYPE_ADD_FIELD = 0x1b,
 	MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_STE_TABLE = 0x80,
 	MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_TIR = 0x81,
 	MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_FT = 0x82,

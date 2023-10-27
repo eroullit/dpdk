@@ -28,6 +28,7 @@
 /****** library defines ********/
 
 /* EAL defines */
+#define RTE_CACHE_GUARD_LINES 1
 #define RTE_MAX_HEAPS 32
 #define RTE_MAX_MEMSEG_LISTS 128
 #define RTE_MAX_MEMSEG_PER_LIST 8192
@@ -73,10 +74,12 @@
 #define RTE_EVENT_MAX_DEVS 16
 #define RTE_EVENT_MAX_PORTS_PER_DEV 255
 #define RTE_EVENT_MAX_QUEUES_PER_DEV 255
+#define RTE_EVENT_MAX_PROFILES_PER_PORT 8
 #define RTE_EVENT_TIMER_ADAPTER_NUM_MAX 32
 #define RTE_EVENT_ETH_INTR_RING_SIZE 1024
 #define RTE_EVENT_CRYPTO_ADAPTER_MAX_INSTANCE 32
 #define RTE_EVENT_ETH_TX_ADAPTER_MAX_INSTANCE 32
+#define RTE_EVENT_DMA_ADAPTER_MAX_INSTANCE 32
 
 /* rawdev defines */
 #define RTE_RAWDEV_MAX_DEVS 64
@@ -87,6 +90,7 @@
 
 /* rte_power defines */
 #define RTE_MAX_LCORE_FREQS 64
+#define RTE_MAX_UNCORE_FREQS 64
 
 /* rte_graph defines */
 #define RTE_GRAPH_BURST_SIZE 256

@@ -15,6 +15,10 @@ mana_stop_tx_queues(struct rte_eth_dev *dev)
 	struct mana_priv *priv = dev->data->dev_private;
 	int i, ret;
 
+	for (i = 0; i < priv->num_queues; i++)
+		if (dev->data->tx_queue_state[i] == RTE_ETH_QUEUE_STATE_STOPPED)
+			return -EINVAL;
+
 	for (i = 0; i < priv->num_queues; i++) {
 		struct mana_txq *txq = dev->data->tx_queues[i];
 
@@ -51,6 +55,8 @@ mana_stop_tx_queues(struct rte_eth_dev *dev)
 
 		memset(&txq->gdma_sq, 0, sizeof(txq->gdma_sq));
 		memset(&txq->gdma_cq, 0, sizeof(txq->gdma_cq));
+
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
 	}
 
 	return 0;
@@ -63,6 +69,11 @@ mana_start_tx_queues(struct rte_eth_dev *dev)
 	int ret, i;
 
 	/* start TX queues */
+
+	for (i = 0; i < priv->num_queues; i++)
+		if (dev->data->tx_queue_state[i] == RTE_ETH_QUEUE_STATE_STARTED)
+			return -EINVAL;
+
 	for (i = 0; i < priv->num_queues; i++) {
 		struct mana_txq *txq;
 		struct ibv_qp_init_attr qp_attr = { 0 };
@@ -142,6 +153,8 @@ mana_start_tx_queues(struct rte_eth_dev *dev)
 			txq->gdma_cq.id, txq->gdma_cq.buffer,
 			txq->gdma_cq.count, txq->gdma_cq.size,
 			txq->gdma_cq.head);
+
+		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
 	}
 
 	return 0;
@@ -176,6 +189,9 @@ mana_tx_burst(void *dpdk_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	void *db_page;
 	uint16_t pkt_sent = 0;
 	uint32_t num_comp, i;
+#ifdef RTE_ARCH_32
+	uint32_t wqe_count = 0;
+#endif
 
 	/* Process send completions from GDMA */
 	num_comp = gdma_poll_completion_queue(&txq->gdma_cq,
@@ -418,6 +434,20 @@ mana_tx_burst(void *dpdk_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 
 			DP_LOG(DEBUG, "nb_pkts %u pkt[%d] sent",
 			       nb_pkts, pkt_idx);
+#ifdef RTE_ARCH_32
+			wqe_count += wqe_size_in_bu;
+			if (wqe_count > TX_WQE_SHORT_DB_THRESHOLD) {
+				/* wqe_count approaching to short doorbell
+				 * increment limit. Stop processing further
+				 * more packets and just ring short
+				 * doorbell.
+				 */
+				DP_LOG(DEBUG, "wqe_count %u reaching limit, "
+				       "pkt_sent %d",
+				       wqe_count, pkt_sent);
+				break;
+			}
+#endif
 		} else {
 			DP_LOG(DEBUG, "pkt[%d] failed to post send ret %d",
 			       pkt_idx, ret);
@@ -436,11 +466,19 @@ mana_tx_burst(void *dpdk_txq, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
 	}
 
 	if (pkt_sent) {
+#ifdef RTE_ARCH_32
+		ret = mana_ring_short_doorbell(db_page, GDMA_QUEUE_SEND,
+					       txq->gdma_sq.id,
+					       wqe_count *
+						GDMA_WQE_ALIGNMENT_UNIT_SIZE,
+					       0);
+#else
 		ret = mana_ring_doorbell(db_page, GDMA_QUEUE_SEND,
 					 txq->gdma_sq.id,
 					 txq->gdma_sq.head *
 						GDMA_WQE_ALIGNMENT_UNIT_SIZE,
 					 0);
+#endif
 		if (ret)
 			DP_LOG(ERR, "mana_ring_doorbell failed ret %d", ret);
 	}

@@ -227,6 +227,8 @@ struct mbox_msghdr {
 	  npc_mcam_get_stats_req, npc_mcam_get_stats_rsp)                      \
 	M(NPC_GET_FIELD_HASH_INFO, 0x6013, npc_get_field_hash_info,            \
 	  npc_get_field_hash_info_req, npc_get_field_hash_info_rsp)            \
+	M(NPC_MCAM_GET_HIT_STATUS, 0x6015, npc_mcam_get_hit_status,            \
+	  npc_mcam_get_hit_status_req, npc_mcam_get_hit_status_rsp)            \
 	/* NIX mbox IDs (range 0x8000 - 0xFFFF) */                             \
 	M(NIX_LF_ALLOC, 0x8000, nix_lf_alloc, nix_lf_alloc_req,                \
 	  nix_lf_alloc_rsp)                                                    \
@@ -540,10 +542,25 @@ struct lmtst_tbl_setup_req {
 };
 
 /* CGX mbox message formats */
+/* CGX mailbox error codes
+ * Range 1101 - 1200.
+ */
+enum cgx_af_status {
+	LMAC_AF_ERR_INVALID_PARAM = -1101,
+	LMAC_AF_ERR_PF_NOT_MAPPED = -1102,
+	LMAC_AF_ERR_PERM_DENIED = -1103,
+	LMAC_AF_ERR_PFC_ENADIS_PERM_DENIED = -1104,
+	LMAC_AF_ERR_8023PAUSE_ENADIS_PERM_DENIED = -1105,
+	LMAC_AF_ERR_CMD_TIMEOUT = -1106,
+	LMAC_AF_ERR_FIRMWARE_DATA_NOT_MAPPED = -1107,
+	LMAC_AF_ERR_EXACT_MATCH_TBL_ADD_FAILED = -1108,
+	LMAC_AF_ERR_EXACT_MATCH_TBL_DEL_FAILED = -1109,
+	LMAC_AF_ERR_EXACT_MATCH_TBL_LOOK_UP_FAILED = -1110,
+};
 
 struct cgx_stats_rsp {
 	struct mbox_msghdr hdr;
-#define CGX_RX_STATS_COUNT 13
+#define CGX_RX_STATS_COUNT 9
 #define CGX_TX_STATS_COUNT 18
 	uint64_t __io rx_stats[CGX_RX_STATS_COUNT];
 	uint64_t __io tx_stats[CGX_TX_STATS_COUNT];
@@ -569,6 +586,7 @@ struct cgx_fec_stats_rsp {
 struct cgx_mac_addr_set_or_get {
 	struct mbox_msghdr hdr;
 	uint8_t __io mac_addr[PLT_ETHER_ADDR_LEN];
+	uint32_t index;
 };
 
 /* Structure for requesting the operation to
@@ -2002,6 +2020,8 @@ struct cpt_lf_alloc_req_msg {
 	uint16_t __io sso_pf_func;
 	uint16_t __io eng_grpmsk;
 	uint8_t __io blkaddr;
+	uint8_t __io ctx_ilen_valid : 1;
+	uint8_t __io ctx_ilen : 7;
 };
 
 #define CPT_INLINE_INBOUND  0
@@ -2083,6 +2103,8 @@ struct cpt_rx_inline_lf_cfg_msg {
 	uint32_t __io credit_th;
 	uint16_t __io bpid;
 	uint32_t __io reserved;
+	uint8_t __io ctx_ilen_valid : 1;
+	uint8_t __io ctx_ilen : 7;
 };
 
 struct cpt_caps_rsp_msg {
@@ -2464,6 +2486,31 @@ struct npc_mcam_get_stats_rsp {
 	struct mbox_msghdr hdr;
 	uint64_t __io stat;  /* counter stats */
 	uint8_t __io stat_ena; /* enabled */
+};
+
+#define MCAM_ARR_SIZE    256
+#define MCAM_ARR_ELEM_SZ 64
+
+struct npc_mcam_get_hit_status_req {
+	struct mbox_msghdr hdr;
+	/* If clear == true, then if the hit status bit for mcam id is set,
+	 * then needs to cleared by writing 1 back.
+	 * If clear == false, then leave the hit status bit as is.
+	 */
+	bool __io clear;
+	uint8_t __io reserved[3];
+	/* Start range of mcam id */
+	uint32_t __io range_valid_mcam_ids_start;
+	/* End range of mcam id */
+	uint32_t __io range_valid_mcam_ids_end;
+	/* Bitmap of mcam ids for which the hit status needs to checked */
+	uint64_t __io mcam_ids[MCAM_ARR_SIZE];
+};
+
+struct npc_mcam_get_hit_status_rsp {
+	struct mbox_msghdr hdr;
+	/* Bitmap of mcam hit status, prior to clearing */
+	uint64_t __io mcam_hit_status[MCAM_ARR_SIZE];
 };
 
 /* TIM mailbox error codes

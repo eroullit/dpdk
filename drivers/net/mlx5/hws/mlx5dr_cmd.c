@@ -4,6 +4,12 @@
 
 #include "mlx5dr_internal.h"
 
+static uint32_t mlx5dr_cmd_get_syndrome(uint32_t *out)
+{
+	/* Assumption: syndrome is always the second u32 */
+	return be32toh(out[1]);
+}
+
 int mlx5dr_cmd_destroy_obj(struct mlx5dr_devx_obj *devx_obj)
 {
 	int ret;
@@ -39,7 +45,8 @@ mlx5dr_cmd_flow_table_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create FT");
+		DR_LOG(ERR, "Failed to create FT (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -73,7 +80,8 @@ mlx5dr_cmd_flow_table_modify(struct mlx5dr_devx_obj *devx_obj,
 
 	ret = mlx5_glue->devx_obj_modify(devx_obj->obj, in, sizeof(in), out, sizeof(out));
 	if (ret) {
-		DR_LOG(ERR, "Failed to modify FT");
+		DR_LOG(ERR, "Failed to modify FT (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		rte_errno = errno;
 	}
 
@@ -96,7 +104,8 @@ mlx5dr_cmd_flow_table_query(struct mlx5dr_devx_obj *devx_obj,
 
 	ret = mlx5_glue->devx_obj_query(devx_obj->obj, in, sizeof(in), out, sizeof(out));
 	if (ret) {
-		DR_LOG(ERR, "Failed to query FT");
+		DR_LOG(ERR, "Failed to query FT (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		rte_errno = errno;
 		return ret;
 	}
@@ -129,7 +138,8 @@ mlx5dr_cmd_flow_group_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create Flow group");
+		DR_LOG(ERR, "Failed to create Flow group(syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -182,7 +192,8 @@ mlx5dr_cmd_set_fte(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create FTE");
+		DR_LOG(ERR, "Failed to create FTE (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		rte_errno = errno;
 		goto free_devx;
 	}
@@ -325,7 +336,8 @@ mlx5dr_cmd_rtc_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create RTC");
+		DR_LOG(ERR, "Failed to create RTC (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -365,7 +377,8 @@ mlx5dr_cmd_stc_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create STC");
+		DR_LOG(ERR, "Failed to create STC (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -426,6 +439,7 @@ mlx5dr_cmd_stc_modify_set_stc_param(struct mlx5dr_cmd_stc_modify_attr *stc_attr,
 	case MLX5_IFC_STC_ACTION_TYPE_COPY:
 	case MLX5_IFC_STC_ACTION_TYPE_SET:
 	case MLX5_IFC_STC_ACTION_TYPE_ADD:
+	case MLX5_IFC_STC_ACTION_TYPE_ADD_FIELD:
 		*(__be64 *)stc_parm = stc_attr->modify_action.data;
 		break;
 	case MLX5_IFC_STC_ACTION_TYPE_JUMP_TO_VPORT:
@@ -505,7 +519,8 @@ mlx5dr_cmd_stc_modify(struct mlx5dr_devx_obj *devx_obj,
 
 	ret = mlx5_glue->devx_obj_modify(devx_obj->obj, in, sizeof(in), out, sizeof(out));
 	if (ret) {
-		DR_LOG(ERR, "Failed to modify STC FW action_type %d", stc_attr->action_type);
+		DR_LOG(ERR, "Failed to modify STC FW action_type %d (syndrome: %#x)",
+		       stc_attr->action_type, mlx5dr_cmd_get_syndrome(out));
 		rte_errno = errno;
 	}
 
@@ -542,7 +557,8 @@ mlx5dr_cmd_arg_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create ARG");
+		DR_LOG(ERR, "Failed to create ARG (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -580,7 +596,6 @@ mlx5dr_cmd_header_modify_pattern_create(struct ibv_context *ctx,
 		rte_errno = ENOMEM;
 		return NULL;
 	}
-
 	attr = MLX5_ADDR_OF(create_header_modify_pattern_in, in, hdr);
 	MLX5_SET(general_obj_in_cmd_hdr,
 		 attr, opcode, MLX5_CMD_OP_CREATE_GENERAL_OBJECT);
@@ -599,14 +614,16 @@ mlx5dr_cmd_header_modify_pattern_create(struct ibv_context *ctx,
 		int type;
 
 		type = MLX5_GET(set_action_in, &pattern_data[i], action_type);
-		if (type != MLX5_MODIFICATION_TYPE_COPY)
+		if (type != MLX5_MODIFICATION_TYPE_COPY &&
+		    type != MLX5_MODIFICATION_TYPE_ADD_FIELD)
 			/* Action typ-copy use all bytes for control */
 			MLX5_SET(set_action_in, &pattern_data[i], data, 0);
 	}
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create header_modify_pattern");
+		DR_LOG(ERR, "Failed to create header_modify_pattern (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		rte_errno = errno;
 		goto free_obj;
 	}
@@ -649,7 +666,8 @@ mlx5dr_cmd_ste_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create STE");
+		DR_LOG(ERR, "Failed to create STE (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -708,7 +726,8 @@ mlx5dr_cmd_definer_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create Definer");
+		DR_LOG(ERR, "Failed to create Definer (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -775,7 +794,8 @@ int mlx5dr_cmd_sq_modify_rdy(struct mlx5dr_devx_obj *devx_obj)
 
 	ret = mlx5_glue->devx_obj_modify(devx_obj->obj, in, sizeof(in), out, sizeof(out));
 	if (ret) {
-		DR_LOG(ERR, "Failed to modify SQ");
+		DR_LOG(ERR, "Failed to modify SQ (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		rte_errno = errno;
 	}
 
@@ -843,7 +863,8 @@ mlx5dr_cmd_alias_obj_create(struct ibv_context *ctx,
 
 	devx_obj->obj = mlx5_glue->devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 	if (!devx_obj->obj) {
-		DR_LOG(ERR, "Failed to create ALIAS OBJ");
+		DR_LOG(ERR, "Failed to create ALIAS OBJ (syndrome: %#x)",
+		       mlx5dr_cmd_get_syndrome(out));
 		simple_free(devx_obj);
 		rte_errno = errno;
 		return NULL;
@@ -1029,6 +1050,12 @@ int mlx5dr_cmd_query_caps(struct ibv_context *ctx,
 	caps->nic_ft.reparse = MLX5_GET(query_hca_cap_out, out,
 					capability.flow_table_nic_cap.
 					flow_table_properties_nic_receive.reparse);
+
+	caps->nic_ft.ignore_flow_level_rtc_valid =
+		MLX5_GET(query_hca_cap_out,
+			 out,
+			 capability.flow_table_nic_cap.
+			 flow_table_properties_nic_receive.ignore_flow_level_rtc_valid);
 
 	/* check cross-VHCA support in flow table properties */
 	res =
