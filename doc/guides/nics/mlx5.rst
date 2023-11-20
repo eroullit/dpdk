@@ -150,6 +150,7 @@ Features
 - Matching on ESP header SPI field.
 - Matching on InfiniBand BTH.
 - Modify IPv4/IPv6 ECN field.
+- Push or remove IPv6 routing extension.
 - RSS support in sample action.
 - E-Switch mirroring and jump.
 - E-Switch mirroring and modify.
@@ -213,7 +214,7 @@ Limitations
 - Host shaper:
 
   - Support BlueField series NIC from BlueField-2.
-  - When configuring host shaper with MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED flag set,
+  - When configuring host shaper with ``RTE_PMD_MLX5_HOST_SHAPER_FLAG_AVAIL_THRESH_TRIGGERED`` flag,
     only rates 0 and 100Mbps are supported.
 
 - HW steering:
@@ -543,8 +544,12 @@ Limitations
     encapsulation actions.
   - For NIC Rx flow, supports ``MARK``, ``COUNT``, ``QUEUE``, ``RSS`` in the
     sample actions list.
-  - For E-Switch mirroring flow, supports ``RAW ENCAP``, ``Port ID``,
-    ``VXLAN ENCAP``, ``NVGRE ENCAP`` in the sample actions list.
+  - For E-Switch mirroring flow, supports ``RAW_ENCAP``, ``PORT_ID``,
+    ``VXLAN_ENCAP``, ``NVGRE_ENCAP`` in the sample actions list.
+  - For E-Switch mirroring flow with sample ratio = 1, the ``ENCAP`` action
+    supports uplink port only.
+  - For E-Switch mirroring flow with sample ratio = 1, the ``PORT`` and ``JUMP`` actions
+    are not supported without presented ``ENCAP`` action in the sample actions list.
   - For ConnectX-5 trusted device, the application metadata with SET_TAG index 0
     is not supported before ``RTE_FLOW_ACTION_TYPE_SAMPLE`` action.
 
@@ -601,6 +606,15 @@ Limitations
 
   Only supports HW steering (``dv_flow_en=2``).
 
+- IPv6 routing extension push/remove:
+
+  - Supported only with HW Steering enabled (``dv_flow_en=2``).
+  - Supported in non-zero group
+    (no limits on transfer domain if ``fdb_def_rule_en=1`` which is default).
+  - Only supports TCP or UDP as next layer.
+  - IPv6 routing header must be the only present extension.
+  - Not supported on guest port.
+
 - Hairpin:
 
   - Hairpin between two ports could only manual binding and explicit Tx flow mode. For single port hairpin, all the combinations of auto/manual binding and explicit/implicit Tx flow mode could be supported.
@@ -646,20 +660,45 @@ Limitations
   - When using HWS flow engine (``dv_flow_en`` = 2),
     only meter mark action is supported.
 
+- Ptype:
+
+  - Only supports HW steering (``dv_flow_en=2``).
+  - The supported values are:
+    L2: ``RTE_PTYPE_L2_ETHER``, ``RTE_PTYPE_L2_ETHER_VLAN``, ``RTE_PTYPE_L2_ETHER_QINQ``
+    L3: ``RTE_PTYPE_L3_IPV4``, ``RTE_PTYPE_L3_IPV6``
+    L4: ``RTE_PTYPE_L4_TCP``, ``RTE_PTYPE_L4_UDP``, ``RTE_PTYPE_L4_ICMP``
+    and their ``RTE_PTYPE_INNER_XXX`` counterparts as well as ``RTE_PTYPE_TUNNEL_ESP``.
+    Any other values are not supported. Using them as a value will cause unexpected behavior.
+  - Matching on both outer and inner IP fragmented is supported
+    using ``RTE_PTYPE_L4_FRAG`` and ``RTE_PTYPE_INNER_L4_FRAG`` values.
+    They are not part of L4 types, so they should be provided explicitly
+    as a mask value during pattern template creation.
+    Providing ``RTE_PTYPE_L4_MASK`` during pattern template creation
+    and ``RTE_PTYPE_L4_FRAG`` during flow rule creation
+    will cause unexpected behavior.
+
 - Integrity:
 
-  - Integrity offload is enabled starting from **ConnectX-6 Dx**.
   - Verification bits provided by the hardware are ``l3_ok``, ``ipv4_csum_ok``, ``l4_ok``, ``l4_csum_ok``.
   - ``level`` value 0 references outer headers.
   - Negative integrity item verification is not supported.
-  - Multiple integrity items not supported in a single flow rule.
-  - Flow rule items supplied by application must explicitly specify network headers referred by integrity item.
-    For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits, reference to L4 network header,
-    TCP or UDP, must be in the rule pattern as well::
 
-      flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end …
+  - With SW steering (``dv_flow_en=1``)
 
-      flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec l4_ok / eth / ipv4 proto is udp / end …
+    - Integrity offload is enabled starting from **ConnectX-6 Dx**.
+    - Multiple integrity items not supported in a single flow rule.
+    - Flow rule items supplied by application must explicitly specify
+      network headers referred by integrity item.
+
+      For example, if integrity item mask sets ``l4_ok`` or ``l4_csum_ok`` bits,
+      reference to L4 network header, TCP or UDP, must be in the rule pattern as well::
+
+         flow create 0 ingress pattern integrity level is 0 value mask l3_ok value spec l3_ok / eth / ipv6 / end ...
+         flow create 0 ingress pattern integrity level is 0 value mask l4_ok value spec l4_ok / eth / ipv4 proto is udp / end ...
+
+  - With HW steering (``dv_flow_en=2``)
+    - The ``l3_ok`` field represents all L3 checks, but nothing about IPv4 checksum.
+    - The ``l4_ok`` field represents all L4 checks including L4 checksum.
 
 - Connection tracking:
 
@@ -712,6 +751,13 @@ Limitations
   Matching on checksum and sequence needs MLNX_OFED 5.6+.
 
 - The NIC egress flow rules on representor port are not supported.
+
+- A driver limitation for ``RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR`` action
+  restricts the ``port_id`` configuration to only accept the value ``0xffff``,
+  indicating the E-Switch manager.
+  If the ``repr_matching_en`` flag is enabled, the traffic will be directed
+  to the representor of the source virtual port (SF/VF), while if it is disabled,
+  the traffic will be routed based on the steering rules in the ingress domain.
 
 - Send to kernel action (``RTE_FLOW_ACTION_TYPE_SEND_TO_KERNEL``):
 
@@ -1337,6 +1383,138 @@ for an additional list of options shared with other mlx5 drivers.
     the next rule takes effect only if the previous rules are deleted.
 
   By default, the PMD will set this value to 1.
+
+
+Multiport E-Switch
+------------------
+
+In standard deployments of NVIDIA ConnectX and BlueField HCAs, where embedded switch is enabled,
+each physical port is associated with a single switching domain.
+Only PFs, VFs and SFs related to that physical port are connected to this domain
+and offloaded flow rules are allowed to steer traffic only between the entities in the given domain.
+
+The following diagram pictures the high level overview of this architecture::
+
+       .---. .------. .------. .---. .------. .------.
+       |PF0| |PF0VFi| |PF0SFi| |PF1| |PF1VFi| |PF1SFi|
+       .-+-. .--+---. .--+---. .-+-. .--+---. .--+---.
+         |      |        |       |      |        |
+     .---|------|--------|-------|------|--------|---------.
+     |   |      |        |       |      |        |      HCA|
+     | .-+------+--------+---. .-+------+--------+---.     |
+     | |                     | |                     |     |
+     | |      E-Switch       | |     E-Switch        |     |
+     | |         PF0         | |        PF1          |     |
+     | |                     | |                     |     |
+     | .---------+-----------. .--------+------------.     |
+     |           |                      |                  |
+     .--------+--+---+---------------+--+---+--------------.
+              |      |               |      |
+              | PHY0 |               | PHY1 |
+              |      |               |      |
+              .------.               .------.
+
+Multiport E-Switch is a deployment scenario where:
+
+- All physical ports, PFs, VFs and SFs share the same switching domain.
+- Each physical port gets a separate representor port.
+- Traffic can be matched or forwarded explicitly between any of the entities
+  connected to the domain.
+
+The following diagram pictures the high level overview of this architecture::
+
+       .---. .------. .------. .---. .------. .------.
+       |PF0| |PF0VFi| |PF0SFi| |PF1| |PF1VFi| |PF1SFi|
+       .-+-. .--+---. .--+---. .-+-. .--+---. .--+---.
+         |      |        |       |      |        |
+     .---|------|--------|-------|------|--------|---------.
+     |   |      |        |       |      |        |      HCA|
+     | .-+------+--------+-------+------+--------+---.     |
+     | |                                             |     |
+     | |                   Shared                    |     |
+     | |                  E-Switch                   |     |
+     | |                                             |     |
+     | .---------+----------------------+------------.     |
+     |           |                      |                  |
+     .--------+--+---+---------------+--+---+--------------.
+              |      |               |      |
+              | PHY0 |               | PHY1 |
+              |      |               |      |
+              .------.               .------.
+
+In this deployment a single application can control the switching and forwarding behavior for all
+entities on the HCA.
+
+With this configuration, mlx5 PMD supports:
+
+- matching traffic coming from physical port, PF, VF or SF using REPRESENTED_PORT items;
+- forwarding traffic to physical port, PF, VF or SF using REPRESENTED_PORT actions;
+
+Requirements
+~~~~~~~~~~~~
+
+Supported HCAs:
+
+- ConnectX family: ConnectX-6 Dx and above.
+- BlueField family: BlueField-2 and above.
+- FW version: at least ``XX.37.1014``.
+
+Supported mlx5 kernel modules versions:
+
+- Upstream Linux - from version 6.3.
+- Modules packaged in MLNX_OFED - from version v23.04-0.5.3.3.
+
+Configuration
+~~~~~~~~~~~~~
+
+#. Apply required FW configuration::
+
+      sudo mlxconfig -d /dev/mst/mt4125_pciconf0 set LAG_RESOURCE_ALLOCATION=1
+
+#. Reset FW or cold reboot the host.
+
+#. Switch E-Switch mode on all of the PFs to ``switchdev`` mode::
+
+      sudo devlink dev eswitch set pci/0000:08:00.0 mode switchdev
+      sudo devlink dev eswitch set pci/0000:08:00.1 mode switchdev
+
+#. Enable Multiport E-Switch on all of the PFs::
+
+      sudo devlink dev param set pci/0000:08:00.0 name esw_multiport value true cmode runtime
+      sudo devlink dev param set pci/0000:08:00.1 name esw_multiport value true cmode runtime
+
+#. Configure required number of VFs/SFs::
+
+      echo 4 | sudo tee /sys/class/net/eth2/device/sriov_numvfs
+      echo 4 | sudo tee /sys/class/net/eth3/device/sriov_numvfs
+
+#. Start testpmd and verify that all ports are visible::
+
+      $ sudo dpdk-testpmd -a 08:00.0,dv_flow_en=2,representor=pf0-1vf0-3 -- -i
+      testpmd> show port summary all
+      Number of available ports: 10
+      Port MAC Address       Name         Driver         Status   Link
+      0    E8:EB:D5:18:22:BC 08:00.0_p0   mlx5_pci       up       200 Gbps
+      1    E8:EB:D5:18:22:BD 08:00.0_p1   mlx5_pci       up       200 Gbps
+      2    D2:F6:43:0B:9E:19 08:00.0_representor_c0pf0vf0 mlx5_pci       up       200 Gbps
+      3    E6:42:27:B7:68:BD 08:00.0_representor_c0pf0vf1 mlx5_pci       up       200 Gbps
+      4    A6:5B:7F:8B:B8:47 08:00.0_representor_c0pf0vf2 mlx5_pci       up       200 Gbps
+      5    12:93:50:45:89:02 08:00.0_representor_c0pf0vf3 mlx5_pci       up       200 Gbps
+      6    06:D3:B2:79:FE:AC 08:00.0_representor_c0pf1vf0 mlx5_pci       up       200 Gbps
+      7    12:FC:08:E4:C2:CA 08:00.0_representor_c0pf1vf1 mlx5_pci       up       200 Gbps
+      8    8E:A9:9A:D0:35:4C 08:00.0_representor_c0pf1vf2 mlx5_pci       up       200 Gbps
+      9    E6:35:83:1F:B0:A9 08:00.0_representor_c0pf1vf3 mlx5_pci       up       200 Gbps
+
+Limitations
+~~~~~~~~~~~
+
+- Multiport E-Switch is not supported on Windows.
+- Multiport E-Switch is supported only with HW Steering flow engine (``dv_flow_en=2``).
+- Matching traffic coming from a physical port and forwarding it to a physical port
+  (either the same or other one) is not supported.
+
+  In order to achieve such a functionality, an application has to setup hairpin queues
+  between physical port representors and forward the traffic using hairpin queues.
 
 
 Sub-Function
@@ -2180,3 +2358,18 @@ where:
 * ``sw_queue_id``: queue index in range [64536, 65535].
   This range is the highest 1000 numbers.
 * ``hw_queue_id``: queue index given by HW in queue creation.
+
+Set Flow Engine Mode
+~~~~~~~~~~~~~~~~~~~~
+
+Set the flow engine to active or standby mode with specific flags (bitmap style).
+See ``RTE_PMD_MLX5_FLOW_ENGINE_FLAG_*`` for the flag definitions.
+
+.. code-block:: console
+
+   testpmd> mlx5 set flow_engine <active|standby> [<flags>]
+
+This command is used for testing live migration,
+and works for software steering only.
+Default FDB jump should be disabled if switchdev is enabled.
+The mode will propagate to all the probed ports.

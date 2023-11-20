@@ -41,6 +41,7 @@ Aleksandr Loktionov <aleksandr.loktionov@intel.com>
 Aleksandr Miloshenko <a.miloshenko@f5.com>
 Aleksey Baulin <aleksey.baulin@gmail.com>
 Aleksey Katargin <gureedo@gmail.com>
+Ales Musil <amusil@redhat.com>
 Alexander Bechikov <asb.tyum@gmail.com>
 Alexander Belyakov <abelyako@gmail.com>
 Alexander Chernavin <achernavin@netgate.com>
@@ -213,7 +214,7 @@ Charles Brett <cfb@hpe.com>
 Charles Myers <charles.myers@spirent.com>
 Charles Stoll <charles.stoll@intel.com>
 Chas Williams <3chas3@gmail.com> <chas3@att.com> <ciwillia@brocade.com>
-Chenbo Xia <chenbo.xia@intel.com>
+Chenbo Xia <chenbox@nvidia.com> <chenbo.xia@intel.com>
 Chengchang Tang <tangchengchang@huawei.com> <tangchengchang@hisilicon.com>
 Chengfeng Ye <cyeaa@connect.ust.hk>
 Chenghu Yao <yao.chenghu@zte.com.cn>
@@ -323,7 +324,7 @@ Devendra Singh Rawat <dsinghrawat@marvell.com>
 Dex Chen <dex.chen@ruckuswireless.com>
 Dexia Li <dexia.li@jaguarmicro.com>
 Dexuan Cui <decui@microsoft.com>
-Dharmik Thakkar <dharmik.thakkar@arm.com>
+Dharmik Thakkar <dharmikjayesh.thakkar@arm.com> <dharmik.thakkar@arm.com>
 Dheemanth Mallikarjun <dheemanthm@vmware.com>
 Diana Wang <na.wang@corigine.com>
 Didier Pallard <didier.pallard@6wind.com>
@@ -394,6 +395,7 @@ Farah Smith <farah.smith@broadcom.com>
 Fei Chen <chenwei.0515@bytedance.com>
 Feifei Wang <feifei.wang2@arm.com> <feifei.wang@arm.com>
 Fei Qin <fei.qin@corigine.com>
+Fengjiang Liu <liufengjiang.0426@bytedance.com>
 Fengnan Chang <changfengnan@bytedance.com>
 Fengtian Guo <fengtian.guo@6wind.com>
 Ferdinand Thiessen <rpm@fthiessen.de>
@@ -674,6 +676,7 @@ John Romein <romein@astron.nl>
 John W. Linville <linville@tuxdriver.com>
 Jonas Pfefferle <jpf@zurich.ibm.com> <pepperjo@japf.ch>
 Jonathan Erb <jonathan.erb@threatblockr.com> <jonathan.erb@banduracyber.com>
+Jonathan Tsai <jonathan1.tsai@intel.com>
 Jon DeVree <nuxi@vault24.org>
 Jon Loeliger <jdl@netgate.com>
 Joongi Kim <joongi@an.kaist.ac.kr>
@@ -1299,6 +1302,7 @@ Shuanglin Wang <shuanglin.wang@broadcom.com>
 Shuki Katzenelson <shuki@lightbitslabs.com>
 Shun Hao <shunh@nvidia.com>
 Shu Shen <shu.shen@radisys.com>
+Shujing Dong <shujing.dong@corigine.com>
 Shweta Choudaha <shweta.choudaha@att.com>
 Shyam Kumar Shrivastav <shrivastav.shyam@gmail.com>
 Shy Shyman <shys@nvidia.com> <shys@mellanox.com>
@@ -1414,6 +1418,7 @@ Tianli Lai <laitianli@tom.com>
 Tianyu Li <tianyu.li@arm.com>
 Timmons C. Player <timmons.player@spirent.com>
 Timothy McDaniel <timothy.mcdaniel@intel.com>
+Timothy Miskell <timothy.miskell@intel.com>
 Timothy Redaelli <tredaelli@redhat.com>
 Tim Shearer <tim.shearer@overturenetworks.com>
 Ting Xu <ting.xu@intel.com>
@@ -1493,6 +1498,7 @@ Vlad Zolotarov <vladz@cloudius-systems.com>
 Vlastimil Kosar <kosar@rehivetech.com>
 Volodymyr Fialko <vfialko@marvell.com>
 Vu Pham <vuhuong@mellanox.com>
+Wajeeh Atrash <atrwajee@amazon.com>
 Walter Heymans <walter.heymans@corigine.com>
 Wang Sheng-Hui <shhuiw@gmail.com>
 Wangyu (Eric) <seven.wangyu@huawei.com>
@@ -1500,7 +1506,7 @@ Waterman Cao <waterman.cao@intel.com>
 Weichun Chen <weichunx.chen@intel.com>
 Wei Dai <wei.dai@intel.com>
 Weifeng Li <liweifeng96@126.com>
-Weiguo Li <liwg06@foxmail.com>
+Weiguo Li <liweiguo@xencore.cn> <liwg06@foxmail.com>
 Wei Huang <wei.huang@intel.com>
 Wei Hu <weh@microsoft.com>
 Wei Hu (Xavier) <xavier.huwei@huawei.com>

@@ -98,7 +98,7 @@
 		RTE_MBUF_F_TX_TUNNEL_MASK |	\
 		RTE_MBUF_F_TX_OUTER_IP_CKSUM |  \
 		RTE_MBUF_F_TX_OUTER_UDP_CKSUM | \
-		RTE_ETH_TX_OFFLOAD_SECURITY)
+		RTE_MBUF_F_TX_SEC_OFFLOAD)
 
 #define IAVF_TX_OFFLOAD_NOTSUP_MASK \
 		(RTE_MBUF_F_TX_OFFLOAD_MASK ^ IAVF_TX_OFFLOAD_MASK)
@@ -288,6 +288,7 @@ struct iavf_tx_queue {
 	uint16_t free_thresh;
 	uint16_t rs_thresh;
 	uint8_t rel_mbufs_type;
+	struct iavf_vsi *vsi; /**< the VSI this queue belongs to */
 
 	uint16_t port_id;
 	uint16_t queue_id;

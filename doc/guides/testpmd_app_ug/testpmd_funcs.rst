@@ -235,9 +235,9 @@ size is used to indicate the hardware supported reta size
 show port rss-hash
 ~~~~~~~~~~~~~~~~~~
 
-Display the RSS hash functions and RSS hash key of a port::
+Display the RSS hash functions and RSS hash key or RSS hash algorithm of a port::
 
-   testpmd> show port (port_id) rss-hash [key]
+   testpmd> show port (port_id) rss-hash [key | algorithm]
 
 clear port
 ~~~~~~~~~~
@@ -1570,12 +1570,12 @@ Enable/disable E-tag based forwarding on a port::
 config per port Rx offloading
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Enable or disable a per port Rx offloading on all Rx queues of a port::
+Enable or disable port Rx offloading on all Rx queues of a port::
 
-   testpmd> port config (port_id) rx_offload (offloading) on|off
+   testpmd> port config (port_id|all) rx_offload (offloading) on|off
 
 * ``offloading``: can be any of these offloading capability:
-                  vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
+                  all, vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
                   vlan_filter, vlan_extend, scatter, timestamp, security,
                   keep_crc, rss_hash
@@ -1590,7 +1590,7 @@ Enable or disable a per queue Rx offloading only on a specific Rx queue::
    testpmd> port (port_id) rxq (queue_id) rx_offload (offloading) on|off
 
 * ``offloading``: can be any of these offloading capability:
-                  vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
+                  all, vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
                   vlan_filter, vlan_extend, scatter, timestamp, security,
                   keep_crc
@@ -1600,12 +1600,12 @@ This command should be run when the port is stopped, or else it will fail.
 config per port Tx offloading
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Enable or disable a per port Tx offloading on all Tx queues of a port::
+Enable or disable port Tx offloading on all Tx queues of a port::
 
-   testpmd> port config (port_id) tx_offload (offloading) on|off
+   testpmd> port config (port_id|all) tx_offload (offloading) on|off
 
 * ``offloading``: can be any of these offloading capability:
-                  vlan_insert, ipv4_cksum, udp_cksum, tcp_cksum,
+                  all, vlan_insert, ipv4_cksum, udp_cksum, tcp_cksum,
                   sctp_cksum, tcp_tso, udp_tso, outer_ipv4_cksum,
                   qinq_insert, vxlan_tnl_tso, gre_tnl_tso,
                   ipip_tnl_tso, geneve_tnl_tso, macsec_insert,
@@ -1621,7 +1621,7 @@ Enable or disable a per queue Tx offloading only on a specific Tx queue::
    testpmd> port (port_id) txq (queue_id) tx_offload (offloading) on|off
 
 * ``offloading``: can be any of these offloading capability:
-                  vlan_insert, ipv4_cksum, udp_cksum, tcp_cksum,
+                  all, vlan_insert, ipv4_cksum, udp_cksum, tcp_cksum,
                   sctp_cksum, tcp_tso, udp_tso, outer_ipv4_cksum,
                   qinq_insert, vxlan_tnl_tso, gre_tnl_tso,
                   ipip_tnl_tso, geneve_tnl_tso, macsec_insert,

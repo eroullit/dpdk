@@ -9,10 +9,13 @@
 #ifndef _CPFL_FLOW_PARSER_H_
 #define _CPFL_FLOW_PARSER_H_
 
-#define CPFL_FLOW_JSON_STR_SIZE_MAX 100
-#define CPFL_MAX_SEM_FV_KEY_SIZE 64
-#define CPFL_FLOW_JS_PROTO_SIZE 16
-#define CPFL_MOD_KEY_NUM_MAX 8
+#define CPFL_JS_STR_SIZE 100
+#define CPFL_JS_SEM_FV_KEY_NUM_MAX 64
+#define CPFL_JS_PROTO_NUM_MAX 16
+#define CPFL_JS_MOD_KEY_NUM_MAX 8
+#define CPFL_JS_PROG_CONTENT_FIELD_NUM_MAX 64
+#define CPFL_JS_PROG_CONSTANT_VALUE_NUM_MAX 8
+#define CPFL_JS_PROG_PARAM_NUM_MAX 10
 
 /* Pattern Rules Storage */
 enum cpfl_flow_pr_action_type {
@@ -27,9 +30,9 @@ struct cpfl_flow_js_pr_key_attr {
 };
 
 struct cpfl_flow_js_pr_key_proto_field {
-	char name[CPFL_FLOW_JSON_STR_SIZE_MAX];
+	char name[CPFL_JS_STR_SIZE];
 	union {
-		char mask[CPFL_FLOW_JSON_STR_SIZE_MAX];
+		char mask[CPFL_JS_STR_SIZE];
 		uint32_t mask_32b;
 	};
 };
@@ -77,7 +80,7 @@ struct cpfl_flow_js_fv {
 struct cpfl_flow_js_pr_action_sem {
 	uint16_t prof;		    /* SEM profile ID */
 	uint16_t subprof;	    /* SEM subprofile ID */
-	uint16_t keysize;	    /*  extract key size in bytes */
+	uint16_t keysize;	    /* extract key size in bytes */
 	struct cpfl_flow_js_fv *fv; /* A SEM field vector array */
 	int fv_size;
 };
@@ -113,8 +116,23 @@ struct cpfl_flow_js_pr {
  * of data.
  */
 struct cpfl_flow_js_mr_key_action_vxlan_encap {
-	enum rte_flow_item_type protocols[CPFL_FLOW_JS_PROTO_SIZE];
+	enum rte_flow_item_type protocols[CPFL_JS_PROTO_NUM_MAX];
 	int proto_size;
+};
+
+struct cpfl_flow_js_prog_parameter {
+	bool has_name;
+	uint16_t index;
+	char name[CPFL_JS_STR_SIZE];
+	uint16_t size;
+};
+
+struct cpfl_flow_js_mr_key_action_prog {
+	bool has_name;
+	uint32_t id;
+	char name[CPFL_JS_STR_SIZE];
+	uint32_t param_size;
+	struct cpfl_flow_js_prog_parameter params[CPFL_JS_PROG_PARAM_NUM_MAX];
 };
 
 /* A set of modification rte_flow_action_xxx objects can be defined as a type / data pair. */
@@ -122,6 +140,7 @@ struct cpfl_flow_js_mr_key_action {
 	enum rte_flow_action_type type;
 	union {
 		struct cpfl_flow_js_mr_key_action_vxlan_encap encap;
+		struct cpfl_flow_js_mr_key_action_prog prog;
 	};
 };
 
@@ -132,9 +151,25 @@ struct cpfl_flow_js_mr_key {
 
 struct cpfl_flow_js_mr_layout {
 	int index;				/* links to the element of the actions array */
-	char hint[CPFL_FLOW_JSON_STR_SIZE_MAX]; /* where the data to copy from */
+	char hint[CPFL_JS_STR_SIZE]; /* where the data to copy from */
 	uint16_t offset;			/* the start byte of the data to copy from */
 	uint16_t size; /*  bytes of the data to be copied to the memory region */
+};
+
+struct cpfl_flow_js_mr_field {
+	char type[CPFL_JS_STR_SIZE];
+	uint16_t start;
+	uint16_t width;
+	union {
+		uint16_t index;
+		uint8_t value[CPFL_JS_PROG_CONSTANT_VALUE_NUM_MAX];
+	};
+};
+
+struct cpfl_flow_js_mr_content {
+	uint16_t size;
+	struct cpfl_flow_js_mr_field fields[CPFL_JS_PROG_CONTENT_FIELD_NUM_MAX];
+	int field_size;
 };
 
 /** For mod data, besides the profile ID, a layout array defines a set of hints that helps
@@ -144,8 +179,14 @@ struct cpfl_flow_js_mr_layout {
 struct cpfl_flow_js_mr_action_mod {
 	uint16_t prof;
 	uint16_t byte_len;
-	struct cpfl_flow_js_mr_layout *layout;
-	int layout_size;
+	bool is_content;
+	union {
+		struct {
+			struct cpfl_flow_js_mr_layout layout[CPFL_JS_PROTO_NUM_MAX];
+			int layout_size;
+		};
+		struct cpfl_flow_js_mr_content content;
+	};
 };
 
 enum cpfl_flow_mr_action_type {
@@ -186,7 +227,7 @@ struct cpfl_flow_pr_action_sem {
 	uint16_t prof;
 	uint16_t subprof;
 	uint16_t keysize;
-	uint8_t cpfl_flow_pr_fv[CPFL_MAX_SEM_FV_KEY_SIZE];
+	uint8_t cpfl_flow_pr_fv[CPFL_JS_SEM_FV_KEY_NUM_MAX];
 };
 
 struct cpfl_flow_pr_action {
@@ -198,16 +239,25 @@ struct cpfl_flow_pr_action {
 
 /* Modification Rules */
 struct cpfl_flow_mr_key_action_vxlan_encap {
-	enum rte_flow_item_type protocols[CPFL_FLOW_JS_PROTO_SIZE];
+	enum rte_flow_item_type protocols[CPFL_JS_PROTO_NUM_MAX];
 	uint16_t proto_size;
 	const struct rte_flow_action *action;
 };
 
-struct cpfl_flow_mr_key_action {
+struct cpfl_flow_mr_key_action_prog {
+	const struct rte_flow_action_prog *prog;
+	bool has_name;
+	char name[CPFL_JS_PROG_PARAM_NUM_MAX][CPFL_JS_STR_SIZE];
+};
+
+struct cpfl_flow_mr_key_mod {
 	enum rte_flow_action_type type;
-	union {
-		struct cpfl_flow_mr_key_action_vxlan_encap encap;
-	};
+	struct cpfl_flow_mr_key_action_vxlan_encap encap;
+};
+
+struct cpfl_flow_mr_key_action {
+	struct cpfl_flow_mr_key_mod mods[CPFL_JS_MOD_KEY_NUM_MAX];
+	struct cpfl_flow_mr_key_action_prog prog;
 };
 
 struct cpfl_flow_mr_action_mod {

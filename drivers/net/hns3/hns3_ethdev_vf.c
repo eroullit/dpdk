@@ -681,10 +681,6 @@ hns3vf_get_capability(struct hns3_hw *hw)
 {
 	int ret;
 
-	ret = hns3_get_pci_revision_id(hw, &hw->revision);
-	if (ret)
-		return ret;
-
 	if (hw->revision < PCI_REVISION_ID_HIP09_A) {
 		hns3_set_default_dev_specifications(hw);
 		hw->intr.mapping_mode = HNS3_INTR_MAPPING_VEC_RSV_ONE;
@@ -1337,6 +1333,10 @@ hns3vf_init_vf(struct rte_eth_dev *eth_dev)
 	/* Get hardware io base address from pcie BAR2 IO space */
 	hw->io_base = pci_dev->mem_resource[2].addr;
 
+	ret = hns3_get_pci_revision_id(hw, &hw->revision);
+	if (ret)
+		return ret;
+
 	/* Firmware command queue initialize */
 	ret = hns3_cmd_init_queue(hw);
 	if (ret) {
@@ -1715,14 +1715,13 @@ hns3vf_is_reset_pending(struct hns3_adapter *hns)
 		return false;
 
 	/*
-	 * Check the registers to confirm whether there is reset pending.
-	 * Note: This check may lead to schedule reset task, but only primary
-	 *       process can process the reset event. Therefore, limit the
-	 *       checking under only primary process.
+	 * Only primary can process can process the reset event,
+	 * so don't check reset event in secondary.
 	 */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		hns3vf_check_event_cause(hns, NULL);
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return false;
 
+	hns3vf_check_event_cause(hns, NULL);
 	reset = hns3vf_get_reset_level(hw, &hw->reset.pending);
 	if (hw->reset.level != HNS3_NONE_RESET && reset != HNS3_NONE_RESET &&
 	    hw->reset.level < reset) {
@@ -2082,8 +2081,11 @@ hns3vf_reinit_dev(struct hns3_adapter *hns)
 		 */
 		if (pci_dev->kdrv == RTE_PCI_KDRV_IGB_UIO ||
 		    pci_dev->kdrv == RTE_PCI_KDRV_UIO_GENERIC) {
-			if (hns3vf_enable_msix(pci_dev, true))
+			ret = hns3vf_enable_msix(pci_dev, true);
+			if (ret != 0) {
 				hns3_err(hw, "Failed to enable msix");
+				return ret;
+			}
 		}
 
 		rte_intr_enable(pci_dev->intr_handle);

@@ -107,13 +107,6 @@ cpfl_fxp_create(struct rte_eth_dev *dev,
 	return ret;
 }
 
-static inline void
-cpfl_fxp_rule_free(struct rte_flow *flow)
-{
-	rte_free(flow->rule);
-	flow->rule = NULL;
-}
-
 static int
 cpfl_fxp_destroy(struct rte_eth_dev *dev,
 		 struct rte_flow *flow,
@@ -128,7 +121,7 @@ cpfl_fxp_destroy(struct rte_eth_dev *dev,
 	struct cpfl_vport *vport;
 	struct cpfl_repr *repr;
 
-	rim = flow->rule;
+	rim = (struct cpfl_rule_info_meta *)flow->rule;
 	if (!rim) {
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
@@ -164,7 +157,8 @@ cpfl_fxp_destroy(struct rte_eth_dev *dev,
 	for (i = rim->pr_num; i < rim->rule_num; i++)
 		cpfl_fxp_mod_idx_free(ad, rim->rules[i].mod.mod_index);
 err:
-	cpfl_fxp_rule_free(flow);
+	rte_free(rim);
+	flow->rule = NULL;
 	return ret;
 }
 
@@ -373,6 +367,7 @@ cpfl_fxp_parse_action(struct cpfl_itf *itf,
 			break;
 		case RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP:
 		case RTE_FLOW_ACTION_TYPE_VXLAN_DECAP:
+		case RTE_FLOW_ACTION_TYPE_PROG:
 			break;
 		case RTE_FLOW_ACTION_TYPE_VOID:
 			break;
@@ -425,6 +420,7 @@ cpfl_is_mod_action(const struct rte_flow_action actions[])
 		switch (action_type) {
 		case RTE_FLOW_ACTION_TYPE_VXLAN_ENCAP:
 		case RTE_FLOW_ACTION_TYPE_VXLAN_DECAP:
+		case RTE_FLOW_ACTION_TYPE_PROG:
 			return true;
 		default:
 			continue;

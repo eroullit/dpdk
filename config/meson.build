@@ -36,6 +36,11 @@ if is_ms_compiler
     # the MSVC compiler regards as unsafe but are used by DPDK
     dpdk_conf.set('_CRT_SECURE_NO_WARNINGS', 1)
 
+    # temporarily disable msvc specific warnings
+    # - 4244 compiler detected conversion of integer to smaller type
+    # - 4267 compiler detected conversion of size_t to smaller type
+    add_project_arguments('/wd4244', '/wd4267', language: 'c')
+
     # enable non-locking atomic operations
     add_project_arguments('/experimental:c11atomics', language: 'c')
 
@@ -159,8 +164,18 @@ if not is_ms_compiler
     if host_machine.cpu_family().startswith('ppc')
         machine_args += '-mcpu=' + cpu_instruction_set
         machine_args += '-mtune=' + cpu_instruction_set
+        compiler_arch_support = cc.has_argument('-mcpu=' + cpu_instruction_set)
     else
         machine_args += '-march=' + cpu_instruction_set
+        # arm manages generic/auto config in config/arm/meson.build
+        if cpu_instruction_set != 'generic' and cpu_instruction_set != 'auto'
+            compiler_arch_support = cc.has_argument('-march=' + cpu_instruction_set)
+        else
+            compiler_arch_support = true
+        endif
+    endif
+    if not compiler_arch_support
+        error('Compiler does not support "@0@" arch flag.'.format(cpu_instruction_set))
     endif
 endif
 
@@ -236,11 +251,6 @@ dpdk_conf.set('RTE_BACKTRACE', cc.has_header('execinfo.h') or is_windows)
 libarchive = dependency('libarchive', required: false, method: 'pkg-config')
 if libarchive.found()
     dpdk_conf.set('RTE_HAS_LIBARCHIVE', 1)
-    # Push libarchive link dependency at the project level to support
-    # statically linking dpdk apps. Details at:
-    # https://inbox.dpdk.org/dev/20210605004024.660267a1@sovereign/
-    add_project_link_arguments('-larchive', language: 'c')
-    dpdk_extra_ldflags += '-larchive'
 endif
 
 # check for libbsd

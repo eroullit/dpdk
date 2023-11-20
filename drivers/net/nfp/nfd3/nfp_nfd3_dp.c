@@ -30,7 +30,7 @@ nfp_net_nfd3_tx_tso(struct nfp_net_txq *txq,
 	uint64_t ol_flags;
 	struct nfp_net_hw *hw = txq->hw;
 
-	if ((hw->cap & NFP_NET_CFG_CTRL_LSO_ANY) == 0)
+	if ((hw->super.cap & NFP_NET_CFG_CTRL_LSO_ANY) == 0)
 		goto clean_txd;
 
 	ol_flags = mb->ol_flags;
@@ -69,7 +69,7 @@ nfp_net_nfd3_tx_cksum(struct nfp_net_txq *txq,
 	uint64_t ol_flags;
 	struct nfp_net_hw *hw = txq->hw;
 
-	if ((hw->cap & NFP_NET_CFG_CTRL_TXCSUM) == 0)
+	if ((hw->super.cap & NFP_NET_CFG_CTRL_TXCSUM) == 0)
 		return;
 
 	ol_flags = mb->ol_flags;
@@ -127,8 +127,8 @@ nfp_net_nfd3_tx_vlan(struct nfp_net_txq *txq,
 {
 	struct nfp_net_hw *hw = txq->hw;
 
-	if ((hw->cap & NFP_NET_CFG_CTRL_TXVLAN_V2) != 0 ||
-			(hw->cap & NFP_NET_CFG_CTRL_TXVLAN) == 0)
+	if ((hw->super.cap & NFP_NET_CFG_CTRL_TXVLAN_V2) != 0 ||
+			(hw->super.cap & NFP_NET_CFG_CTRL_TXVLAN) == 0)
 		return;
 
 	if ((mb->ol_flags & RTE_MBUF_F_TX_VLAN) != 0) {
@@ -151,10 +151,10 @@ nfp_net_nfd3_set_meta_data(struct nfp_net_meta_raw *meta_data,
 	uint8_t ipsec_layer = 0;
 
 	hw = txq->hw;
-	cap_extend = hw->cap_ext;
+	cap_extend = hw->super.cap_ext;
 
 	if ((pkt->ol_flags & RTE_MBUF_F_TX_VLAN) != 0 &&
-			(hw->ctrl & NFP_NET_CFG_CTRL_TXVLAN_V2) != 0) {
+			(hw->super.ctrl & NFP_NET_CFG_CTRL_TXVLAN_V2) != 0) {
 		if (meta_data->length == 0)
 			meta_data->length = NFP_NET_META_HEADER_SIZE;
 		meta_data->length += NFP_NET_META_FIELD_SIZE;
@@ -278,7 +278,7 @@ nfp_net_nfd3_xmit_pkts_common(void *tx_queue,
 		}
 
 		if (unlikely(pkt->nb_segs > 1 &&
-				(hw->cap & NFP_NET_CFG_CTRL_GATHER) == 0)) {
+				(hw->super.cap & NFP_NET_CFG_CTRL_GATHER) == 0)) {
 			PMD_TX_LOG(ERR, "Multisegment packet not supported");
 			goto xmit_end;
 		}
@@ -377,7 +377,7 @@ nfp_net_nfd3_tx_queue_setup(struct rte_eth_dev *dev,
 	uint16_t tx_free_thresh;
 	const struct rte_memzone *tz;
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	hw = nfp_net_get_hw(dev);
 
 	nfp_net_tx_desc_limits(hw, &min_tx_desc, &max_tx_desc);
 
@@ -465,8 +465,8 @@ nfp_net_nfd3_tx_queue_setup(struct rte_eth_dev *dev,
 	 * Telling the HW about the physical address of the TX ring and number
 	 * of descriptors in log2 format.
 	 */
-	nn_cfg_writeq(hw, NFP_NET_CFG_TXR_ADDR(queue_idx), txq->dma);
-	nn_cfg_writeb(hw, NFP_NET_CFG_TXR_SZ(queue_idx), rte_log2_u32(txq->tx_count));
+	nn_cfg_writeq(&hw->super, NFP_NET_CFG_TXR_ADDR(queue_idx), txq->dma);
+	nn_cfg_writeb(&hw->super, NFP_NET_CFG_TXR_SZ(queue_idx), rte_log2_u32(txq->tx_count));
 
 	return 0;
 }

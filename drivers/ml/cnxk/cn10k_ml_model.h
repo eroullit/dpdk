@@ -9,17 +9,14 @@
 
 #include <roc_api.h>
 
-#include "cn10k_ml_dev.h"
 #include "cn10k_ml_ocm.h"
-#include "cn10k_ml_ops.h"
 
-/* Model state */
-enum cn10k_ml_model_state {
-	ML_CN10K_MODEL_STATE_LOADED,
-	ML_CN10K_MODEL_STATE_JOB_ACTIVE,
-	ML_CN10K_MODEL_STATE_STARTED,
-	ML_CN10K_MODEL_STATE_UNKNOWN,
-};
+#include "cnxk_ml_io.h"
+
+struct cnxk_ml_dev;
+struct cnxk_ml_model;
+struct cnxk_ml_layer;
+struct cnxk_ml_req;
 
 /* Model Metadata : v 2.3.0.1 */
 #define MRVL_ML_MODEL_MAGIC_STRING "MRVL"
@@ -367,30 +364,18 @@ struct cn10k_ml_model_metadata {
 };
 
 /* Model address structure */
-struct cn10k_ml_model_addr {
+struct cn10k_ml_layer_addr {
 	/* Base DMA address for load */
 	void *base_dma_addr_load;
-
-	/* Base DMA address for run */
-	void *base_dma_addr_run;
 
 	/* Init section load address */
 	void *init_load_addr;
 
-	/* Init section run address */
-	void *init_run_addr;
-
 	/* Main section load address */
 	void *main_load_addr;
 
-	/* Main section run address */
-	void *main_run_addr;
-
 	/* Finish section load address */
 	void *finish_load_addr;
-
-	/* Finish section run address */
-	void *finish_run_addr;
 
 	/* Weights and Bias base address */
 	void *wb_base_addr;
@@ -406,58 +391,10 @@ struct cn10k_ml_model_addr {
 
 	/* End tile */
 	uint8_t tile_end;
-
-	/* Input address and size */
-	struct {
-		/* Number of dimensions in shape */
-		uint32_t nb_dims;
-
-		/* Shape of input */
-		uint32_t shape[4];
-
-		/* Number of elements */
-		uint32_t nb_elements;
-
-		/* Dequantized input size */
-		uint32_t sz_d;
-
-		/* Quantized input size */
-		uint32_t sz_q;
-	} input[MRVL_ML_NUM_INPUT_OUTPUT];
-
-	/* Output address and size */
-	struct {
-		/* Number of dimensions in shape */
-		uint32_t nb_dims;
-
-		/* Shape of input */
-		uint32_t shape[4];
-
-		/* Number of elements */
-		uint32_t nb_elements;
-
-		/* Dequantize output size */
-		uint32_t sz_d;
-
-		/* Quantized output size */
-		uint32_t sz_q;
-	} output[MRVL_ML_NUM_INPUT_OUTPUT];
-
-	/* Total size of quantized input */
-	uint32_t total_input_sz_q;
-
-	/* Total size of dequantized input */
-	uint32_t total_input_sz_d;
-
-	/* Total size of quantized output */
-	uint32_t total_output_sz_q;
-
-	/* Total size of dequantized output */
-	uint32_t total_output_sz_d;
 };
 
 /* Model fast-path stats */
-struct cn10k_ml_model_stats {
+struct cn10k_ml_layer_xstats {
 	/* Total hardware latency, sum of all inferences */
 	uint64_t hw_latency_tot;
 
@@ -486,59 +423,45 @@ struct cn10k_ml_model_stats {
 	uint64_t fw_reset_count;
 };
 
-/* Model Object */
-struct cn10k_ml_model {
-	/* Device reference */
-	struct cn10k_ml_dev *mldev;
-
-	/* Name */
-	char name[RTE_ML_STR_MAX];
-
-	/* ID */
-	uint16_t model_id;
-
-	/* Batch size */
-	uint32_t batch_size;
-
-	/* Metadata */
+struct cn10k_ml_layer_data {
+	/* Model / Layer: metadata */
 	struct cn10k_ml_model_metadata metadata;
 
-	/* Address structure */
-	struct cn10k_ml_model_addr addr;
+	/* Layer: address structure */
+	struct cn10k_ml_layer_addr addr;
 
-	/* Tile and memory information object */
-	struct cn10k_ml_ocm_model_map model_mem_map;
+	/* Layer: Tile and memory information object */
+	struct cn10k_ml_ocm_layer_map ocm_map;
 
-	/* Internal model information structure
-	 * Size of the buffer = sizeof(struct rte_ml_model_info)
-	 *                    + num_inputs * sizeof(struct rte_ml_io_info)
-	 *                    + num_outputs * sizeof(struct rte_ml_io_info).
-	 * Structures would be arranged in the same order in the buffer.
-	 */
-	uint8_t *info;
+	/* Layer: Slow-path operations request pointer */
+	struct cnxk_ml_req *req;
 
-	/* Spinlock, used to update model state */
-	plt_spinlock_t lock;
+	/* Layer: Stats for burst ops */
+	struct cn10k_ml_layer_xstats *burst_xstats;
 
-	/* State */
-	enum cn10k_ml_model_state state;
+	/* Layer: Stats for sync ops */
+	struct cn10k_ml_layer_xstats *sync_xstats;
+};
 
-	/* Slow-path operations request pointer */
-	struct cn10k_ml_req *req;
-
-	/* Stats for burst ops */
-	struct cn10k_ml_model_stats *burst_stats;
-
-	/* Stats for sync ops */
-	struct cn10k_ml_model_stats *sync_stats;
+struct cn10k_ml_model_data {
+	/* Model / Layer: metadata */
+	struct cn10k_ml_model_metadata metadata;
 };
 
 int cn10k_ml_model_metadata_check(uint8_t *buffer, uint64_t size);
 void cn10k_ml_model_metadata_update(struct cn10k_ml_model_metadata *metadata);
-void cn10k_ml_model_addr_update(struct cn10k_ml_model *model, uint8_t *buffer,
+void cn10k_ml_layer_addr_update(struct cnxk_ml_layer *layer, uint8_t *buffer,
 				uint8_t *base_dma_addr);
-int cn10k_ml_model_ocm_pages_count(struct cn10k_ml_dev *mldev, uint16_t model_id, uint8_t *buffer,
-				   uint16_t *wb_pages, uint16_t *scratch_pages);
-void cn10k_ml_model_info_set(struct rte_ml_dev *dev, struct cn10k_ml_model *model);
+void cn10k_ml_layer_io_info_set(struct cnxk_ml_io_info *io_info,
+				struct cn10k_ml_model_metadata *metadata);
+struct cnxk_ml_io_info *cn10k_ml_model_io_info_get(struct cnxk_ml_model *model, uint16_t layer_id);
+int cn10k_ml_model_ocm_pages_count(struct cnxk_ml_dev *cnxk_mldev, struct cnxk_ml_layer *layer,
+				   uint8_t *buffer, uint16_t *wb_pages, uint16_t *scratch_pages);
+void cn10k_ml_model_info_set(struct cnxk_ml_dev *cnxk_mldev, struct cnxk_ml_model *model,
+			     struct cnxk_ml_io_info *io_info,
+			     struct cn10k_ml_model_metadata *metadata);
+void cn10k_ml_layer_print(struct cnxk_ml_dev *cnxk_mldev, struct cnxk_ml_layer *layer, FILE *fp);
+int cn10k_ml_model_get_layer_id(struct cnxk_ml_model *model, const char *layer_name,
+				uint16_t *layer_id);
 
 #endif /* _CN10K_ML_MODEL_H_ */

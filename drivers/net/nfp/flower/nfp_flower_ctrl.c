@@ -109,7 +109,7 @@ nfp_flower_ctrl_vnic_recv(void *rx_queue,
 		/* Now resetting and updating the descriptor */
 		rxds->vals[0] = 0;
 		rxds->vals[1] = 0;
-		dma_addr = rte_cpu_to_le_64(RTE_MBUF_DMA_ADDR_DEFAULT(new_mb));
+		dma_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(new_mb));
 		rxds->fld.dd = 0;
 		rxds->fld.dma_addr_hi = (dma_addr >> 32) & 0xffff;
 		rxds->fld.dma_addr_lo = dma_addr & 0xffffffff;
@@ -375,7 +375,7 @@ nfp_flower_cmsg_rx_stats(struct nfp_flow_priv *flow_priv,
 	uint32_t ctx_id;
 	struct nfp_flower_stats_frame *stats;
 
-	msg = rte_pktmbuf_mtod(mbuf, char *) + NFP_FLOWER_CMSG_HLEN;
+	msg = rte_pktmbuf_mtod_offset(mbuf, char *, NFP_FLOWER_CMSG_HLEN);
 	msg_len = mbuf->data_len - NFP_FLOWER_CMSG_HLEN;
 	count = msg_len / sizeof(struct nfp_flower_stats_frame);
 
@@ -398,7 +398,7 @@ nfp_flower_cmsg_rx_qos_stats(struct nfp_mtr_priv *mtr_priv,
 	struct nfp_mtr *mtr;
 	struct nfp_mtr_stats_reply *mtr_stats;
 
-	msg = rte_pktmbuf_mtod(mbuf, char *) + NFP_FLOWER_CMSG_HLEN;
+	msg = rte_pktmbuf_mtod_offset(mbuf, char *, NFP_FLOWER_CMSG_HLEN);
 
 	mtr_stats = (struct nfp_mtr_stats_reply *)msg;
 	profile_id = rte_be_to_cpu_32(mtr_stats->head.profile_id);

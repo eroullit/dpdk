@@ -186,6 +186,7 @@ The QAT ASYM PMD has support for:
 * ``RTE_CRYPTO_ASYM_XFORM_ECDSA``
 * ``RTE_CRYPTO_ASYM_XFORM_ECPM``
 * ``RTE_CRYPTO_ASYM_XFORM_ECDH``
+* ``RTE_CRYPTO_ASYM_XFORM_SM2``
 
 Limitations
 ~~~~~~~~~~~
@@ -384,6 +385,14 @@ The "rte_cryptodev_devices_get()" returns the devices exposed by either of these
   <pci bdf>_<service>, e.g. "0000:41:01.0_qat_comp".
   This name can be passed to rte_compressdev_get_dev_id() to get the device_id.
 
+
+Running QAT on Aarch64 based Ampere Altra platform
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Requires Linux kernel v6.0+.
+See also `this kernel patch <https://lkml.org/lkml/2022/6/17/328>`_.
+
+
 .. _qat_kernel:
 
 Dependency on the QAT kernel driver
@@ -453,9 +462,9 @@ to see the full table)
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
    | Yes | No  | No  | 4   | 4xxx     | IDZ/ N/A      | qat_4xxx      | 4xxx       | 4940   | 4    | 4941   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | Yes | Yes | 4   | 401xxx   | linux/5.19+   | qat_401xxx    | 4xxx       | 4942   | 2    | 4943   | 16     |
+   | Yes | Yes | Yes | 4   | 401xxx   | linux/5.19+   | qat_4xxx      | 4xxx       | 4942   | 2    | 4943   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
-   | Yes | No  | No  | 4   | 401xxx   | IDZ/ N/A      | qat_401xxx    | 4xxx       | 4942   | 2    | 4943   | 16     |
+   | Yes | No  | No  | 4   | 401xxx   | IDZ/ N/A      | qat_4xxx      | 4xxx       | 4942   | 2    | 4943   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+
    | Yes | Yes | Yes | 4   | 402xx    | linux/6.4+    | qat_4xxx      | 4xxx       | 4944   | 2    | 4945   | 16     |
    +-----+-----+-----+-----+----------+---------------+---------------+------------+--------+------+--------+--------+

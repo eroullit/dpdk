@@ -40,6 +40,8 @@
 #include <rte_macsec.h>
 #include <rte_ib.h>
 
+#include "rte_ethdev.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -3223,29 +3225,6 @@ struct rte_flow_query_count {
 };
 
 /**
- * Hash function types.
- */
-enum rte_eth_hash_function {
-	RTE_ETH_HASH_FUNCTION_DEFAULT = 0,
-	RTE_ETH_HASH_FUNCTION_TOEPLITZ, /**< Toeplitz */
-	RTE_ETH_HASH_FUNCTION_SIMPLE_XOR, /**< Simple XOR */
-	/**
-	 * Symmetric Toeplitz: src, dst will be replaced by
-	 * xor(src, dst). For the case with src/dst only,
-	 * src or dst address will xor with zero pair.
-	 */
-	RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ,
-	/**
-	 * Symmetric Toeplitz: L3 and L4 fields are sorted prior to
-	 * the hash function.
-	 *  If src_ip > dst_ip, swap src_ip and dst_ip.
-	 *  If src_port > dst_port, swap src_port and dst_port.
-	 */
-	RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ_SORT,
-	RTE_ETH_HASH_FUNCTION_MAX,
-};
-
-/**
  * RTE_FLOW_ACTION_TYPE_RSS
  *
  * Similar to QUEUE, except RSS is additionally performed on packets to
@@ -5366,6 +5345,13 @@ rte_flow_flex_item_release(uint16_t port_id,
 #define RTE_FLOW_PORT_FLAG_STRICT_QUEUE RTE_BIT32(0)
 
 /**
+ * Indicate all steering objects should be created on contexts
+ * of the host port, providing indirect object sharing between
+ * ports.
+ */
+#define RTE_FLOW_PORT_FLAG_SHARE_INDIRECT RTE_BIT32(1)
+
+/**
  * @warning
  * @b EXPERIMENTAL: this API may change without prior notice.
  *
@@ -5449,13 +5435,6 @@ rte_flow_info_get(uint16_t port_id,
 		  struct rte_flow_port_info *port_info,
 		  struct rte_flow_queue_info *queue_info,
 		  struct rte_flow_error *error);
-
-/**
- * Indicate all steering objects should be created on contexts
- * of the host port, providing indirect object sharing between
- * ports.
- */
-#define RTE_FLOW_PORT_FLAG_SHARE_INDIRECT RTE_BIT32(0)
 
 /**
  * @warning

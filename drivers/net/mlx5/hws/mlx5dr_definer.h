@@ -141,6 +141,15 @@ enum mlx5dr_definer_fname {
 	MLX5DR_DEFINER_FNAME_IB_L4_OPCODE,
 	MLX5DR_DEFINER_FNAME_IB_L4_QPN,
 	MLX5DR_DEFINER_FNAME_IB_L4_A,
+	MLX5DR_DEFINER_FNAME_PTYPE_L2_O,
+	MLX5DR_DEFINER_FNAME_PTYPE_L2_I,
+	MLX5DR_DEFINER_FNAME_PTYPE_L3_O,
+	MLX5DR_DEFINER_FNAME_PTYPE_L3_I,
+	MLX5DR_DEFINER_FNAME_PTYPE_L4_O,
+	MLX5DR_DEFINER_FNAME_PTYPE_L4_I,
+	MLX5DR_DEFINER_FNAME_PTYPE_TUNNEL,
+	MLX5DR_DEFINER_FNAME_PTYPE_FRAG_O,
+	MLX5DR_DEFINER_FNAME_PTYPE_FRAG_I,
 	MLX5DR_DEFINER_FNAME_MAX,
 };
 
@@ -157,6 +166,7 @@ struct mlx5dr_definer_fc {
 	int bit_off;
 	uint32_t bit_mask;
 	enum mlx5dr_definer_fname fname;
+	uint8_t not_overwrite;
 	void (*tag_set)(struct mlx5dr_definer_fc *fc,
 			const void *item_spec,
 			uint8_t *tag);

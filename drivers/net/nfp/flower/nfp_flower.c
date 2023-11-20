@@ -21,90 +21,34 @@
 
 #define CTRL_VNIC_NB_DESC 512
 
-static void
-nfp_pf_repr_enable_queues(struct rte_eth_dev *dev)
-{
-	uint16_t i;
-	struct nfp_net_hw *hw;
-	uint64_t enabled_queues = 0;
-	struct nfp_flower_representor *repr;
-
-	repr = dev->data->dev_private;
-	hw = repr->app_fw_flower->pf_hw;
-
-	/* Enabling the required TX queues in the device */
-	for (i = 0; i < dev->data->nb_tx_queues; i++)
-		enabled_queues |= (1 << i);
-
-	nn_cfg_writeq(hw, NFP_NET_CFG_TXRS_ENABLE, enabled_queues);
-
-	enabled_queues = 0;
-
-	/* Enabling the required RX queues in the device */
-	for (i = 0; i < dev->data->nb_rx_queues; i++)
-		enabled_queues |= (1 << i);
-
-	nn_cfg_writeq(hw, NFP_NET_CFG_RXRS_ENABLE, enabled_queues);
-}
-
-static void
-nfp_pf_repr_disable_queues(struct rte_eth_dev *dev)
-{
-	uint32_t update;
-	uint32_t new_ctrl;
-	struct nfp_net_hw *hw;
-	struct nfp_flower_representor *repr;
-
-	repr = dev->data->dev_private;
-	hw = repr->app_fw_flower->pf_hw;
-
-	nn_cfg_writeq(hw, NFP_NET_CFG_TXRS_ENABLE, 0);
-	nn_cfg_writeq(hw, NFP_NET_CFG_RXRS_ENABLE, 0);
-
-	new_ctrl = hw->ctrl & ~NFP_NET_CFG_CTRL_ENABLE;
-	update = NFP_NET_CFG_UPDATE_GEN | NFP_NET_CFG_UPDATE_RING |
-			NFP_NET_CFG_UPDATE_MSIX;
-
-	if (hw->cap & NFP_NET_CFG_CTRL_RINGCFG)
-		new_ctrl &= ~NFP_NET_CFG_CTRL_RINGCFG;
-
-	/* If an error when reconfig we avoid to change hw state */
-	if (nfp_net_reconfig(hw, new_ctrl, update) != 0)
-		return;
-
-	hw->ctrl = new_ctrl;
-}
-
 int
 nfp_flower_pf_start(struct rte_eth_dev *dev)
 {
 	int ret;
 	uint16_t i;
+	struct nfp_hw *hw;
 	uint32_t new_ctrl;
 	uint32_t update = 0;
-	struct nfp_net_hw *hw;
+	struct nfp_net_hw *net_hw;
 	struct nfp_flower_representor *repr;
 
 	repr = dev->data->dev_private;
-	hw = repr->app_fw_flower->pf_hw;
+	net_hw = repr->app_fw_flower->pf_hw;
+	hw = &net_hw->super;
 
 	/* Disabling queues just in case... */
-	nfp_pf_repr_disable_queues(dev);
+	nfp_net_disable_queues(dev);
 
 	/* Enabling the required queues in the device */
-	nfp_pf_repr_enable_queues(dev);
+	nfp_net_enable_queues(dev);
 
 	new_ctrl = nfp_check_offloads(dev);
 
 	/* Writing configuration parameters in the device */
-	nfp_net_params_setup(hw);
+	nfp_net_params_setup(net_hw);
 
 	update |= NFP_NET_CFG_UPDATE_RSS;
-
-	if ((hw->cap & NFP_NET_CFG_CTRL_RSS2) != 0)
-		new_ctrl |= NFP_NET_CFG_CTRL_RSS2;
-	else
-		new_ctrl |= NFP_NET_CFG_CTRL_RSS;
+	new_ctrl |= nfp_net_cfg_ctrl_rss(hw->cap);
 
 	/* Enable device */
 	new_ctrl |= NFP_NET_CFG_CTRL_ENABLE;
@@ -114,10 +58,8 @@ nfp_flower_pf_start(struct rte_eth_dev *dev)
 	if ((hw->cap & NFP_NET_CFG_CTRL_RINGCFG) != 0)
 		new_ctrl |= NFP_NET_CFG_CTRL_RINGCFG;
 
-	nn_cfg_writel(hw, NFP_NET_CFG_CTRL, new_ctrl);
-
 	/* If an error when reconfig we avoid to change hw state */
-	ret = nfp_net_reconfig(hw, new_ctrl, update);
+	ret = nfp_reconfig(hw, new_ctrl, update);
 	if (ret != 0) {
 		PMD_INIT_LOG(ERR, "Failed to reconfig PF vnic");
 		return -EIO;
@@ -136,43 +78,6 @@ nfp_flower_pf_start(struct rte_eth_dev *dev)
 		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
 	for (i = 0; i < dev->data->nb_tx_queues; i++)
 		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
-
-	return 0;
-}
-
-/* Stop device: disable rx and tx functions to allow for reconfiguring. */
-int
-nfp_flower_pf_stop(struct rte_eth_dev *dev)
-{
-	uint16_t i;
-	struct nfp_net_hw *hw;
-	struct nfp_net_txq *this_tx_q;
-	struct nfp_net_rxq *this_rx_q;
-	struct nfp_flower_representor *repr;
-
-	repr = dev->data->dev_private;
-	hw = repr->app_fw_flower->pf_hw;
-
-	nfp_pf_repr_disable_queues(dev);
-
-	/* Clear queues */
-	for (i = 0; i < dev->data->nb_tx_queues; i++) {
-		this_tx_q = dev->data->tx_queues[i];
-		nfp_net_reset_tx_queue(this_tx_q);
-		dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
-	}
-
-	for (i = 0; i < dev->data->nb_rx_queues; i++) {
-		this_rx_q = dev->data->rx_queues[i];
-		nfp_net_reset_rx_queue(this_rx_q);
-		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STOPPED;
-	}
-
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
-		/* Configure the physical port down */
-		nfp_eth_set_configured(hw->cpp, hw->nfp_idx, 0);
-	else
-		nfp_eth_set_configured(dev->process_private, hw->nfp_idx, 0);
 
 	return 0;
 }
@@ -203,7 +108,7 @@ nfp_flower_pf_close(struct rte_eth_dev *dev)
 	 * We assume that the DPDK application is stopping all the
 	 * threads/queues before calling the device close function.
 	 */
-	nfp_pf_repr_disable_queues(dev);
+	nfp_net_disable_queues(dev);
 
 	/* Clear queues */
 	for (i = 0; i < dev->data->nb_tx_queues; i++) {
@@ -219,9 +124,7 @@ nfp_flower_pf_close(struct rte_eth_dev *dev)
 	/* Cancel possible impending LSC work here before releasing the port */
 	rte_eal_alarm_cancel(nfp_net_dev_interrupt_delayed_handler, (void *)dev);
 
-	nn_cfg_writeb(hw, NFP_NET_CFG_LSC, 0xff);
-
-	rte_eth_dev_release_port(dev);
+	nn_cfg_writeb(&hw->super, NFP_NET_CFG_LSC, 0xff);
 
 	/* Now it is safe to free all PF resources */
 	PMD_DRV_LOG(INFO, "Freeing PF resources");
@@ -242,7 +145,7 @@ static const struct eth_dev_ops nfp_flower_pf_vnic_ops = {
 	.dev_configure          = nfp_net_configure,
 
 	.dev_start              = nfp_flower_pf_start,
-	.dev_stop               = nfp_flower_pf_stop,
+	.dev_stop               = nfp_net_stop,
 	.dev_close              = nfp_flower_pf_close,
 };
 
@@ -351,16 +254,16 @@ nfp_flower_init_vnic_common(struct nfp_net_hw *hw,
 	pf_dev = hw->pf_dev;
 	pci_dev = hw->pf_dev->pci_dev;
 
-	PMD_INIT_LOG(DEBUG, "%s vNIC ctrl bar: %p", vnic_type, hw->ctrl_bar);
+	PMD_INIT_LOG(DEBUG, "%s vNIC ctrl bar: %p", vnic_type, hw->super.ctrl_bar);
 
 	err = nfp_net_common_init(pci_dev, hw);
 	if (err != 0)
 		return err;
 
 	/* Work out where in the BAR the queues start */
-	start_q = nn_cfg_readl(hw, NFP_NET_CFG_START_TXQ);
+	start_q = nn_cfg_readl(&hw->super, NFP_NET_CFG_START_TXQ);
 	tx_bar_off = (uint64_t)start_q * NFP_QCP_QUEUE_ADDR_SZ;
-	start_q = nn_cfg_readl(hw, NFP_NET_CFG_START_RXQ);
+	start_q = nn_cfg_readl(&hw->super, NFP_NET_CFG_START_RXQ);
 	rx_bar_off = (uint64_t)start_q * NFP_QCP_QUEUE_ADDR_SZ;
 
 	hw->tx_bar = pf_dev->qc_bar + tx_bar_off;
@@ -376,7 +279,7 @@ nfp_flower_init_vnic_common(struct nfp_net_hw *hw,
 			vnic_type, hw->max_rx_queues, hw->max_tx_queues);
 
 	/* Initializing spinlock for reconfigs */
-	rte_spinlock_init(&hw->reconfig_lock);
+	rte_spinlock_init(&hw->super.reconfig_lock);
 
 	return 0;
 }
@@ -545,8 +448,8 @@ nfp_flower_init_ctrl_vnic(struct nfp_net_hw *hw)
 		 * Telling the HW about the physical address of the RX ring and number
 		 * of descriptors in log2 format.
 		 */
-		nn_cfg_writeq(hw, NFP_NET_CFG_RXR_ADDR(i), rxq->dma);
-		nn_cfg_writeb(hw, NFP_NET_CFG_RXR_SZ(i), rte_log2_u32(CTRL_VNIC_NB_DESC));
+		nn_cfg_writeq(&hw->super, NFP_NET_CFG_RXR_ADDR(i), rxq->dma);
+		nn_cfg_writeb(&hw->super, NFP_NET_CFG_RXR_SZ(i), rte_log2_u32(CTRL_VNIC_NB_DESC));
 	}
 
 	snprintf(ctrl_txring_name, sizeof(ctrl_txring_name), "%s_cttx_ring", pci_name);
@@ -610,8 +513,8 @@ nfp_flower_init_ctrl_vnic(struct nfp_net_hw *hw)
 		 * Telling the HW about the physical address of the TX ring and number
 		 * of descriptors in log2 format.
 		 */
-		nn_cfg_writeq(hw, NFP_NET_CFG_TXR_ADDR(i), txq->dma);
-		nn_cfg_writeb(hw, NFP_NET_CFG_TXR_SZ(i), rte_log2_u32(CTRL_VNIC_NB_DESC));
+		nn_cfg_writeq(&hw->super, NFP_NET_CFG_TXR_ADDR(i), txq->dma);
+		nn_cfg_writeb(&hw->super, NFP_NET_CFG_TXR_SZ(i), rte_log2_u32(CTRL_VNIC_NB_DESC));
 	}
 
 	return 0;
@@ -692,14 +595,16 @@ nfp_flower_cleanup_ctrl_vnic(struct nfp_net_hw *hw)
 }
 
 static int
-nfp_flower_start_ctrl_vnic(struct nfp_net_hw *hw)
+nfp_flower_start_ctrl_vnic(struct nfp_net_hw *net_hw)
 {
 	int ret;
 	uint32_t update;
 	uint32_t new_ctrl;
+	struct nfp_hw *hw;
 	struct rte_eth_dev *dev;
 
-	dev = hw->eth_dev;
+	dev = net_hw->eth_dev;
+	hw = &net_hw->super;
 
 	/* Disabling queues just in case... */
 	nfp_net_disable_queues(dev);
@@ -708,7 +613,7 @@ nfp_flower_start_ctrl_vnic(struct nfp_net_hw *hw)
 	nfp_net_enable_queues(dev);
 
 	/* Writing configuration parameters in the device */
-	nfp_net_params_setup(hw);
+	nfp_net_params_setup(net_hw);
 
 	new_ctrl = NFP_NET_CFG_CTRL_ENABLE;
 	update = NFP_NET_CFG_UPDATE_GEN | NFP_NET_CFG_UPDATE_RING |
@@ -717,7 +622,7 @@ nfp_flower_start_ctrl_vnic(struct nfp_net_hw *hw)
 	rte_wmb();
 
 	/* If an error when reconfig we avoid to change hw state */
-	ret = nfp_net_reconfig(hw, new_ctrl, update);
+	ret = nfp_reconfig(hw, new_ctrl, update);
 	if (ret != 0) {
 		PMD_INIT_LOG(ERR, "Failed to reconfig ctrl vnic");
 		return -EIO;
@@ -844,7 +749,7 @@ nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev,
 	}
 
 	/* Allocate memory for the PF AND ctrl vNIC here (hence the * 2) */
-	pf_hw = rte_zmalloc_socket("nfp_pf_vnic", 2 * sizeof(struct nfp_net_adapter),
+	pf_hw = rte_zmalloc_socket("nfp_pf_vnic", 2 * sizeof(struct nfp_net_hw),
 			RTE_CACHE_LINE_SIZE, numa_node);
 	if (pf_hw == NULL) {
 		PMD_INIT_LOG(ERR, "Could not malloc nfp pf vnic");
@@ -875,7 +780,7 @@ nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev,
 
 	/* Fill in the PF vNIC and populate app struct */
 	app_fw_flower->pf_hw = pf_hw;
-	pf_hw->ctrl_bar = pf_dev->ctrl_bar;
+	pf_hw->super.ctrl_bar = pf_dev->ctrl_bar;
 	pf_hw->pf_dev = pf_dev;
 	pf_hw->cpp = pf_dev->cpp;
 	pf_hw->dev_info = dev_info;
@@ -893,9 +798,9 @@ nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev,
 	ctrl_hw = app_fw_flower->ctrl_hw;
 
 	/* Map the ctrl vNIC ctrl bar */
-	ctrl_hw->ctrl_bar = nfp_rtsym_map(pf_dev->sym_tbl, "_pf0_net_ctrl_bar",
+	ctrl_hw->super.ctrl_bar = nfp_rtsym_map(pf_dev->sym_tbl, "_pf0_net_ctrl_bar",
 			NFP_NET_CFG_BAR_SZ, &ctrl_hw->ctrl_area);
-	if (ctrl_hw->ctrl_bar == NULL) {
+	if (ctrl_hw->super.ctrl_bar == NULL) {
 		PMD_INIT_LOG(ERR, "Cloud not map the ctrl vNIC ctrl bar");
 		ret = -ENODEV;
 		goto pf_cpp_area_cleanup;
@@ -954,7 +859,7 @@ app_cleanup:
 }
 
 int
-nfp_secondary_init_app_fw_flower(struct nfp_cpp *cpp)
+nfp_secondary_init_app_fw_flower(struct nfp_pf_dev *pf_dev)
 {
 	struct rte_eth_dev *eth_dev;
 	const char *port_name = "pf_vnic_eth_dev";
@@ -967,7 +872,7 @@ nfp_secondary_init_app_fw_flower(struct nfp_cpp *cpp)
 		return -ENODEV;
 	}
 
-	eth_dev->process_private = cpp;
+	eth_dev->process_private = pf_dev->cpp;
 	eth_dev->dev_ops = &nfp_flower_pf_vnic_ops;
 	eth_dev->rx_pkt_burst = nfp_net_recv_pkts;
 	eth_dev->tx_pkt_burst = nfp_flower_pf_xmit_pkts;

@@ -59,6 +59,7 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 	info->max_tx_queues = hw->tqps_num;
 	info->max_rx_pktlen = HNS3_MAX_FRAME_LEN; /* CRC included */
 	info->min_rx_bufsize = HNS3_MIN_BD_BUF_SIZE;
+	info->max_rx_bufsize = HNS3_MAX_BD_BUF_SIZE;
 	info->max_mtu = info->max_rx_pktlen - HNS3_ETH_OVERHEAD;
 	info->max_lro_pkt_size = HNS3_MAX_LRO_SIZE;
 	info->rx_offload_capa = (RTE_ETH_RX_OFFLOAD_IPV4_CKSUM |
@@ -70,8 +71,7 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 				 RTE_ETH_RX_OFFLOAD_SCATTER |
 				 RTE_ETH_RX_OFFLOAD_VLAN_STRIP |
 				 RTE_ETH_RX_OFFLOAD_VLAN_FILTER |
-				 RTE_ETH_RX_OFFLOAD_RSS_HASH |
-				 RTE_ETH_RX_OFFLOAD_TCP_LRO);
+				 RTE_ETH_RX_OFFLOAD_RSS_HASH);
 	info->tx_offload_capa = (RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
 				 RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
 				 RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
@@ -99,6 +99,8 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 
 	if (hns3_dev_get_support(hw, PTP))
 		info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+	if (hns3_dev_get_support(hw, GRO))
+		info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TCP_LRO;
 
 	info->rx_desc_lim = (struct rte_eth_desc_lim) {
 		.nb_max = HNS3_MAX_RING_DESC,
@@ -132,6 +134,10 @@ hns3_dev_infos_get(struct rte_eth_dev *eth_dev, struct rte_eth_dev_info *info)
 	info->reta_size = hw->rss_ind_tbl_size;
 	info->hash_key_size = hw->rss_key_size;
 	info->flow_type_rss_offloads = HNS3_ETH_RSS_SUPPORT;
+	info->rss_algo_capa = RTE_ETH_HASH_ALGO_CAPA_MASK(DEFAULT) |
+			      RTE_ETH_HASH_ALGO_CAPA_MASK(TOEPLITZ) |
+			      RTE_ETH_HASH_ALGO_CAPA_MASK(SIMPLE_XOR) |
+			      RTE_ETH_HASH_ALGO_CAPA_MASK(SYMMETRIC_TOEPLITZ);
 
 	info->default_rxportconf.burst_size = HNS3_DEFAULT_PORT_CONF_BURST_SIZE;
 	info->default_txportconf.burst_size = HNS3_DEFAULT_PORT_CONF_BURST_SIZE;

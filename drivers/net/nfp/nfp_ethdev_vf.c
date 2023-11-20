@@ -6,35 +6,27 @@
  */
 
 #include <rte_alarm.h>
+#include <nfp_common_pci.h>
 
 #include "nfd3/nfp_nfd3.h"
 #include "nfdk/nfp_nfdk.h"
 #include "nfpcore/nfp_cpp.h"
 
-#include "nfp_common.h"
 #include "nfp_logs.h"
+#include "nfp_net_common.h"
 
-static void
-nfp_netvf_read_mac(struct nfp_net_hw *hw)
-{
-	uint32_t tmp;
-
-	tmp = rte_be_to_cpu_32(nn_cfg_readl(hw, NFP_NET_CFG_MACADDR));
-	memcpy(&hw->mac_addr.addr_bytes[0], &tmp, 4);
-
-	tmp = rte_be_to_cpu_32(nn_cfg_readl(hw, NFP_NET_CFG_MACADDR + 4));
-	memcpy(&hw->mac_addr.addr_bytes[4], &tmp, 2);
-}
+#define NFP_VF_DRIVER_NAME net_nfp_vf
 
 static int
 nfp_netvf_start(struct rte_eth_dev *dev)
 {
 	int ret;
 	uint16_t i;
+	struct nfp_hw *hw;
 	uint32_t new_ctrl;
 	uint32_t update = 0;
 	uint32_t intr_vector;
-	struct nfp_net_hw *hw;
+	struct nfp_net_hw *net_hw;
 	struct rte_eth_conf *dev_conf;
 	struct rte_eth_rxmode *rxmode;
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
@@ -76,8 +68,9 @@ nfp_netvf_start(struct rte_eth_dev *dev)
 	new_ctrl = nfp_check_offloads(dev);
 
 	/* Writing configuration parameters in the device */
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	nfp_net_params_setup(hw);
+	net_hw = dev->data->dev_private;
+	hw = &net_hw->super;
+	nfp_net_params_setup(net_hw);
 
 	dev_conf = &dev->data->dev_conf;
 	rxmode = &dev_conf->rxmode;
@@ -97,8 +90,10 @@ nfp_netvf_start(struct rte_eth_dev *dev)
 		new_ctrl |= NFP_NET_CFG_CTRL_RINGCFG;
 
 	nn_cfg_writel(hw, NFP_NET_CFG_CTRL, new_ctrl);
-	if (nfp_net_reconfig(hw, new_ctrl, update) != 0)
+	if (nfp_reconfig(hw, new_ctrl, update) != 0)
 		return -EIO;
+
+	hw->ctrl = new_ctrl;
 
 	/*
 	 * Allocating rte mbufs for configured rx queues.
@@ -108,8 +103,6 @@ nfp_netvf_start(struct rte_eth_dev *dev)
 		ret = -ENOMEM;
 		goto error;
 	}
-
-	hw->ctrl = new_ctrl;
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++)
 		dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
@@ -206,6 +199,8 @@ static const struct eth_dev_ops nfp_netvf_eth_dev_ops = {
 	.dev_close              = nfp_netvf_close,
 	.promiscuous_enable     = nfp_net_promisc_enable,
 	.promiscuous_disable    = nfp_net_promisc_disable,
+	.allmulticast_enable    = nfp_net_allmulticast_enable,
+	.allmulticast_disable   = nfp_net_allmulticast_disable,
 	.link_update            = nfp_net_link_update,
 	.stats_get              = nfp_net_stats_get,
 	.stats_reset            = nfp_net_stats_reset,
@@ -251,7 +246,8 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 	int err;
 	uint16_t port;
 	uint32_t start_q;
-	struct nfp_net_hw *hw;
+	struct nfp_hw *hw;
+	struct nfp_net_hw *net_hw;
 	uint64_t tx_bar_off = 0;
 	uint64_t rx_bar_off = 0;
 	struct rte_pci_device *pci_dev;
@@ -266,22 +262,23 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 		return -ENODEV;
 	}
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(eth_dev->data->dev_private);
-	hw->dev_info = dev_info;
+	net_hw = eth_dev->data->dev_private;
+	net_hw->dev_info = dev_info;
+	hw = &net_hw->super;
 
 	hw->ctrl_bar = pci_dev->mem_resource[0].addr;
 	if (hw->ctrl_bar == NULL) {
-		PMD_DRV_LOG(ERR, "hw->ctrl_bar is NULL. BAR0 not configured");
+		PMD_DRV_LOG(ERR, "hw->super.ctrl_bar is NULL. BAR0 not configured");
 		return -ENODEV;
 	}
 
 	PMD_INIT_LOG(DEBUG, "ctrl bar: %p", hw->ctrl_bar);
 
-	err = nfp_net_common_init(pci_dev, hw);
+	err = nfp_net_common_init(pci_dev, net_hw);
 	if (err != 0)
 		return err;
 
-	nfp_netvf_ethdev_ops_mount(hw, eth_dev);
+	nfp_netvf_ethdev_ops_mount(net_hw, eth_dev);
 
 	/* For secondary processes, the primary has done all the work */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
@@ -289,9 +286,9 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 
-	hw->eth_xstats_base = rte_malloc("rte_eth_xstat",
+	net_hw->eth_xstats_base = rte_malloc("rte_eth_xstat",
 			sizeof(struct rte_eth_xstat) * nfp_net_xstats_size(eth_dev), 0);
-	if (hw->eth_xstats_base == NULL) {
+	if (net_hw->eth_xstats_base == NULL) {
 		PMD_INIT_LOG(ERR, "No memory for xstats base values on device %s!",
 				pci_dev->device.name);
 		return -ENOMEM;
@@ -303,20 +300,20 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 	start_q = nn_cfg_readl(hw, NFP_NET_CFG_START_RXQ);
 	rx_bar_off = nfp_qcp_queue_offset(dev_info, start_q);
 
-	hw->tx_bar = (uint8_t *)pci_dev->mem_resource[2].addr + tx_bar_off;
-	hw->rx_bar = (uint8_t *)pci_dev->mem_resource[2].addr + rx_bar_off;
+	net_hw->tx_bar = (uint8_t *)pci_dev->mem_resource[2].addr + tx_bar_off;
+	net_hw->rx_bar = (uint8_t *)pci_dev->mem_resource[2].addr + rx_bar_off;
 
 	PMD_INIT_LOG(DEBUG, "ctrl_bar: %p, tx_bar: %p, rx_bar: %p",
-			hw->ctrl_bar, hw->tx_bar, hw->rx_bar);
+			hw->ctrl_bar, net_hw->tx_bar, net_hw->rx_bar);
 
-	nfp_net_cfg_queue_setup(hw);
-	hw->mtu = RTE_ETHER_MTU;
+	nfp_net_cfg_queue_setup(net_hw);
+	net_hw->mtu = RTE_ETHER_MTU;
 
 	/* VLAN insertion is incompatible with LSOv2 */
 	if ((hw->cap & NFP_NET_CFG_CTRL_LSO2) != 0)
 		hw->cap &= ~NFP_NET_CFG_CTRL_TXVLAN;
 
-	nfp_net_log_device_information(hw);
+	nfp_net_log_device_information(net_hw);
 
 	/* Initializing spinlock for reconfigs */
 	rte_spinlock_init(&hw->reconfig_lock);
@@ -329,12 +326,12 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 		goto dev_err_ctrl_map;
 	}
 
-	nfp_netvf_read_mac(hw);
+	nfp_read_mac(hw);
 	if (rte_is_valid_assigned_ether_addr(&hw->mac_addr) == 0) {
 		PMD_INIT_LOG(INFO, "Using random mac address for port %hu", port);
 		/* Using random mac addresses for VFs */
 		rte_eth_random_addr(&hw->mac_addr.addr_bytes[0]);
-		nfp_net_write_mac(hw, &hw->mac_addr.addr_bytes[0]);
+		nfp_write_mac(hw, &hw->mac_addr.addr_bytes[0]);
 	}
 
 	/* Copying mac address to DPDK eth_dev struct */
@@ -351,20 +348,20 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 			pci_dev->id.device_id,
 			RTE_ETHER_ADDR_BYTES(&hw->mac_addr));
 
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		/* Registering LSC interrupt handler */
-		rte_intr_callback_register(pci_dev->intr_handle,
-				nfp_net_dev_interrupt_handler, (void *)eth_dev);
-		/* Telling the firmware about the LSC interrupt entry */
-		nn_cfg_writeb(hw, NFP_NET_CFG_LSC, NFP_NET_IRQ_LSC_IDX);
-		/* Recording current stats counters values */
-		nfp_net_stats_reset(eth_dev);
-	}
+	/* Registering LSC interrupt handler */
+	rte_intr_callback_register(pci_dev->intr_handle,
+			nfp_net_dev_interrupt_handler, (void *)eth_dev);
+	/* Telling the firmware about the LSC interrupt entry */
+	nn_cfg_writeb(hw, NFP_NET_CFG_LSC, NFP_NET_IRQ_LSC_IDX);
+	/* Unmask the LSC interrupt */
+	nfp_net_irq_unmask(eth_dev);
+	/* Recording current stats counters values */
+	nfp_net_stats_reset(eth_dev);
 
 	return 0;
 
 dev_err_ctrl_map:
-		nfp_cpp_area_free(hw->ctrl_area);
+		nfp_cpp_area_free(net_hw->ctrl_area);
 
 	return err;
 }
@@ -399,11 +396,10 @@ nfp_vf_pci_uninit(struct rte_eth_dev *eth_dev)
 }
 
 static int
-nfp_vf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
-		struct rte_pci_device *pci_dev)
+nfp_vf_pci_probe(struct rte_pci_device *pci_dev)
 {
 	return rte_eth_dev_pci_generic_probe(pci_dev,
-			sizeof(struct nfp_net_adapter), nfp_netvf_init);
+			sizeof(struct nfp_net_hw), nfp_netvf_init);
 }
 
 static int
@@ -412,13 +408,19 @@ nfp_vf_pci_remove(struct rte_pci_device *pci_dev)
 	return rte_eth_dev_pci_generic_remove(pci_dev, nfp_vf_pci_uninit);
 }
 
-static struct rte_pci_driver rte_nfp_net_vf_pmd = {
+static struct nfp_class_driver rte_nfp_net_vf_pmd = {
+	.drv_class = NFP_CLASS_ETH,
+	.name = RTE_STR(net_nfp_vf),
 	.id_table = pci_id_nfp_vf_net_map,
 	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
 	.probe = nfp_vf_pci_probe,
 	.remove = nfp_vf_pci_remove,
 };
 
-RTE_PMD_REGISTER_PCI(net_nfp_vf, rte_nfp_net_vf_pmd);
-RTE_PMD_REGISTER_PCI_TABLE(net_nfp_vf, pci_id_nfp_vf_net_map);
-RTE_PMD_REGISTER_KMOD_DEP(net_nfp_vf, "* igb_uio | uio_pci_generic | vfio");
+RTE_INIT(rte_nfp_vf_pmd_init)
+{
+	nfp_class_driver_register(&rte_nfp_net_vf_pmd);
+}
+
+RTE_PMD_REGISTER_PCI_TABLE(NFP_VF_DRIVER_NAME, pci_id_nfp_vf_net_map);
+RTE_PMD_REGISTER_KMOD_DEP(NFP_VF_DRIVER_NAME, "* igb_uio | uio_pci_generic | vfio");

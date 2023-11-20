@@ -160,6 +160,17 @@ enum {
 	STAT_QMAP_RX
 };
 
+static const struct {
+	enum rte_eth_hash_function algo;
+	const char *name;
+} rte_eth_dev_rss_algo_names[] = {
+	{RTE_ETH_HASH_FUNCTION_DEFAULT, "default"},
+	{RTE_ETH_HASH_FUNCTION_SIMPLE_XOR, "simple_xor"},
+	{RTE_ETH_HASH_FUNCTION_TOEPLITZ, "toeplitz"},
+	{RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ, "symmetric_toeplitz"},
+	{RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ_SORT, "symmetric_toeplitz_sort"},
+};
+
 int
 rte_eth_iterator_init(struct rte_dev_iterator *iter, const char *devargs_str)
 {
@@ -1269,6 +1280,7 @@ int
 rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 		      const struct rte_eth_conf *dev_conf)
 {
+	enum rte_eth_hash_function algorithm;
 	struct rte_eth_dev *dev;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_conf orig_conf;
@@ -1407,7 +1419,9 @@ rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 	}
 
 	if (dev_conf->rxmode.mtu == 0)
-		dev->data->dev_conf.rxmode.mtu = RTE_ETHER_MTU;
+		dev->data->dev_conf.rxmode.mtu =
+			(dev_info.max_mtu == 0) ? RTE_ETHER_MTU :
+			RTE_MIN(dev_info.max_mtu, RTE_ETHER_MTU);
 
 	ret = eth_dev_validate_mtu(port_id, &dev_info,
 			dev->data->dev_conf.rxmode.mtu);
@@ -1496,6 +1510,27 @@ rte_eth_dev_configure(uint16_t port_id, uint16_t nb_rx_q, uint16_t nb_tx_q,
 			"Ethdev port_id=%u config invalid Rx mq_mode without RSS but %s offload is requested\n",
 			port_id,
 			rte_eth_dev_rx_offload_name(RTE_ETH_RX_OFFLOAD_RSS_HASH));
+		ret = -EINVAL;
+		goto rollback;
+	}
+
+	if (dev_conf->rx_adv_conf.rss_conf.rss_key != NULL &&
+	    dev_conf->rx_adv_conf.rss_conf.rss_key_len != dev_info.hash_key_size) {
+		RTE_ETHDEV_LOG(ERR,
+			"Ethdev port_id=%u invalid RSS key len: %u, valid value: %u\n",
+			port_id, dev_conf->rx_adv_conf.rss_conf.rss_key_len,
+			dev_info.hash_key_size);
+		ret = -EINVAL;
+		goto rollback;
+	}
+
+	algorithm = dev_conf->rx_adv_conf.rss_conf.algorithm;
+	if ((size_t)algorithm >= CHAR_BIT * sizeof(dev_info.rss_algo_capa) ||
+	    (dev_info.rss_algo_capa & RTE_ETH_HASH_ALGO_TO_CAPA(algorithm)) == 0) {
+		RTE_ETHDEV_LOG(ERR,
+			"Ethdev port_id=%u configured RSS hash algorithm (%u)"
+			"is not in the algorithm capability (0x%" PRIx32 ")\n",
+			port_id, algorithm, dev_info.rss_algo_capa);
 		ret = -EINVAL;
 		goto rollback;
 	}
@@ -2112,6 +2147,7 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 	struct rte_eth_dev *dev;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_rxconf local_conf;
+	uint32_t buf_data_size;
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -ENODEV);
 	dev = &rte_eth_devices[port_id];
@@ -2158,6 +2194,12 @@ rte_eth_rx_queue_setup(uint16_t port_id, uint16_t rx_queue_id,
 			return ret;
 
 		mbp_buf_size = rte_pktmbuf_data_room_size(mp);
+		buf_data_size = mbp_buf_size - RTE_PKTMBUF_HEADROOM;
+		if (buf_data_size > dev_info.max_rx_bufsize)
+			RTE_ETHDEV_LOG(DEBUG,
+				"For port_id=%u, the mbuf data buffer size (%u) is bigger than "
+				"max buffer size (%u) device can utilize, so mbuf size can be reduced.\n",
+				port_id, buf_data_size, dev_info.max_rx_bufsize);
 	} else if (rx_conf != NULL && rx_conf->rx_nseg > 0) {
 		const struct rte_eth_rxseg_split *rx_seg;
 		uint16_t n_seg;
@@ -3757,6 +3799,8 @@ rte_eth_dev_info_get(uint16_t port_id, struct rte_eth_dev_info *dev_info)
 	dev_info->min_mtu = RTE_ETHER_MIN_LEN - RTE_ETHER_HDR_LEN -
 		RTE_ETHER_CRC_LEN;
 	dev_info->max_mtu = UINT16_MAX;
+	dev_info->rss_algo_capa = RTE_ETH_HASH_ALGO_CAPA_MASK(DEFAULT);
+	dev_info->max_rx_bufsize = UINT32_MAX;
 
 	if (*dev->dev_ops->dev_infos_get == NULL)
 		return -ENOTSUP;
@@ -4698,6 +4742,24 @@ rte_eth_dev_rss_hash_update(uint16_t port_id,
 		return -ENOTSUP;
 	}
 
+	if (rss_conf->rss_key != NULL &&
+	    rss_conf->rss_key_len != dev_info.hash_key_size) {
+		RTE_ETHDEV_LOG(ERR,
+			"Ethdev port_id=%u invalid RSS key len: %u, valid value: %u\n",
+			port_id, rss_conf->rss_key_len, dev_info.hash_key_size);
+		return -EINVAL;
+	}
+
+	if ((size_t)rss_conf->algorithm >= CHAR_BIT * sizeof(dev_info.rss_algo_capa) ||
+	    (dev_info.rss_algo_capa &
+	     RTE_ETH_HASH_ALGO_TO_CAPA(rss_conf->algorithm)) == 0) {
+		RTE_ETHDEV_LOG(ERR,
+			"Ethdev port_id=%u configured RSS hash algorithm (%u)"
+			"is not in the algorithm capability (0x%" PRIx32 ")\n",
+			port_id, rss_conf->algorithm, dev_info.rss_algo_capa);
+		return -EINVAL;
+	}
+
 	if (*dev->dev_ops->rss_hash_update == NULL)
 		return -ENOTSUP;
 	ret = eth_err(port_id, (*dev->dev_ops->rss_hash_update)(dev,
@@ -4712,6 +4774,7 @@ int
 rte_eth_dev_rss_hash_conf_get(uint16_t port_id,
 			      struct rte_eth_rss_conf *rss_conf)
 {
+	struct rte_eth_dev_info dev_info = { 0 };
 	struct rte_eth_dev *dev;
 	int ret;
 
@@ -4725,6 +4788,20 @@ rte_eth_dev_rss_hash_conf_get(uint16_t port_id,
 		return -EINVAL;
 	}
 
+	ret = rte_eth_dev_info_get(port_id, &dev_info);
+	if (ret != 0)
+		return ret;
+
+	if (rss_conf->rss_key != NULL &&
+	    rss_conf->rss_key_len < dev_info.hash_key_size) {
+		RTE_ETHDEV_LOG(ERR,
+			"Ethdev port_id=%u invalid RSS key len: %u, should not be less than: %u\n",
+			port_id, rss_conf->rss_key_len, dev_info.hash_key_size);
+		return -EINVAL;
+	}
+
+	rss_conf->algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT;
+
 	if (*dev->dev_ops->rss_hash_conf_get == NULL)
 		return -ENOTSUP;
 	ret = eth_err(port_id, (*dev->dev_ops->rss_hash_conf_get)(dev,
@@ -4733,6 +4810,20 @@ rte_eth_dev_rss_hash_conf_get(uint16_t port_id,
 	rte_ethdev_trace_rss_hash_conf_get(port_id, rss_conf, ret);
 
 	return ret;
+}
+
+const char *
+rte_eth_dev_rss_algo_name(enum rte_eth_hash_function rss_algo)
+{
+	const char *name = "Unknown function";
+	unsigned int i;
+
+	for (i = 0; i < RTE_DIM(rte_eth_dev_rss_algo_names); i++) {
+		if (rss_algo == rte_eth_dev_rss_algo_names[i].algo)
+			return rte_eth_dev_rss_algo_names[i].name;
+	}
+
+	return name;
 }
 
 int
@@ -5654,9 +5745,9 @@ rte_eth_add_rx_callback(uint16_t port_id, uint16_t queue_id,
 		/* Stores to cb->fn and cb->param should complete before
 		 * cb is visible to data plane.
 		 */
-		__atomic_store_n(
+		rte_atomic_store_explicit(
 			&rte_eth_devices[port_id].post_rx_burst_cbs[queue_id],
-			cb, __ATOMIC_RELEASE);
+			cb, rte_memory_order_release);
 
 	} else {
 		while (tail->next)
@@ -5664,7 +5755,7 @@ rte_eth_add_rx_callback(uint16_t port_id, uint16_t queue_id,
 		/* Stores to cb->fn and cb->param should complete before
 		 * cb is visible to data plane.
 		 */
-		__atomic_store_n(&tail->next, cb, __ATOMIC_RELEASE);
+		rte_atomic_store_explicit(&tail->next, cb, rte_memory_order_release);
 	}
 	rte_spinlock_unlock(&eth_dev_rx_cb_lock);
 
@@ -5704,9 +5795,9 @@ rte_eth_add_first_rx_callback(uint16_t port_id, uint16_t queue_id,
 	/* Stores to cb->fn, cb->param and cb->next should complete before
 	 * cb is visible to data plane threads.
 	 */
-	__atomic_store_n(
+	rte_atomic_store_explicit(
 		&rte_eth_devices[port_id].post_rx_burst_cbs[queue_id],
-		cb, __ATOMIC_RELEASE);
+		cb, rte_memory_order_release);
 	rte_spinlock_unlock(&eth_dev_rx_cb_lock);
 
 	rte_eth_trace_add_first_rx_callback(port_id, queue_id, fn, user_param,
@@ -5757,9 +5848,9 @@ rte_eth_add_tx_callback(uint16_t port_id, uint16_t queue_id,
 		/* Stores to cb->fn and cb->param should complete before
 		 * cb is visible to data plane.
 		 */
-		__atomic_store_n(
+		rte_atomic_store_explicit(
 			&rte_eth_devices[port_id].pre_tx_burst_cbs[queue_id],
-			cb, __ATOMIC_RELEASE);
+			cb, rte_memory_order_release);
 
 	} else {
 		while (tail->next)
@@ -5767,7 +5858,7 @@ rte_eth_add_tx_callback(uint16_t port_id, uint16_t queue_id,
 		/* Stores to cb->fn and cb->param should complete before
 		 * cb is visible to data plane.
 		 */
-		__atomic_store_n(&tail->next, cb, __ATOMIC_RELEASE);
+		rte_atomic_store_explicit(&tail->next, cb, rte_memory_order_release);
 	}
 	rte_spinlock_unlock(&eth_dev_tx_cb_lock);
 
@@ -5791,7 +5882,7 @@ rte_eth_remove_rx_callback(uint16_t port_id, uint16_t queue_id,
 
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
 	struct rte_eth_rxtx_callback *cb;
-	struct rte_eth_rxtx_callback **prev_cb;
+	RTE_ATOMIC(struct rte_eth_rxtx_callback *) *prev_cb;
 	int ret = -EINVAL;
 
 	rte_spinlock_lock(&eth_dev_rx_cb_lock);
@@ -5800,7 +5891,7 @@ rte_eth_remove_rx_callback(uint16_t port_id, uint16_t queue_id,
 		cb = *prev_cb;
 		if (cb == user_cb) {
 			/* Remove the user cb from the callback list. */
-			__atomic_store_n(prev_cb, cb->next, __ATOMIC_RELAXED);
+			rte_atomic_store_explicit(prev_cb, cb->next, rte_memory_order_relaxed);
 			ret = 0;
 			break;
 		}
@@ -5828,7 +5919,7 @@ rte_eth_remove_tx_callback(uint16_t port_id, uint16_t queue_id,
 	struct rte_eth_dev *dev = &rte_eth_devices[port_id];
 	int ret = -EINVAL;
 	struct rte_eth_rxtx_callback *cb;
-	struct rte_eth_rxtx_callback **prev_cb;
+	RTE_ATOMIC(struct rte_eth_rxtx_callback *) *prev_cb;
 
 	rte_spinlock_lock(&eth_dev_tx_cb_lock);
 	prev_cb = &dev->pre_tx_burst_cbs[queue_id];
@@ -5836,7 +5927,7 @@ rte_eth_remove_tx_callback(uint16_t port_id, uint16_t queue_id,
 		cb = *prev_cb;
 		if (cb == user_cb) {
 			/* Remove the user cb from the callback list. */
-			__atomic_store_n(prev_cb, cb->next, __ATOMIC_RELAXED);
+			rte_atomic_store_explicit(prev_cb, cb->next, rte_memory_order_relaxed);
 			ret = 0;
 			break;
 		}

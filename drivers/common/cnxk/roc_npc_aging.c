@@ -33,7 +33,6 @@ npc_aged_flows_bitmap_alloc(struct roc_npc *roc_npc)
 		goto done;
 	}
 
-	flow_age->age_flow_refcnt = 0;
 done:
 	return rc;
 }
@@ -273,13 +272,19 @@ npc_aging_ctrl_thread_create(struct roc_npc *roc_npc,
 	flow->age_context = age->context == NULL ? flow : age->context;
 	flow->timeout = age->timeout;
 	flow->timeout_cycles = plt_tsc_cycles() + age->timeout * plt_tsc_hz();
+	flow->has_age_action = true;
 
 	if (flow_age->age_flow_refcnt == 0) {
+		errcode = npc_aged_flows_bitmap_alloc(roc_npc);
+		if (errcode != 0)
+			goto done;
+
 		flow_age->aged_flows_get_thread_exit = false;
 		if (plt_thread_create_control(&flow_age->aged_flows_poll_thread,
 					   "Aged Flows Get Ctrl Thread",
 					   npc_aged_flows_get, roc_npc) != 0) {
 			plt_err("Failed to create thread for age flows");
+			npc_aged_flows_bitmap_free(roc_npc);
 			errcode = NPC_ERR_ACTION_NOTSUP;
 			goto done;
 		}

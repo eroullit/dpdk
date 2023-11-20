@@ -34,6 +34,7 @@ ml_read_file(char *file, size_t *size, char **buffer)
 
 	if (fstat(fd, &file_stat) != 0) {
 		ml_err("fstat failed for file: %s\n", file);
+		close(fd);
 		return -errno;
 	}
 
@@ -103,6 +104,16 @@ ml_test_opt_check(struct ml_options *opt)
 	socket_id = rte_ml_dev_socket_id(opt->dev_id);
 	if ((opt->socket_id != SOCKET_ID_ANY) && (opt->socket_id != socket_id)) {
 		ml_err("Invalid option, socket_id = %d\n", opt->socket_id);
+		return -EINVAL;
+	}
+
+	if (opt->queue_pairs == 0) {
+		ml_err("Invalid option, queue_pairs = %d", opt->queue_pairs);
+		return -EINVAL;
+	}
+
+	if (opt->queue_size == 0) {
+		ml_err("Invalid option, queue_size = %d", opt->queue_size);
 		return -EINVAL;
 	}
 

@@ -128,12 +128,13 @@ vhost_set_bit(unsigned int nr, volatile uint8_t *addr)
 {
 #if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION < 70100)
 	/*
-	 * __sync_ built-ins are deprecated, but __atomic_ ones
+	 * __sync_ built-ins are deprecated, but rte_atomic_ ones
 	 * are sub-optimized in older GCC versions.
 	 */
 	__sync_fetch_and_or_1(addr, (1U << nr));
 #else
-	__atomic_fetch_or(addr, (1U << nr), __ATOMIC_RELAXED);
+	rte_atomic_fetch_or_explicit((volatile uint8_t __rte_atomic *)addr, (1U << nr),
+		rte_memory_order_relaxed);
 #endif
 }
 
@@ -155,7 +156,7 @@ __vhost_log_write(struct virtio_net *dev, uint64_t addr, uint64_t len)
 		return;
 
 	/* To make sure guest memory updates are committed before logging */
-	rte_atomic_thread_fence(__ATOMIC_RELEASE);
+	rte_atomic_thread_fence(rte_memory_order_release);
 
 	page = addr / VHOST_LOG_PAGE;
 	while (page * VHOST_LOG_PAGE < addr + len) {
@@ -197,7 +198,7 @@ __vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	if (unlikely(!vq->log_cache))
 		return;
 
-	rte_atomic_thread_fence(__ATOMIC_RELEASE);
+	rte_atomic_thread_fence(rte_memory_order_release);
 
 	log_base = (unsigned long *)(uintptr_t)dev->log_base;
 
@@ -206,17 +207,18 @@ __vhost_log_cache_sync(struct virtio_net *dev, struct vhost_virtqueue *vq)
 
 #if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION < 70100)
 		/*
-		 * '__sync' builtins are deprecated, but '__atomic' ones
+		 * '__sync' builtins are deprecated, but 'rte_atomic' ones
 		 * are sub-optimized in older GCC versions.
 		 */
 		__sync_fetch_and_or(log_base + elem->offset, elem->val);
 #else
-		__atomic_fetch_or(log_base + elem->offset, elem->val,
-				__ATOMIC_RELAXED);
+		rte_atomic_fetch_or_explicit(
+			(unsigned long __rte_atomic *)(log_base + elem->offset),
+			elem->val, rte_memory_order_relaxed);
 #endif
 	}
 
-	rte_atomic_thread_fence(__ATOMIC_RELEASE);
+	rte_atomic_thread_fence(rte_memory_order_release);
 
 	vq->log_cache_nb_elem = 0;
 }
@@ -231,7 +233,7 @@ vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	if (unlikely(!vq->log_cache)) {
 		/* No logging cache allocated, write dirty log map directly */
-		rte_atomic_thread_fence(__ATOMIC_RELEASE);
+		rte_atomic_thread_fence(rte_memory_order_release);
 		vhost_log_page((uint8_t *)(uintptr_t)dev->log_base, page);
 
 		return;
@@ -251,7 +253,7 @@ vhost_log_cache_page(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		 * No more room for a new log cache entry,
 		 * so write the dirty log map directly.
 		 */
-		rte_atomic_thread_fence(__ATOMIC_RELEASE);
+		rte_atomic_thread_fence(rte_memory_order_release);
 		vhost_log_page((uint8_t *)(uintptr_t)dev->log_base, page);
 
 		return;
@@ -1184,11 +1186,11 @@ rte_vhost_clr_inflight_desc_split(int vid, uint16_t vring_idx,
 	if (unlikely(idx >= vq->size))
 		return -1;
 
-	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
+	rte_atomic_thread_fence(rte_memory_order_seq_cst);
 
 	vq->inflight_split->desc[idx].inflight = 0;
 
-	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
+	rte_atomic_thread_fence(rte_memory_order_seq_cst);
 
 	vq->inflight_split->used_idx = last_used_idx;
 	return 0;
@@ -1227,11 +1229,11 @@ rte_vhost_clr_inflight_desc_packed(int vid, uint16_t vring_idx,
 	if (unlikely(head >= vq->size))
 		return -1;
 
-	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
+	rte_atomic_thread_fence(rte_memory_order_seq_cst);
 
 	inflight_info->desc[head].inflight = 0;
 
-	rte_atomic_thread_fence(__ATOMIC_SEQ_CST);
+	rte_atomic_thread_fence(rte_memory_order_seq_cst);
 
 	inflight_info->old_free_head = inflight_info->free_head;
 	inflight_info->old_used_idx = inflight_info->used_idx;
@@ -1330,6 +1332,7 @@ rte_vhost_vring_call(int vid, uint16_t vring_idx)
 {
 	struct virtio_net *dev;
 	struct vhost_virtqueue *vq;
+	int ret = 0;
 
 	dev = get_device(vid);
 	if (!dev)
@@ -1344,14 +1347,20 @@ rte_vhost_vring_call(int vid, uint16_t vring_idx)
 
 	rte_rwlock_read_lock(&vq->access_lock);
 
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	if (vq_is_packed(dev))
 		vhost_vring_call_packed(dev, vq);
 	else
 		vhost_vring_call_split(dev, vq);
 
+out_unlock:
 	rte_rwlock_read_unlock(&vq->access_lock);
 
-	return 0;
+	return ret;
 }
 
 int
@@ -1359,6 +1368,7 @@ rte_vhost_vring_call_nonblock(int vid, uint16_t vring_idx)
 {
 	struct virtio_net *dev;
 	struct vhost_virtqueue *vq;
+	int ret = 0;
 
 	dev = get_device(vid);
 	if (!dev)
@@ -1374,14 +1384,20 @@ rte_vhost_vring_call_nonblock(int vid, uint16_t vring_idx)
 	if (rte_rwlock_read_trylock(&vq->access_lock))
 		return -EAGAIN;
 
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	if (vq_is_packed(dev))
 		vhost_vring_call_packed(dev, vq);
 	else
 		vhost_vring_call_split(dev, vq);
 
+out_unlock:
 	rte_rwlock_read_unlock(&vq->access_lock);
 
-	return 0;
+	return ret;
 }
 
 uint16_t
@@ -1404,7 +1420,10 @@ rte_vhost_avail_entries(int vid, uint16_t queue_id)
 
 	rte_rwlock_write_lock(&vq->access_lock);
 
-	if (unlikely(!vq->enabled || vq->avail == NULL))
+	if (unlikely(!vq->access_ok))
+		goto out;
+
+	if (unlikely(!vq->enabled))
 		goto out;
 
 	ret = *(volatile uint16_t *)&vq->avail->idx - vq->last_used_idx;
@@ -1454,7 +1473,7 @@ vhost_enable_notify_packed(struct virtio_net *dev,
 			vq->avail_wrap_counter << 15;
 	}
 
-	rte_atomic_thread_fence(__ATOMIC_RELEASE);
+	rte_atomic_thread_fence(rte_memory_order_release);
 
 	vq->device_event->flags = flags;
 	return 0;
@@ -1496,9 +1515,15 @@ rte_vhost_enable_guest_notification(int vid, uint16_t queue_id, int enable)
 
 	rte_rwlock_write_lock(&vq->access_lock);
 
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	vq->notif_enable = enable;
 	ret = vhost_enable_guest_notification(dev, vq, enable);
 
+out_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
 	return ret;
@@ -1519,20 +1544,24 @@ rte_vhost_notify_guest(int vid, uint16_t queue_id)
 
 	rte_rwlock_read_lock(&vq->access_lock);
 
-	__atomic_store_n(&vq->irq_pending, false, __ATOMIC_RELEASE);
+	if (unlikely(!vq->access_ok))
+		goto out_unlock;
+
+	rte_atomic_store_explicit(&vq->irq_pending, false, rte_memory_order_release);
 
 	if (dev->backend_ops->inject_irq(dev, vq)) {
 		if (dev->flags & VIRTIO_DEV_STATS_ENABLED)
-			__atomic_fetch_add(&vq->stats.guest_notifications_error,
-					1, __ATOMIC_RELAXED);
+			rte_atomic_fetch_add_explicit(&vq->stats.guest_notifications_error,
+					1, rte_memory_order_relaxed);
 	} else {
 		if (dev->flags & VIRTIO_DEV_STATS_ENABLED)
-			__atomic_fetch_add(&vq->stats.guest_notifications,
-					1, __ATOMIC_RELAXED);
+			rte_atomic_fetch_add_explicit(&vq->stats.guest_notifications,
+					1, rte_memory_order_relaxed);
 		if (dev->notify_ops->guest_notified)
 			dev->notify_ops->guest_notified(dev->vid);
 	}
 
+out_unlock:
 	rte_rwlock_read_unlock(&vq->access_lock);
 }
 
@@ -1591,7 +1620,10 @@ rte_vhost_rx_queue_count(int vid, uint16_t qid)
 
 	rte_rwlock_write_lock(&vq->access_lock);
 
-	if (unlikely(!vq->enabled || vq->avail == NULL))
+	if (unlikely(!vq->access_ok))
+		goto out;
+
+	if (unlikely(!vq->enabled))
 		goto out;
 
 	ret = *((volatile uint16_t *)&vq->avail->idx) - vq->last_avail_idx;
@@ -1827,7 +1859,15 @@ rte_vhost_async_channel_register(int vid, uint16_t queue_id)
 		return -1;
 
 	rte_rwlock_write_lock(&vq->access_lock);
+
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	ret = async_channel_register(dev, vq);
+
+out_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
 	return ret;
@@ -1879,6 +1919,11 @@ rte_vhost_async_channel_unregister(int vid, uint16_t queue_id)
 		return ret;
 	}
 
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	if (!vq->async) {
 		ret = 0;
 	} else if (vq->async->pkts_inflight_n) {
@@ -1890,6 +1935,7 @@ rte_vhost_async_channel_unregister(int vid, uint16_t queue_id)
 		ret = 0;
 	}
 
+out_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
 	return ret;
@@ -2029,9 +2075,15 @@ rte_vhost_async_get_inflight(int vid, uint16_t queue_id)
 		return ret;
 	}
 
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	if (vq->async)
 		ret = vq->async->pkts_inflight_n;
 
+out_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
 	return ret;
@@ -2071,6 +2123,7 @@ rte_vhost_get_monitor_addr(int vid, uint16_t queue_id,
 {
 	struct virtio_net *dev = get_device(vid);
 	struct vhost_virtqueue *vq;
+	int ret = 0;
 
 	if (dev == NULL)
 		return -1;
@@ -2080,6 +2133,13 @@ rte_vhost_get_monitor_addr(int vid, uint16_t queue_id,
 	vq = dev->virtqueue[queue_id];
 	if (vq == NULL)
 		return -1;
+
+	rte_rwlock_read_lock(&vq->access_lock);
+
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
 
 	if (vq_is_packed(dev)) {
 		struct vring_packed_desc *desc;
@@ -2100,7 +2160,10 @@ rte_vhost_get_monitor_addr(int vid, uint16_t queue_id,
 		pmc->match = 0;
 	}
 
-	return 0;
+out_unlock:
+	rte_rwlock_read_unlock(&vq->access_lock);
+
+	return ret;
 }
 
 
@@ -2138,6 +2201,7 @@ rte_vhost_vring_stats_get(int vid, uint16_t queue_id,
 	struct virtio_net *dev = get_device(vid);
 	struct vhost_virtqueue *vq;
 	unsigned int i;
+	int ret = VHOST_NB_VQ_STATS;
 
 	if (dev == NULL)
 		return -1;
@@ -2154,6 +2218,12 @@ rte_vhost_vring_stats_get(int vid, uint16_t queue_id,
 	vq = dev->virtqueue[queue_id];
 
 	rte_rwlock_write_lock(&vq->access_lock);
+
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
+
 	for (i = 0; i < VHOST_NB_VQ_STATS; i++) {
 		/*
 		 * No need to the read atomic counters as such, due to the
@@ -2163,15 +2233,18 @@ rte_vhost_vring_stats_get(int vid, uint16_t queue_id,
 			*(uint64_t *)(((char *)vq) + vhost_vq_stat_strings[i].offset);
 		stats[i].id = i;
 	}
+
+out_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
-	return VHOST_NB_VQ_STATS;
+	return ret;
 }
 
 int rte_vhost_vring_stats_reset(int vid, uint16_t queue_id)
 {
 	struct virtio_net *dev = get_device(vid);
 	struct vhost_virtqueue *vq;
+	int ret = 0;
 
 	if (dev == NULL)
 		return -1;
@@ -2185,14 +2258,21 @@ int rte_vhost_vring_stats_reset(int vid, uint16_t queue_id)
 	vq = dev->virtqueue[queue_id];
 
 	rte_rwlock_write_lock(&vq->access_lock);
+
+	if (unlikely(!vq->access_ok)) {
+		ret = -1;
+		goto out_unlock;
+	}
 	/*
 	 * No need to the reset atomic counters as such, due to the
 	 * above write access_lock preventing them to be updated.
 	 */
 	memset(&vq->stats, 0, sizeof(vq->stats));
+
+out_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
-	return 0;
+	return ret;
 }
 
 int

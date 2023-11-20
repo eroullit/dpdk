@@ -51,7 +51,7 @@ hns3_rx_queue_release_mbufs(struct hns3_rx_queue *rxq)
 			}
 		}
 		for (i = 0; i < rxq->rx_rearm_nb; i++)
-			rxq->sw_ring[rxq->rx_rearm_start + i].mbuf = NULL;
+			rxq->sw_ring[(rxq->rx_rearm_start + i) % rxq->nb_rx_desc].mbuf = NULL;
 	}
 
 	for (i = 0; i < rxq->bulk_mbuf_num; i++)
@@ -1785,6 +1785,12 @@ hns3_rx_queue_conf_check(struct hns3_hw *hw, const struct rte_eth_rxconf *conf,
 		return -EINVAL;
 	}
 
+	if (conf->rx_free_thresh >= nb_desc) {
+		hns3_err(hw, "rx_free_thresh (%u) must be less than %u",
+			 conf->rx_free_thresh, nb_desc);
+		return -EINVAL;
+	}
+
 	if (conf->rx_drop_en == 0)
 		hns3_warn(hw, "if no descriptors available, packets are always "
 			  "dropped and rx_drop_en (1) is fixed on");
@@ -3118,6 +3124,9 @@ hns3_config_gro(struct hns3_hw *hw, bool en)
 	struct hns3_cfg_gro_status_cmd *req;
 	struct hns3_cmd_desc desc;
 	int ret;
+
+	if (!hns3_dev_get_support(hw, GRO))
+		return 0;
 
 	hns3_cmd_setup_basic_desc(&desc, HNS3_OPC_GRO_GENERIC_CONFIG, false);
 	req = (struct hns3_cfg_gro_status_cmd *)desc.data;

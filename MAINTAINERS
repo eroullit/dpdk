@@ -50,7 +50,7 @@ T: git://dpdk.org/next/dpdk-next-net-mlx
 
 Next-virtio Tree
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Chenbo Xia <chenbo.xia@intel.com>
+M: Chenbo Xia <chenbox@nvidia.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 
 Next-crypto Tree
@@ -379,6 +379,7 @@ T: git://dpdk.org/dpdk
 
 Memory pool
 M: Andrew Rybchenko <andrew.rybchenko@oktetlabs.ru>
+M: Morten Brørup <mb@smartsharesystems.com>
 F: lib/mempool/
 F: drivers/mempool/ring/
 F: doc/guides/prog_guide/mempool_lib.rst
@@ -421,7 +422,7 @@ F: app/test-pmd/cmdline_flow.c
 F: doc/guides/prog_guide/rte_flow.rst
 F: lib/ethdev/rte_flow*
 
-Traffic Management API - EXPERIMENTAL
+Traffic Management API
 M: Cristian Dumitrescu <cristian.dumitrescu@intel.com>
 T: git://dpdk.org/next/dpdk-next-net
 F: lib/ethdev/rte_tm*
@@ -459,7 +460,7 @@ F: lib/security/
 F: doc/guides/prog_guide/rte_security.rst
 F: app/test/test_security*
 
-Compression API - EXPERIMENTAL
+Compression API
 M: Fan Zhang <fanzhang.oss@gmail.com>
 M: Ashish Gupta <ashish.gupta@marvell.com>
 T: git://dpdk.org/next/dpdk-next-crypto
@@ -483,7 +484,7 @@ F: doc/guides/prog_guide/mldev.rst
 F: app/test-mldev/
 F: doc/guides/tools/testmldev.rst
 
-DMA device API - EXPERIMENTAL
+DMA device API
 M: Chengwen Feng <fengchengwen@huawei.com>
 F: lib/dmadev/
 F: drivers/dma/skeleton/
@@ -594,7 +595,7 @@ F: drivers/bus/dpaa/
 F: drivers/bus/fslmc/
 
 PCI bus driver
-M: Chenbo Xia <chenbo.xia@intel.com>
+M: Chenbo Xia <chenbox@nvidia.com>
 M: Nipun Gupta <nipun.gupta@amd.com>
 F: drivers/bus/pci/
 
@@ -638,11 +639,11 @@ F: doc/guides/nics/af_xdp.rst
 F: doc/guides/nics/features/af_xdp.ini
 
 Amazon ENA
-M: Michal Krawczyk <mk@semihalf.com>
 M: Shai Brandes <shaibran@amazon.com>
 M: Evgeny Schemeilin <evgenys@amazon.com>
-M: Igor Chauskin <igorch@amazon.com>
 M: Ron Beider <rbeider@amazon.com>
+M: Amit Bernstein <amitbern@amazon.com>
+M: Wajeeh Atrash <atrwajee@amazon.com>
 F: drivers/net/ena/
 F: doc/guides/nics/ena.rst
 F: doc/guides/nics/features/ena.ini
@@ -864,10 +865,11 @@ F: doc/guides/nics/mlx4.rst
 F: doc/guides/nics/features/mlx4.ini
 
 NVIDIA mlx5
-M: Matan Azrad <matan@nvidia.com>
+M: Dariusz Sosnowski <dsosnowski@nvidia.com>
 M: Viacheslav Ovsiienko <viacheslavo@nvidia.com>
 M: Ori Kam <orika@nvidia.com>
 M: Suanming Mou <suanmingm@nvidia.com>
+M: Matan Azrad <matan@nvidia.com>
 T: git://dpdk.org/next/dpdk-next-net-mlx
 F: drivers/common/mlx5/
 F: drivers/net/mlx5/
@@ -900,6 +902,7 @@ F: doc/guides/nics/features/nfb.ini
 
 Netronome nfp
 M: Chaoyong He <chaoyong.he@corigine.com>
+F: drivers/common/nfp/
 F: drivers/net/nfp/
 F: doc/guides/nics/nfp.rst
 F: doc/guides/nics/features/nfp*.ini
@@ -983,7 +986,7 @@ F: doc/guides/nics/features/vmxnet3.ini
 
 Vhost-user
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Chenbo Xia <chenbo.xia@intel.com>
+M: Chenbo Xia <chenbox@nvidia.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: lib/vhost/
 F: doc/guides/prog_guide/vhost_lib.rst
@@ -997,7 +1000,7 @@ F: doc/guides/sample_app_ug/vdpa.rst
 
 Vhost PMD
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Chenbo Xia <chenbo.xia@intel.com>
+M: Chenbo Xia <chenbox@nvidia.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/vhost/
 F: doc/guides/nics/vhost.rst
@@ -1005,7 +1008,7 @@ F: doc/guides/nics/features/vhost.ini
 
 Virtio PMD
 M: Maxime Coquelin <maxime.coquelin@redhat.com>
-M: Chenbo Xia <chenbo.xia@intel.com>
+M: Chenbo Xia <chenbox@nvidia.com>
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/net/virtio/
 F: doc/guides/nics/virtio.rst
@@ -1212,6 +1215,7 @@ F: drivers/common/qat/
 
 ISA-L
 M: Lee Daly <lee.daly@intel.com>
+M: Pablo de Lara <pablo.de.lara.guarch@intel.com>
 F: drivers/compress/isal/
 F: doc/guides/compressdevs/isal.rst
 F: doc/guides/compressdevs/features/isal.ini
@@ -1299,6 +1303,12 @@ vDPA Drivers
 ------------
 T: git://dpdk.org/next/dpdk-next-virtio
 F: drivers/vdpa/meson.build
+
+Corigine nfp vDPA
+M: Chaoyong He <chaoyong.he@corigine.com>
+F: drivers/vdpa/nfp/
+F: doc/guides/vdpadevs/nfp.rst
+F: doc/guides/vdpadevs/features/nfp.ini
 
 Intel ifc
 M: Xiao Wang <xiao.w.wang@intel.com>
@@ -1647,7 +1657,9 @@ Interactive command line
 F: lib/cmdline/
 F: app/test-cmdline/
 F: app/test/test_cmdline*
+F: buildtools/dpdk-cmdline-gen.py
 F: examples/cmdline/
+F: doc/guides/prog_guide/cmdline.rst
 F: doc/guides/sample_app_ug/cmd_line.rst
 
 Key/Value parsing
@@ -1661,13 +1673,14 @@ F: app/test/test_rcu*
 F: doc/guides/prog_guide/rcu_lib.rst
 
 PCI
-M: Chenbo Xia <chenbo.xia@intel.com>
+M: Chenbo Xia <chenbox@nvidia.com>
 M: Gaetan Rivet <grive@u256.net>
 F: lib/pci/
 
 Power management
 M: Anatoly Burakov <anatoly.burakov@intel.com>
 M: David Hunt <david.hunt@intel.com>
+M: Sivaprasad Tummala <sivaprasad.tummala@amd.com>
 F: lib/power/
 F: doc/guides/prog_guide/power_man.rst
 F: app/test/test_power*
@@ -1724,7 +1737,7 @@ F: app/test/test_bpf.c
 F: app/test-pmd/bpf_cmd.*
 F: doc/guides/prog_guide/bpf_lib.rst
 
-Graph - EXPERIMENTAL
+Graph
 M: Jerin Jacob <jerinj@marvell.com>
 M: Kiran Kumar K <kirankumark@marvell.com>
 M: Nithin Dabilpuram <ndabilpuram@marvell.com>
@@ -1735,7 +1748,7 @@ F: app/test/test_graph*
 F: examples/l3fwd-graph/
 F: doc/guides/sample_app_ug/l3_forward_graph.rst
 
-Nodes - EXPERIMENTAL
+Nodes
 M: Nithin Dabilpuram <ndabilpuram@marvell.com>
 M: Pavan Nikhilesh <pbhagavatula@marvell.com>
 F: lib/node/
@@ -1806,6 +1819,13 @@ F: doc/guides/tools/testeventdev.rst
 F: doc/guides/tools/img/eventdev_*
 F: app/test/test_event_ring.c
 
+Graph application
+M: Sunil Kumar Kori <skori@marvell.com>
+M: Rakesh Kudurumalla <rkudurumalla@marvell.com>
+F: app/graph/
+F: doc/guides/tools/graph.rst
+F: doc/guides/tools/img/graph-*
+
 Procinfo tool
 M: Reshma Pattan <reshma.pattan@intel.com>
 F: app/proc-info/
@@ -1868,6 +1888,11 @@ M: Pavan Nikhilesh <pbhagavatula@marvell.com>
 T: git://dpdk.org/next/dpdk-next-eventdev
 F: examples/l2fwd-event/
 F: doc/guides/sample_app_ug/l2_forward_event.rst
+
+L2 forwarding with MACsec example
+M: Akhil Goyal <gakhil@marvell.com>
+F: doc/guides/sample_app_ug/l2_forward_macsec.rst
+F: examples/l2fwd-macsec/
 
 L3 forwarding example
 F: examples/l3fwd/

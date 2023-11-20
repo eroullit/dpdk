@@ -139,6 +139,8 @@ struct nfp_eth_table {
 		bool supp_aneg;   /**< Support auto negotiation */
 
 		bool override_changed;  /**< Media reconfig pending */
+		bool rx_pause_enabled;  /**< Switch of RX pause frame */
+		bool tx_pause_enabled;  /**< Switch of TX pause frame */
 
 		uint8_t port_type;    /**< One of %PORT_* */
 		/** Sum of lanes of all subports of this port */
@@ -187,6 +189,8 @@ void nfp_eth_config_cleanup_end(struct nfp_nsp *nsp);
 int nfp_eth_set_aneg(struct nfp_nsp *nsp, enum nfp_eth_aneg mode);
 int nfp_eth_set_speed(struct nfp_nsp *nsp, uint32_t speed);
 int nfp_eth_set_split(struct nfp_nsp *nsp, uint32_t lanes);
+int nfp_eth_set_tx_pause(struct nfp_nsp *nsp, bool tx_pause);
+int nfp_eth_set_rx_pause(struct nfp_nsp *nsp, bool rx_pause);
 
 /* NSP static information */
 struct nfp_nsp_identify {
@@ -212,5 +216,6 @@ enum nfp_nsp_sensor_id {
 
 int nfp_hwmon_read_sensor(struct nfp_cpp *cpp, enum nfp_nsp_sensor_id id,
 		uint32_t *val);
+bool nfp_nsp_fw_loaded(struct nfp_nsp *state);
 
 #endif /* __NSP_NSP_H__ */

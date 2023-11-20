@@ -6,7 +6,10 @@
 #define MLX5DR_ACTION_H_
 
 /* Max number of STEs needed for a rule (including match) */
-#define MLX5DR_ACTION_MAX_STE 10
+#define MLX5DR_ACTION_MAX_STE 20
+
+/* Max number of internal subactions of ipv6_ext */
+#define MLX5DR_ACTION_IPV6_EXT_MAX_SA 4
 
 enum mlx5dr_action_stc_idx {
 	MLX5DR_ACTION_STC_IDX_CTRL = 0,
@@ -52,11 +55,17 @@ enum mlx5dr_action_setter_flag {
 	ASF_SINGLE2 = 1 << 1,
 	ASF_SINGLE3 = 1 << 2,
 	ASF_DOUBLE = ASF_SINGLE2 | ASF_SINGLE3,
-	ASF_REPARSE = 1 << 3,
+	ASF_INSERT = 1 << 3,
 	ASF_REMOVE = 1 << 4,
 	ASF_MODIFY = 1 << 5,
 	ASF_CTR = 1 << 6,
 	ASF_HIT = 1 << 7,
+};
+
+enum mlx5dr_action_stc_reparse {
+	MLX5DR_ACTION_STC_REPARSE_DEFAULT,
+	MLX5DR_ACTION_STC_REPARSE_ON,
+	MLX5DR_ACTION_STC_REPARSE_OFF,
 };
 
 struct mlx5dr_action_default_stc {
@@ -101,6 +110,7 @@ struct mlx5dr_actions_wqe_setter {
 	uint8_t idx_ctr;
 	uint8_t idx_hit;
 	uint8_t flags;
+	uint8_t extra_data;
 };
 
 struct mlx5dr_action_template {
@@ -127,13 +137,22 @@ struct mlx5dr_action {
 					uint8_t single_action_type;
 					uint8_t num_of_actions;
 					uint8_t max_num_of_actions;
+					uint8_t require_reparse;
 				} modify_header;
 				struct {
 					struct mlx5dr_devx_obj *arg_obj;
 					uint32_t header_size;
-					uint8_t num_of_hdrs;
 					uint16_t max_hdr_sz;
+					uint8_t num_of_hdrs;
+					uint8_t anchor;
+					uint8_t offset;
+					bool encap;
+					uint8_t require_reparse;
 				} reformat;
+				struct {
+					struct mlx5dr_action
+						*action[MLX5DR_ACTION_IPV6_EXT_MAX_SA];
+				} ipv6_route_ext;
 				struct {
 					struct mlx5dr_devx_obj *devx_obj;
 					uint8_t return_reg_id;
@@ -148,6 +167,21 @@ struct mlx5dr_action {
 				struct {
 					struct mlx5dv_steering_anchor *sa;
 				} root_tbl;
+				struct {
+					struct mlx5dr_devx_obj *devx_obj;
+				} devx_dest;
+				struct {
+					struct mlx5dr_cmd_forward_tbl *fw_island;
+					size_t num_dest;
+					struct mlx5dr_cmd_set_fte_dest *dest_list;
+				} dest_array;
+				struct {
+					uint8_t type;
+					uint8_t start_anchor;
+					uint8_t end_anchor;
+					uint8_t num_of_words;
+					bool decap;
+				} remove_header;
 			};
 		};
 

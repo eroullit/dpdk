@@ -109,6 +109,26 @@ New Features
 
   Added support for amd-pstate driver which works on AMD EPYC processors.
 
+* **Added maximum Rx buffer size to report.**
+
+  Introduced the ``max_rx_bufsize`` field, representing
+  the maximum Rx buffer size per descriptor supported by the HW,
+  in the structure ``rte_eth_dev_info`` to avoid wasting mempool space.
+
+* **Improved support of RSS hash algorithm.**
+
+  * Added support to query RSS hash algorithm capability via ``rte_eth_dev_info_get()``,
+    and set RSS hash algorithm via ``rte_eth_dev_configure()``
+    or ``rte_eth_dev_rss_hash_update()``.
+
+  * Added new function ``rte_eth_dev_rss_algo_name``
+    to get name of RSS hash algorithm.
+
+* **Added packet type flow matching criteria.**
+
+  Added ``RTE_FLOW_ITEM_TYPE_PTYPE`` to allow matching on L2/L3/L4
+  and tunnel information as defined in mbuf packet type.
+
 * **Added a flow action type for P4-defined actions.**
 
   For P4-programmable devices, hardware pipeline can be configured through
@@ -122,10 +142,26 @@ New Features
   a group's miss actions, which are the actions to be performed on packets
   that didn't match any of the flow rules in the group.
 
+* **Updated Amazon ena (Elastic Network Adapter) net driver.**
+
+  * Upgraded ENA HAL to latest version.
+  * Added support for connection tracking allowance utilization metric.
+  * Added support for reporting Rx overrun errors in xstats.
+  * Added support for ENA-express metrics.
+
+* **Added a new vDPA PMD for Corigine NFP devices.**
+
+  Added a new Corigine NFP vDPA (``nfp_vdpa``) PMD.
+  See the :doc:`../vdpadevs/nfp` guide for more details on this driver.
+
+* **Updated Corigine/Netronome nfp driver.**
+
+  * Added inline IPsec offload based on the security framework.
+
 * **Updated Intel cpfl driver.**
 
   * Added support for port representor.
-  * Added support for flow offload.
+  * Added support for flow offload (including P4-defined pipeline).
 
 * **Updated Intel iavf driver.**
 
@@ -142,16 +178,18 @@ New Features
 
 * **Updated NVIDIA mlx5 net driver.**
 
+  * Added support for multi-port E-Switch.
   * Added support for Network Service Header (NSH) flow matching.
+  * Added support for ``RTE_FLOW_ITEM_TYPE_PTYPE`` flow item.
+  * Added support for ``RTE_FLOW_ACTION_TYPE_IPV6_EXT_PUSH`` flow action.
+  * Added support for ``RTE_FLOW_ACTION_TYPE_IPV6_EXT_REMOVE`` flow action.
+  * Added support for ``RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR`` flow action and mirror.
+  * Added support for ``RTE_FLOW_ACTION_TYPE_INDIRECT_LIST`` flow action.
 
 * **Updated Solarflare net driver.**
 
   * Added support for transfer flow action ``INDIRECT`` with subtype ``VXLAN_ENCAP``.
   * Supported packet replay (multi-count / multi-delivery) in transfer flows.
-
-* **Updated Netronome/Corigine nfp driver.**
-
-  * Added inline IPsec offload based on the security framework.
 
 * **Updated Wangxun ngbe driver.**
 
@@ -190,15 +228,22 @@ New Features
 
 * **Updated ipsec_mb crypto driver.**
 
+  * Added Intel IPsec MB v1.5 library support for x86 platform.
   * Added support for digest encrypted to AESNI_MB asynchronous crypto driver.
 
 * **Updated Intel QuickAssist Technology driver.**
 
   * Enabled support for QAT 2.0c (4944) devices in QAT crypto driver.
+  * Added support for SM2 ECDSA algorithm.
 
 * **Updated Marvell cnxk crypto driver.**
 
   * Added SM2 algorithm support in asymmetric crypto operations.
+  * Added asymmetric crypto ECDH support.
+
+* **Updated Marvell Nitrox symmetric crypto driver.**
+
+  * Added support for AES-CCM algorithm.
 
 * **Updated Intel vRAN Boost baseband driver.**
 
@@ -208,6 +253,10 @@ New Features
 * **Added support for models with multiple I/O in mldev library.**
 
   Added support in mldev library for models with multiple inputs and outputs.
+
+* **Updated Marvell cnxk mldev driver.**
+
+  * Added support for models compiled using TVM framework.
 
 * **Added new eventdev Ethernet Rx adapter create API.**
 
@@ -238,10 +287,25 @@ New Features
     to get the remaining ticks to expire for a given event timer.
   * Added link profiles support, up to two link profiles are supported.
 
+* **Updated Marvell cnxk dmadev driver.**
+
+  * Added support for source buffer auto free for memory to device DMA.
+
 * **Added dispatcher library.**
 
   Added dispatcher library which purpose is to help decouple different
   parts (modules) of an eventdev-based application.
+
+* **Added CLI based graph application.**
+
+  Added CLI based graph application which exercises on different use cases.
+  Application provides a framework so that each use case can be added via a file.
+  Each CLI will further be translated into a graph representing the use case.
+
+* **Added layer 2 MACsec forwarding example application.**
+
+  Added a new example layer 2 forwarding application to benchmark
+  MACsec encryption/decryption using rte_security based inline sessions.
 
 
 Removed Items
@@ -304,6 +368,11 @@ API Changes
 
 * power: Updated the x86 Uncore power management API so that it is vendor agnostic.
 
+* ethdev: When ``rte_eth_dev_configure`` or ``rte_eth_dev_rss_hash_update`` are called,
+  the ``rss_key_len`` of structure ``rte_eth_rss_conf`` should be provided
+  by the user for the case ``rss_key != NULL``,
+  it won't be taken as default 40 bytes anymore.
+
 * bonding: Replaced master/slave to main/member. The data structure
   ``struct rte_eth_bond_8023ad_slave_info`` was renamed to
   ``struct rte_eth_bond_8023ad_member_info`` in DPDK 23.11.
@@ -356,6 +425,12 @@ ABI Changes
   ``recycle_tx_mbufs_reuse`` and ``recycle_rx_descriptors_refill``
   fields, to move ``rxq`` and ``txq`` fields, to change the size of
   ``reserved1`` and ``reserved2`` fields.
+
+* ethdev: Added ``algorithm`` field to ``rte_eth_rss_conf`` structure
+  for RSS hash algorithm.
+
+* ethdev: Added ``rss_algo_capa`` field to ``rte_eth_dev_info`` structure
+  for reporting RSS hash algorithm capability.
 
 * security: struct ``rte_security_ipsec_sa_options`` was updated
   due to inline out-of-place feature addition.

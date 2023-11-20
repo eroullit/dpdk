@@ -45,7 +45,12 @@ enum mlx5dr_action_type {
 	MLX5DR_ACTION_TYP_PUSH_VLAN,
 	MLX5DR_ACTION_TYP_ASO_METER,
 	MLX5DR_ACTION_TYP_ASO_CT,
+	MLX5DR_ACTION_TYP_INSERT_HEADER,
+	MLX5DR_ACTION_TYP_REMOVE_HEADER,
 	MLX5DR_ACTION_TYP_DEST_ROOT,
+	MLX5DR_ACTION_TYP_DEST_ARRAY,
+	MLX5DR_ACTION_TYP_POP_IPV6_ROUTE_EXT,
+	MLX5DR_ACTION_TYP_PUSH_IPV6_ROUTE_EXT,
 	MLX5DR_ACTION_TYP_MAX,
 };
 
@@ -117,6 +122,11 @@ enum mlx5dr_matcher_distribute_mode {
 	MLX5DR_MATCHER_DISTRIBUTE_BY_LINEAR = 0x1,
 };
 
+enum mlx5dr_rule_hash_calc_mode {
+	MLX5DR_RULE_HASH_CALC_MODE_RAW,
+	MLX5DR_RULE_HASH_CALC_MODE_IDX,
+};
+
 struct mlx5dr_matcher_attr {
 	/* Processing priority inside table */
 	uint32_t priority;
@@ -163,6 +173,43 @@ struct mlx5dr_action_reformat_header {
 	void *data;
 };
 
+struct mlx5dr_action_insert_header {
+	struct mlx5dr_action_reformat_header hdr;
+	/* PRM start anchor to which header will be inserted */
+	uint8_t anchor;
+	/* Header insertion offset in bytes, from the start
+	 * anchor to the location where new header will be inserted.
+	 */
+	uint8_t offset;
+	/* Indicates this header insertion adds encapsulation header to the packet,
+	 * requiring device to update offloaded fields (for example IPv4 total length).
+	 */
+	bool encap;
+};
+
+enum mlx5dr_action_remove_header_type {
+	MLX5DR_ACTION_REMOVE_HEADER_TYPE_BY_OFFSET,
+	MLX5DR_ACTION_REMOVE_HEADER_TYPE_BY_HEADER,
+};
+
+struct mlx5dr_action_remove_header_attr {
+	enum mlx5dr_action_remove_header_type type;
+	union {
+		struct {
+			/* PRM start anchor from which header will be removed */
+			uint8_t start_anchor;
+			/* PRM end anchor till which header will be removed */
+			uint8_t end_anchor;
+			bool decap;
+		} by_anchor;
+		struct {
+			/* PRM start anchor from which header will be removed */
+			uint8_t start_anchor;
+			uint8_t size;
+		} by_offset;
+	};
+};
+
 struct mlx5dr_action_mh_pattern {
 	/* Byte size of modify actions provided by "data" */
 	size_t sz;
@@ -198,6 +245,11 @@ struct mlx5dr_rule_action {
 		} reformat;
 
 		struct {
+			uint32_t offset;
+			uint8_t *header;
+		} ipv6_ext;
+
+		struct {
 			rte_be32_t vlan_hdr;
 		} push_vlan;
 
@@ -211,6 +263,20 @@ struct mlx5dr_rule_action {
 			enum mlx5dr_action_aso_ct_flags direction;
 		} aso_ct;
 	};
+};
+
+struct mlx5dr_action_dest_attr {
+	/* Required action combination */
+	enum mlx5dr_action_type *action_type;
+
+	/* Required destination action to forward the packet */
+	struct mlx5dr_action *dest;
+
+	/* Optional reformat data */
+	struct {
+		size_t reformat_data_sz;
+		void *reformat_data;
+	} reformat;
 };
 
 /* Open a context used for direct rule insertion using hardware steering.
@@ -415,6 +481,27 @@ int mlx5dr_rule_action_update(struct mlx5dr_rule *rule_handle,
 			      struct mlx5dr_rule_action rule_actions[],
 			      struct mlx5dr_rule_attr *attr);
 
+/* Calculate hash for a given set of items, which indicates rule location in
+ * the hash table.
+ *
+ * @param[in] matcher
+ *	The matcher of the created rule.
+ * @param[in] items
+ *	Matching pattern item definition.
+ * @param[in] mt_idx
+ *	Match template index that the match was created with.
+ * @param[in] mode
+ *	Hash calculation mode
+ * @param[in, out] ret_hash
+ *	Returned calculated hash result
+ * @return zero on success non zero otherwise.
+ */
+int mlx5dr_rule_hash_calculate(struct mlx5dr_matcher *matcher,
+			       const struct rte_flow_item items[],
+			       uint8_t mt_idx,
+			       enum mlx5dr_rule_hash_calc_mode mode,
+			       uint32_t *ret_hash);
+
 /* Create direct rule drop action.
  *
  * @param[in] ctx
@@ -616,6 +703,25 @@ mlx5dr_action_create_pop_vlan(struct mlx5dr_context *ctx, uint32_t flags);
 struct mlx5dr_action *
 mlx5dr_action_create_push_vlan(struct mlx5dr_context *ctx, uint32_t flags);
 
+/* Create a dest array action, this action can duplicate packets and forward to
+ * multiple destinations in the destination list.
+ * @param[in] ctx
+ *     The context in which the new action will be created.
+ * @param[in] num_dest
+ *     The number of dests attributes.
+ * @param[in] dests
+ *     The destination array. Each contains a destination action and can have
+ *     additional actions.
+ * @param[in] flags
+ *     Action creation flags. (enum mlx5dr_action_flags)
+ * @return pointer to mlx5dr_action on success NULL otherwise.
+ */
+struct mlx5dr_action *
+mlx5dr_action_create_dest_array(struct mlx5dr_context *ctx,
+				size_t num_dest,
+				struct mlx5dr_action_dest_attr *dests,
+				uint32_t flags);
+
 /* Create dest root table, this action will jump to root table according
  * the given priority.
  * @param[in] ctx
@@ -630,6 +736,65 @@ struct mlx5dr_action *
 mlx5dr_action_create_dest_root(struct mlx5dr_context *ctx,
 				uint16_t priority,
 				uint32_t flags);
+
+/* Create insert header action.
+ *
+ * @param[in] ctx
+ *	The context in which the new action will be created.
+ * @param[in] num_of_hdrs
+ *	Number of provided headers in "hdrs" array.
+ * @param[in] hdrs
+ *	Headers array containing header information.
+ * @param[in] log_bulk_size
+ *	Number of unique values used with this insert header.
+ * @param[in] flags
+ *	Action creation flags. (enum mlx5dr_action_flags)
+ * @return pointer to mlx5dr_action on success NULL otherwise.
+ */
+struct mlx5dr_action *
+mlx5dr_action_create_insert_header(struct mlx5dr_context *ctx,
+				   uint8_t num_of_hdrs,
+				   struct mlx5dr_action_insert_header *hdrs,
+				   uint32_t log_bulk_size,
+				   uint32_t flags);
+
+/* Create remove header action.
+ *
+ * @param[in] ctx
+ *	The context in which the new action will be created.
+ * @param[in] attr
+ *	attributes: specifies the remove header type, PRM start anchor and
+ *	the PRM end anchor or the PRM start anchor and remove size in bytes.
+ * @param[in] flags
+ *	Action creation flags. (enum mlx5dr_action_flags)
+ * @return pointer to mlx5dr_action on success NULL otherwise.
+ */
+struct mlx5dr_action *
+mlx5dr_action_create_remove_header(struct mlx5dr_context *ctx,
+				   struct mlx5dr_action_remove_header_attr *attr,
+				   uint32_t flags);
+
+/* Create action to push or remove IPv6 extension header.
+ *
+ * @param[in] ctx
+ *	The context in which the new action will be created.
+ * @param[in] type
+ *	Type of direct rule action: MLX5DR_ACTION_TYP_PUSH_IPV6_ROUTE_EXT or
+ *	MLX5DR_ACTION_TYP_POP_IPV6_ROUTE_EXT.
+ * @param[in] hdr
+ *	Header for packet reformat.
+ * @param[in] log_bulk_size
+ *	Number of unique values used with this pattern.
+ * @param[in] flags
+ *	Action creation flags. (enum mlx5dr_action_flags)
+ * @return pointer to mlx5dr_action on success NULL otherwise.
+ */
+struct mlx5dr_action *
+mlx5dr_action_create_reformat_ipv6_ext(struct mlx5dr_context *ctx,
+				       enum mlx5dr_action_type type,
+				       struct mlx5dr_action_reformat_header *hdr,
+				       uint32_t log_bulk_size,
+				       uint32_t flags);
 
 /* Destroy direct rule action.
  *

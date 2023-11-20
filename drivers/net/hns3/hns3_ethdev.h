@@ -888,6 +888,7 @@ enum hns3_dev_cap {
 	HNS3_DEV_SUPPORT_TM_B,
 	HNS3_DEV_SUPPORT_VF_VLAN_FLT_MOD_B,
 	HNS3_DEV_SUPPORT_FC_AUTO_B,
+	HNS3_DEV_SUPPORT_GRO_B,
 };
 
 #define hns3_dev_get_support(hw, _name) \
@@ -1033,6 +1034,7 @@ void hns3_update_linkstatus_and_event(struct hns3_hw *hw, bool query);
 void hns3vf_update_link_status(struct hns3_hw *hw, uint8_t link_status,
 			  uint32_t link_speed, uint8_t link_duplex);
 void hns3vf_update_push_lsc_cap(struct hns3_hw *hw, bool supported);
+void hns3_clear_reset_event(struct hns3_hw *hw);
 
 const char *hns3_get_media_type_name(uint8_t media_type);
 

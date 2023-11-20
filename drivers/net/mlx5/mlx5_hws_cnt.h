@@ -98,6 +98,7 @@ struct mlx5_hws_cnt_pool_caches {
 };
 
 struct mlx5_hws_cnt_pool {
+	LIST_ENTRY(mlx5_hws_cnt_pool) next;
 	struct mlx5_hws_cnt_pool_cfg cfg __rte_cache_aligned;
 	struct mlx5_hws_cnt_dcs_mng dcs_mng __rte_cache_aligned;
 	uint32_t query_gen __rte_cache_aligned;
@@ -108,6 +109,7 @@ struct mlx5_hws_cnt_pool {
 	struct rte_ring *wait_reset_list;
 	struct mlx5_hws_cnt_pool_caches *cache;
 	uint64_t time_of_last_age_check;
+	struct mlx5_priv *priv;
 } __rte_cache_aligned;
 
 /* HWS AGE status. */
@@ -386,7 +388,7 @@ __mlx5_hws_cnt_pool_enqueue_revert(struct rte_ring *r, unsigned int n,
 
 	MLX5_ASSERT(r->prod.sync_type == RTE_RING_SYNC_ST);
 	MLX5_ASSERT(r->cons.sync_type == RTE_RING_SYNC_ST);
-	current_head = __atomic_load_n(&r->prod.head, __ATOMIC_RELAXED);
+	current_head = rte_atomic_load_explicit(&r->prod.head, rte_memory_order_relaxed);
 	MLX5_ASSERT(n <= r->capacity);
 	MLX5_ASSERT(n <= rte_ring_count(r));
 	revert2head = current_head - n;
@@ -394,7 +396,7 @@ __mlx5_hws_cnt_pool_enqueue_revert(struct rte_ring *r, unsigned int n,
 	__rte_ring_get_elem_addr(r, revert2head, sizeof(cnt_id_t), n,
 			&zcd->ptr1, &zcd->n1, &zcd->ptr2);
 	/* Update tail */
-	__atomic_store_n(&r->prod.tail, revert2head, __ATOMIC_RELEASE);
+	rte_atomic_store_explicit(&r->prod.tail, revert2head, rte_memory_order_release);
 	return n;
 }
 

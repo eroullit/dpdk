@@ -43,7 +43,9 @@ implementer_generic = {
         },
         'generic_aarch32': {
             'march': 'armv8-a',
-            'compiler_options': ['-mfpu=neon'],
+            'force_march': true,
+            'march_features': ['simd'],
+            'compiler_options': ['-mfpu=auto'],
             'flags': [
                 ['RTE_ARCH_ARM_NEON_MEMCPY', false],
                 ['RTE_ARCH_STRICT_ALIGN', true],
@@ -58,6 +60,7 @@ implementer_generic = {
 part_number_config_arm = {
     '0xd03': {'compiler_options':  ['-mcpu=cortex-a53']},
     '0xd04': {'compiler_options':  ['-mcpu=cortex-a35']},
+    '0xd05': {'compiler_options':  ['-mcpu=cortex-a55']},
     '0xd07': {'compiler_options':  ['-mcpu=cortex-a57']},
     '0xd08': {'compiler_options':  ['-mcpu=cortex-a72']},
     '0xd09': {'compiler_options':  ['-mcpu=cortex-a73']},
@@ -695,21 +698,25 @@ if update_flags
     # probe supported archs and their features
     candidate_march = ''
     if part_number_config.has_key('march')
-        supported_marchs = ['armv8.6-a', 'armv8.5-a', 'armv8.4-a', 'armv8.3-a',
-                            'armv8.2-a', 'armv8.1-a', 'armv8-a']
-        check_compiler_support = false
-        foreach supported_march: supported_marchs
-            if supported_march == part_number_config['march']
-                # start checking from this version downwards
-                check_compiler_support = true
-            endif
-            if (check_compiler_support and
-                cc.has_argument('-march=' + supported_march))
-                candidate_march = supported_march
-                # highest supported march version found
-                break
-            endif
-        endforeach
+        if part_number_config.get('force_march', false)
+            candidate_march = part_number_config['march']
+        else
+            supported_marchs = ['armv8.6-a', 'armv8.5-a', 'armv8.4-a', 'armv8.3-a',
+                                'armv8.2-a', 'armv8.1-a', 'armv8-a']
+            check_compiler_support = false
+            foreach supported_march: supported_marchs
+                if supported_march == part_number_config['march']
+                    # start checking from this version downwards
+                    check_compiler_support = true
+                endif
+                if (check_compiler_support and
+                    cc.has_argument('-march=' + supported_march))
+                    candidate_march = supported_march
+                    # highest supported march version found
+                    break
+                endif
+            endforeach
+        endif
         if candidate_march == ''
             error('No suitable armv8 march version found.')
         endif
@@ -741,7 +748,7 @@ if update_flags
     # apply supported compiler options
     if part_number_config.has_key('compiler_options')
         foreach flag: part_number_config['compiler_options']
-            if cc.has_argument(flag)
+            if cc.has_multi_arguments(machine_args + [flag])
                 machine_args += flag
             else
                 warning('Configuration compiler option ' +

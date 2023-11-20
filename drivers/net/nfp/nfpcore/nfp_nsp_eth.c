@@ -3,9 +3,10 @@
  * All rights reserved.
  */
 
+#include <nfp_platform.h>
+
 #include "nfp_logs.h"
 #include "nfp_nsp.h"
-#include "nfp_platform.h"
 
 #define NSP_ETH_NBI_PORT_COUNT          24
 #define NSP_ETH_MAX_COUNT               (2 * NSP_ETH_NBI_PORT_COUNT)
@@ -32,6 +33,8 @@
 #define NSP_ETH_STATE_ANEG              GENMASK_ULL(25, 23)
 #define NSP_ETH_STATE_FEC               GENMASK_ULL(27, 26)
 #define NSP_ETH_STATE_ACT_FEC           GENMASK_ULL(29, 28)
+#define NSP_ETH_STATE_TX_PAUSE          RTE_BIT64(31)
+#define NSP_ETH_STATE_RX_PAUSE          RTE_BIT64(32)
 
 #define NSP_ETH_CTRL_CONFIGURED         RTE_BIT64(0)
 #define NSP_ETH_CTRL_ENABLED            RTE_BIT64(1)
@@ -41,6 +44,8 @@
 #define NSP_ETH_CTRL_SET_LANES          RTE_BIT64(5)
 #define NSP_ETH_CTRL_SET_ANEG           RTE_BIT64(6)
 #define NSP_ETH_CTRL_SET_FEC            RTE_BIT64(7)
+#define NSP_ETH_CTRL_SET_TX_PAUSE       RTE_BIT64(10)
+#define NSP_ETH_CTRL_SET_RX_PAUSE       RTE_BIT64(11)
 
 /* Which connector port. */
 #define PORT_TP                 0x00
@@ -185,6 +190,15 @@ nfp_eth_port_translate(struct nfp_nsp *nsp,
 
 	dst->act_fec = FIELD_GET(NSP_ETH_STATE_ACT_FEC, state);
 	dst->supp_aneg = FIELD_GET(NSP_ETH_PORT_SUPP_ANEG, port);
+
+	if (nfp_nsp_get_abi_ver_minor(nsp) < 37) {
+		dst->tx_pause_enabled = true;
+		dst->rx_pause_enabled = true;
+		return;
+	}
+
+	dst->tx_pause_enabled = FIELD_GET(NSP_ETH_STATE_TX_PAUSE, state);
+	dst->rx_pause_enabled = FIELD_GET(NSP_ETH_STATE_RX_PAUSE, state);
 }
 
 static void
@@ -507,7 +521,7 @@ nfp_eth_set_bit_config(struct nfp_nsp *nsp,
 		uint32_t raw_idx,
 		const uint64_t mask,
 		const uint32_t shift,
-		uint32_t val,
+		uint64_t val,
 		const uint64_t ctrl_bit)
 {
 	uint64_t reg;
@@ -670,4 +684,52 @@ nfp_eth_set_split(struct nfp_nsp *nsp,
 {
 	return NFP_ETH_SET_BIT_CONFIG(nsp, NSP_ETH_RAW_PORT,
 			NSP_ETH_PORT_LANES, lanes, NSP_ETH_CTRL_SET_LANES);
+}
+
+/**
+ * Set TX pause switch.
+ *
+ * @param nsp
+ *    NFP NSP handle returned from nfp_eth_config_start()
+ * @param tx_pause
+ *   TX pause switch
+ *
+ * @return
+ *   0 or -ERRNO
+ */
+int
+nfp_eth_set_tx_pause(struct nfp_nsp *nsp,
+		bool tx_pause)
+{
+	if (nfp_nsp_get_abi_ver_minor(nsp) < 37) {
+		PMD_DRV_LOG(ERR, "Set frame pause operation not supported, please update flash.");
+		return -EOPNOTSUPP;
+	}
+
+	return NFP_ETH_SET_BIT_CONFIG(nsp, NSP_ETH_RAW_STATE,
+			NSP_ETH_STATE_TX_PAUSE, tx_pause, NSP_ETH_CTRL_SET_TX_PAUSE);
+}
+
+/**
+ * Set RX pause switch.
+ *
+ * @param nsp
+ *    NFP NSP handle returned from nfp_eth_config_start()
+ * @param rx_pause
+ *   RX pause switch
+ *
+ * @return
+ *   0 or -ERRNO
+ */
+int
+nfp_eth_set_rx_pause(struct nfp_nsp *nsp,
+		bool rx_pause)
+{
+	if (nfp_nsp_get_abi_ver_minor(nsp) < 37) {
+		PMD_DRV_LOG(ERR, "Set frame pause operation not supported, please update flash.");
+		return -EOPNOTSUPP;
+	}
+
+	return NFP_ETH_SET_BIT_CONFIG(nsp, NSP_ETH_RAW_STATE,
+			NSP_ETH_STATE_RX_PAUSE, rx_pause, NSP_ETH_CTRL_SET_RX_PAUSE);
 }

@@ -1605,18 +1605,19 @@ mlx5_mprq_prepare(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		*actual_log_stride_num = config->mprq.log_stride_num;
 	}
 	/* Checks if chosen size of stride is in supported range. */
-	if (config->mprq.log_stride_size > log_max_stride_size ||
-	    config->mprq.log_stride_size < log_min_stride_size) {
-		*actual_log_stride_size = log_def_stride_size;
-		DRV_LOG(WARNING,
-			"Port %u Rx queue %u size of a stride for Multi-Packet RQ is out of range, setting default value (%u)",
-			dev->data->port_id, idx,
-			RTE_BIT32(log_def_stride_size));
+	if (config->mprq.log_stride_size != (uint32_t)MLX5_ARG_UNSET) {
+		if (config->mprq.log_stride_size > log_max_stride_size ||
+			config->mprq.log_stride_size < log_min_stride_size) {
+			*actual_log_stride_size = log_def_stride_size;
+			DRV_LOG(WARNING,
+				"Port %u Rx queue %u size of a stride for Multi-Packet RQ is out of range, setting default value (%u)",
+				dev->data->port_id, idx,
+				RTE_BIT32(log_def_stride_size));
+		} else {
+			*actual_log_stride_size = config->mprq.log_stride_size;
+		}
 	} else {
-		*actual_log_stride_size = config->mprq.log_stride_size;
-	}
-	/* Make the stride fit the mbuf size by default. */
-	if (*actual_log_stride_size == MLX5_MPRQ_DEFAULT_LOG_STRIDE_SIZE) {
+		/* Make the stride fit the mbuf size by default. */
 		if (min_mbuf_size <= RTE_BIT32(log_max_stride_size)) {
 			DRV_LOG(WARNING,
 				"Port %u Rx queue %u size of a stride for Multi-Packet RQ is adjusted to match the mbuf size (%u)",
@@ -1675,6 +1676,8 @@ unsupport:
 			" min_stride_sz = %u, max_stride_sz = %u).\n"
 			"Rx segment is %senabled. External mempool is %sused.",
 			dev->data->port_id, min_mbuf_size, desc, priv->rxqs_n,
+			config->mprq.log_stride_size == (uint32_t)MLX5_ARG_UNSET ?
+			RTE_BIT32(MLX5_MPRQ_DEFAULT_LOG_STRIDE_SIZE) :
 			RTE_BIT32(config->mprq.log_stride_size),
 			RTE_BIT32(config->mprq.log_stride_num),
 			config->mprq.min_rxqs_num,
@@ -2176,7 +2179,7 @@ mlx5_ext_rxq_get(struct rte_eth_dev *dev, uint16_t idx)
 	struct mlx5_priv *priv = dev->data->dev_private;
 
 	MLX5_ASSERT(mlx5_is_external_rxq(dev, idx));
-	return &priv->ext_rxqs[idx - MLX5_EXTERNAL_RX_QUEUE_ID_MIN];
+	return &priv->ext_rxqs[idx - RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN];
 }
 
 /**
@@ -2280,6 +2283,7 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 					RTE_ETH_QUEUE_STATE_STOPPED;
 		}
 	} else { /* Refcnt zero, closing device. */
+		LIST_REMOVE(rxq_ctrl, next);
 		LIST_REMOVE(rxq, owner_entry);
 		if (LIST_EMPTY(&rxq_ctrl->owners)) {
 			if (!rxq_ctrl->is_hairpin)
@@ -2287,7 +2291,6 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 					(&rxq_ctrl->rxq.mr_ctrl.cache_bh);
 			if (rxq_ctrl->rxq.shared)
 				LIST_REMOVE(rxq_ctrl, share_entry);
-			LIST_REMOVE(rxq_ctrl, next);
 			mlx5_free(rxq_ctrl);
 		}
 		dev->data->rx_queues[idx] = NULL;
@@ -2341,7 +2344,7 @@ mlx5_ext_rxq_verify(struct rte_eth_dev *dev)
 	if (priv->ext_rxqs == NULL)
 		return 0;
 
-	for (i = MLX5_EXTERNAL_RX_QUEUE_ID_MIN; i <= UINT16_MAX ; ++i) {
+	for (i = RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN; i <= UINT16_MAX ; ++i) {
 		rxq = mlx5_ext_rxq_get(dev, i);
 		if (rxq->refcnt < 2)
 			continue;
@@ -3210,9 +3213,9 @@ mlx5_external_rx_queue_get_validate(uint16_t port_id, uint16_t dpdk_idx)
 	struct rte_eth_dev *dev;
 	struct mlx5_priv *priv;
 
-	if (dpdk_idx < MLX5_EXTERNAL_RX_QUEUE_ID_MIN) {
+	if (dpdk_idx < RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN) {
 		DRV_LOG(ERR, "Queue index %u should be in range: [%u, %u].",
-			dpdk_idx, MLX5_EXTERNAL_RX_QUEUE_ID_MIN, UINT16_MAX);
+			dpdk_idx, RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN, UINT16_MAX);
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -3243,7 +3246,7 @@ mlx5_external_rx_queue_get_validate(uint16_t port_id, uint16_t dpdk_idx)
 	 * DevX, external RxQs array is allocated.
 	 */
 	MLX5_ASSERT(priv->ext_rxqs != NULL);
-	return &priv->ext_rxqs[dpdk_idx - MLX5_EXTERNAL_RX_QUEUE_ID_MIN];
+	return &priv->ext_rxqs[dpdk_idx - RTE_PMD_MLX5_EXTERNAL_RX_QUEUE_ID_MIN];
 }
 
 int

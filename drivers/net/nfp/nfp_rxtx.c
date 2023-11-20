@@ -143,7 +143,7 @@ nfp_net_rx_cksum(struct nfp_net_rxq *rxq,
 {
 	struct nfp_net_hw *hw = rxq->hw;
 
-	if ((hw->ctrl & NFP_NET_CFG_CTRL_RXCSUM) == 0)
+	if ((hw->super.ctrl & NFP_NET_CFG_CTRL_RXCSUM) == 0)
 		return;
 
 	/* If IPv4 and IP checksum error, fail */
@@ -184,7 +184,7 @@ nfp_net_rx_fill_freelist(struct nfp_net_rxq *rxq)
 			return -ENOMEM;
 		}
 
-		dma_addr = rte_cpu_to_le_64(RTE_MBUF_DMA_ADDR_DEFAULT(mbuf));
+		dma_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(mbuf));
 
 		rxd = &rxq->rxds[i];
 		rxd->fld.dd = 0;
@@ -307,7 +307,7 @@ nfp_net_parse_meta_hash(const struct nfp_meta_parsed *meta,
 {
 	struct nfp_net_hw *hw = rxq->hw;
 
-	if ((hw->ctrl & NFP_NET_CFG_CTRL_RSS_ANY) == 0)
+	if ((hw->super.ctrl & NFP_NET_CFG_CTRL_RSS_ANY) == 0)
 		return;
 
 	mbuf->hash.rss = meta->hash;
@@ -336,10 +336,10 @@ nfp_net_parse_meta_vlan(const struct nfp_meta_parsed *meta,
 		struct nfp_net_rxq *rxq,
 		struct rte_mbuf *mb)
 {
-	struct nfp_net_hw *hw = rxq->hw;
+	uint32_t ctrl = rxq->hw->super.ctrl;
 
-	/* Skip if firmware don't support setting vlan. */
-	if ((hw->ctrl & (NFP_NET_CFG_CTRL_RXVLAN | NFP_NET_CFG_CTRL_RXVLAN_V2)) == 0)
+	/* Skip if hardware don't support setting vlan. */
+	if ((ctrl & (NFP_NET_CFG_CTRL_RXVLAN | NFP_NET_CFG_CTRL_RXVLAN_V2)) == 0)
 		return;
 
 	/*
@@ -347,12 +347,12 @@ nfp_net_parse_meta_vlan(const struct nfp_meta_parsed *meta,
 	 * 1. Using the metadata when NFP_NET_CFG_CTRL_RXVLAN_V2 is set,
 	 * 2. Using the descriptor when NFP_NET_CFG_CTRL_RXVLAN is set.
 	 */
-	if ((hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN_V2) != 0) {
+	if ((ctrl & NFP_NET_CFG_CTRL_RXVLAN_V2) != 0) {
 		if (meta->vlan_layer > 0 && meta->vlan[0].offload != 0) {
 			mb->vlan_tci = rte_cpu_to_le_32(meta->vlan[0].tci);
 			mb->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
 		}
-	} else if ((hw->ctrl & NFP_NET_CFG_CTRL_RXVLAN) != 0) {
+	} else if ((ctrl & NFP_NET_CFG_CTRL_RXVLAN) != 0) {
 		if ((rxd->rxd.flags & PCIE_DESC_RX_VLAN) != 0) {
 			mb->vlan_tci = rte_cpu_to_le_32(rxd->rxd.offload_info);
 			mb->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
@@ -383,7 +383,7 @@ nfp_net_parse_meta_qinq(const struct nfp_meta_parsed *meta,
 		struct nfp_net_rxq *rxq,
 		struct rte_mbuf *mb)
 {
-	struct nfp_net_hw *hw = rxq->hw;
+	struct nfp_hw *hw = &rxq->hw->super;
 
 	if ((hw->ctrl & NFP_NET_CFG_CTRL_RXQINQ) == 0 ||
 			(hw->cap & NFP_NET_CFG_CTRL_RXQINQ) == 0)
@@ -448,8 +448,7 @@ nfp_net_parse_meta(struct nfp_net_rx_desc *rxds,
 	if (unlikely(NFP_DESC_META_LEN(rxds) == 0))
 		return;
 
-	meta_base = rte_pktmbuf_mtod(mb, uint8_t *);
-	meta_base -= NFP_DESC_META_LEN(rxds);
+	meta_base = rte_pktmbuf_mtod_offset(mb, uint8_t *, -NFP_DESC_META_LEN(rxds));
 	meta_header = *(rte_be32_t *)meta_base;
 
 	switch (hw->meta_format) {
@@ -585,17 +584,24 @@ nfp_net_set_ptype(const struct nfp_ptype_parsed *nfp_ptype,
 /**
  * Parse the packet type from Rx descriptor and set to mbuf.
  *
+ * @param rxq
+ *   Rx queue
  * @param rxds
  *   Rx descriptor including the offloading info of packet type.
  * @param mb
  *   Mbuf to set the packet type.
  */
 static void
-nfp_net_parse_ptype(struct nfp_net_rx_desc *rxds,
+nfp_net_parse_ptype(struct nfp_net_rxq *rxq,
+		struct nfp_net_rx_desc *rxds,
 		struct rte_mbuf *mb)
 {
+	struct nfp_net_hw *hw = rxq->hw;
 	struct nfp_ptype_parsed nfp_ptype;
 	uint16_t rxd_ptype = rxds->rxd.offload_info;
+
+	if ((hw->super.cap_ext & NFP_NET_CFG_CTRL_PKT_TYPE) == 0)
+		return;
 
 	if (rxd_ptype == 0 || (rxds->rxd.flags & PCIE_DESC_RX_VLAN) != 0)
 		return;
@@ -736,7 +742,7 @@ nfp_net_recv_pkts(void *rx_queue,
 		struct nfp_meta_parsed meta = {};
 		nfp_net_parse_meta(rxds, rxq, hw, mb, &meta);
 
-		nfp_net_parse_ptype(rxds, mb);
+		nfp_net_parse_ptype(rxq, rxds, mb);
 
 		/* Checking the checksum flag */
 		nfp_net_rx_cksum(rxq, rxds, mb);
@@ -753,7 +759,7 @@ nfp_net_recv_pkts(void *rx_queue,
 		/* Now resetting and updating the descriptor */
 		rxds->vals[0] = 0;
 		rxds->vals[1] = 0;
-		dma_addr = rte_cpu_to_le_64(RTE_MBUF_DMA_ADDR_DEFAULT(new_mb));
+		dma_addr = rte_cpu_to_le_64(rte_mbuf_data_iova_default(new_mb));
 		rxds->fld.dd = 0;
 		rxds->fld.dma_addr_hi = (dma_addr >> 32) & 0xffff;
 		rxds->fld.dma_addr_lo = dma_addr & 0xffffffff;
@@ -841,7 +847,7 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 	struct nfp_net_rxq *rxq;
 	const struct rte_memzone *tz;
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	hw = nfp_net_get_hw(dev);
 
 	nfp_net_rx_desc_limits(hw, &min_rx_desc, &max_rx_desc);
 
@@ -925,8 +931,8 @@ nfp_net_rx_queue_setup(struct rte_eth_dev *dev,
 	 * Telling the HW about the physical address of the RX ring and number
 	 * of descriptors in log2 format.
 	 */
-	nn_cfg_writeq(hw, NFP_NET_CFG_RXR_ADDR(queue_idx), rxq->dma);
-	nn_cfg_writeb(hw, NFP_NET_CFG_RXR_SZ(queue_idx), rte_log2_u32(nb_desc));
+	nn_cfg_writeq(&hw->super, NFP_NET_CFG_RXR_ADDR(queue_idx), rxq->dma);
+	nn_cfg_writeb(&hw->super, NFP_NET_CFG_RXR_SZ(queue_idx), rte_log2_u32(nb_desc));
 
 	return 0;
 }
@@ -1068,7 +1074,7 @@ nfp_net_tx_queue_setup(struct rte_eth_dev *dev,
 {
 	struct nfp_net_hw *hw;
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	hw = nfp_net_get_hw(dev);
 
 	if (hw->ver.extend == NFP_NET_CFG_VERSION_DP_NFD3)
 		return nfp_net_nfd3_tx_queue_setup(dev, queue_idx,

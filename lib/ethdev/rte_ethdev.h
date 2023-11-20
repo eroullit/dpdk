@@ -446,26 +446,57 @@ struct rte_vlan_filter_conf {
 };
 
 /**
+ * Hash function types.
+ */
+enum rte_eth_hash_function {
+	/** DEFAULT means driver decides which hash algorithm to pick. */
+	RTE_ETH_HASH_FUNCTION_DEFAULT = 0,
+	RTE_ETH_HASH_FUNCTION_TOEPLITZ, /**< Toeplitz */
+	RTE_ETH_HASH_FUNCTION_SIMPLE_XOR, /**< Simple XOR */
+	/**
+	 * Symmetric Toeplitz: src, dst will be replaced by
+	 * xor(src, dst). For the case with src/dst only,
+	 * src or dst address will xor with zero pair.
+	 */
+	RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ,
+	/**
+	 * Symmetric Toeplitz: L3 and L4 fields are sorted prior to
+	 * the hash function.
+	 *  If src_ip > dst_ip, swap src_ip and dst_ip.
+	 *  If src_port > dst_port, swap src_port and dst_port.
+	 */
+	RTE_ETH_HASH_FUNCTION_SYMMETRIC_TOEPLITZ_SORT,
+	RTE_ETH_HASH_FUNCTION_MAX,
+};
+
+#define RTE_ETH_HASH_ALGO_TO_CAPA(x) RTE_BIT32(x)
+#define RTE_ETH_HASH_ALGO_CAPA_MASK(x) RTE_BIT32(RTE_ETH_HASH_FUNCTION_ ## x)
+
+/**
  * A structure used to configure the Receive Side Scaling (RSS) feature
  * of an Ethernet port.
- * If not NULL, the *rss_key* pointer of the *rss_conf* structure points
- * to an array holding the RSS key to use for hashing specific header
- * fields of received packets. The length of this array should be indicated
- * by *rss_key_len* below. Otherwise, a default random hash key is used by
- * the device driver.
- *
- * The *rss_key_len* field of the *rss_conf* structure indicates the length
- * in bytes of the array pointed by *rss_key*. To be compatible, this length
- * will be checked in i40e only. Others assume 40 bytes to be used as before.
- *
- * The *rss_hf* field of the *rss_conf* structure indicates the different
- * types of IPv4/IPv6 packets to which the RSS hashing must be applied.
- * Supplying an *rss_hf* equal to zero disables the RSS feature.
  */
 struct rte_eth_rss_conf {
-	uint8_t *rss_key;    /**< If not NULL, 40-byte hash key. */
+	/**
+	 * In rte_eth_dev_rss_hash_conf_get(), the *rss_key_len* should be
+	 * greater than or equal to the *hash_key_size* which get from
+	 * rte_eth_dev_info_get() API. And the *rss_key* should contain at least
+	 * *hash_key_size* bytes. If not meet these requirements, the query
+	 * result is unreliable even if the operation returns success.
+	 *
+	 * In rte_eth_dev_rss_hash_update() or rte_eth_dev_configure(), if
+	 * *rss_key* is not NULL, the *rss_key_len* indicates the length of the
+	 * *rss_key* in bytes and it should be equal to *hash_key_size*.
+	 * If *rss_key* is NULL, drivers are free to use a random or a default key.
+	 */
+	uint8_t *rss_key;
 	uint8_t rss_key_len; /**< hash key length in bytes. */
-	uint64_t rss_hf;     /**< Hash functions to apply - see below. */
+	/**
+	 * Indicates the type of packets or the specific part of packets to
+	 * which RSS hashing is to be applied.
+	 */
+	uint64_t rss_hf;
+	enum rte_eth_hash_function algorithm;	/**< Hash algorithm. */
 };
 
 /*
@@ -1723,7 +1754,15 @@ struct rte_eth_dev_info {
 	uint16_t min_mtu;	/**< Minimum MTU allowed */
 	uint16_t max_mtu;	/**< Maximum MTU allowed */
 	const uint32_t *dev_flags; /**< Device flags */
-	uint32_t min_rx_bufsize; /**< Minimum size of Rx buffer. */
+	/** Minimum Rx buffer size per descriptor supported by HW. */
+	uint32_t min_rx_bufsize;
+	/**
+	 * Maximum Rx buffer size per descriptor supported by HW.
+	 * The value is not enforced, information only to application to
+	 * optimize mbuf size.
+	 * Its value is UINT32_MAX when not specified by the driver.
+	 */
+	uint32_t max_rx_bufsize;
 	uint32_t max_rx_pktlen; /**< Maximum configurable length of Rx pkt. */
 	/** Maximum configurable size of LRO aggregated packet. */
 	uint32_t max_lro_pkt_size;
@@ -1746,6 +1785,7 @@ struct rte_eth_dev_info {
 	/** Device redirection table size, the total number of entries. */
 	uint16_t reta_size;
 	uint8_t hash_key_size; /**< Hash key size in bytes */
+	uint32_t rss_algo_capa; /** RSS hash algorithms capabilities */
 	/** Bit mask of RSS offloads, the bit offset also means flow type */
 	uint64_t flow_type_rss_offloads;
 	struct rte_eth_rxconf default_rxconf; /**< Default Rx configuration */
@@ -3732,7 +3772,7 @@ rte_eth_tx_buffer_init(struct rte_eth_dev_tx_buffer *buffer, uint16_t size);
  * for example, to count dropped packets, or to retry transmission of packets
  * which cannot be sent, this function should be used to register a suitable
  * callback function to implement the desired behaviour.
- * The example callback "rte_eth_count_unsent_packet_callback()" is also
+ * The example callback "rte_eth_tx_buffer_count_callback()" is also
  * provided as reference.
  *
  * @param buffer
@@ -4610,6 +4650,22 @@ int rte_eth_dev_rss_hash_update(uint16_t port_id,
 int
 rte_eth_dev_rss_hash_conf_get(uint16_t port_id,
 			      struct rte_eth_rss_conf *rss_conf);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change, or be removed, without prior notice.
+ *
+ *  Get the name of RSS hash algorithm.
+ *
+ * @param rss_algo
+ *   Hash algorithm.
+ *
+ * @return
+ *   Hash algorithm name or 'UNKNOWN' if the rss_algo cannot be recognized.
+ */
+__rte_experimental
+const char *
+rte_eth_dev_rss_algo_name(enum rte_eth_hash_function rss_algo);
 
 /**
  * Add UDP tunneling port for a type of tunnel.
@@ -6023,14 +6079,14 @@ rte_eth_rx_burst(uint16_t port_id, uint16_t queue_id,
 	{
 		void *cb;
 
-		/* __ATOMIC_RELEASE memory order was used when the
+		/* rte_memory_order_release memory order was used when the
 		 * call back was inserted into the list.
 		 * Since there is a clear dependency between loading
-		 * cb and cb->fn/cb->next, __ATOMIC_ACQUIRE memory order is
+		 * cb and cb->fn/cb->next, rte_memory_order_acquire memory order is
 		 * not required.
 		 */
-		cb = __atomic_load_n((void **)&p->rxq.clbk[queue_id],
-				__ATOMIC_RELAXED);
+		cb = rte_atomic_load_explicit(&p->rxq.clbk[queue_id],
+				rte_memory_order_relaxed);
 		if (unlikely(cb != NULL))
 			nb_rx = rte_eth_call_rx_callbacks(port_id, queue_id,
 					rx_pkts, nb_rx, nb_pkts, cb);
@@ -6360,14 +6416,14 @@ rte_eth_tx_burst(uint16_t port_id, uint16_t queue_id,
 	{
 		void *cb;
 
-		/* __ATOMIC_RELEASE memory order was used when the
+		/* rte_memory_order_release memory order was used when the
 		 * call back was inserted into the list.
 		 * Since there is a clear dependency between loading
-		 * cb and cb->fn/cb->next, __ATOMIC_ACQUIRE memory order is
+		 * cb and cb->fn/cb->next, rte_memory_order_acquire memory order is
 		 * not required.
 		 */
-		cb = __atomic_load_n((void **)&p->txq.clbk[queue_id],
-				__ATOMIC_RELAXED);
+		cb = rte_atomic_load_explicit(&p->txq.clbk[queue_id],
+				rte_memory_order_relaxed);
 		if (unlikely(cb != NULL))
 			nb_pkts = rte_eth_call_tx_callbacks(port_id, queue_id,
 					tx_pkts, nb_pkts, cb);

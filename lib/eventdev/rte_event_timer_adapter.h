@@ -498,7 +498,7 @@ struct rte_event_timer {
 	 * implementation specific values to share between the arm and cancel
 	 * operations.  The application should not modify this field.
 	 */
-	enum rte_event_timer_state state;
+	RTE_ATOMIC(enum rte_event_timer_state) state;
 	/**< State of the event timer. */
 	uint8_t user_meta[];
 	/**< Memory to store user specific metadata.
@@ -689,9 +689,6 @@ rte_event_timer_cancel_burst(const struct rte_event_timer_adapter *adapter,
 }
 
 /**
- * @warning
- * @b EXPERIMENTAL: this API may change without prior notice
- *
  * Get the number of ticks remaining until event timer expiry.
  *
  * @param adapter

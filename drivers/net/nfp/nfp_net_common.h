@@ -3,25 +3,16 @@
  * All rights reserved.
  */
 
-#ifndef __NFP_COMMON_H__
-#define __NFP_COMMON_H__
+#ifndef __NFP_NET_COMMON_H__
+#define __NFP_NET_COMMON_H__
 
 #include <bus_pci_driver.h>
 #include <ethdev_driver.h>
-#include <rte_io.h>
+#include <nfp_common.h>
+#include <nfp_dev.h>
 #include <rte_spinlock.h>
 
-#include "nfp_ctrl.h"
-#include "nfpcore/nfp_dev.h"
-
-/* Macros for accessing the Queue Controller Peripheral 'CSRs' */
-#define NFP_QCP_QUEUE_OFF(_x)                 ((_x) * 0x800)
-#define NFP_QCP_QUEUE_ADD_RPTR                  0x0000
-#define NFP_QCP_QUEUE_ADD_WPTR                  0x0004
-#define NFP_QCP_QUEUE_STS_LO                    0x0008
-#define NFP_QCP_QUEUE_STS_LO_READPTR_MASK     (0x3ffff)
-#define NFP_QCP_QUEUE_STS_HI                    0x000c
-#define NFP_QCP_QUEUE_STS_HI_WRITEPTR_MASK    (0x3ffff)
+#include "nfp_net_ctrl.h"
 
 /* Interrupt definitions */
 #define NFP_NET_IRQ_LSC_IDX             0
@@ -42,21 +33,26 @@
 /* Alignment for dma zones */
 #define NFP_MEMZONE_ALIGN       128
 
-#define NFP_QCP_QUEUE_ADDR_SZ   (0x800)
-
 /* Number of supported physical ports */
 #define NFP_MAX_PHYPORTS        12
+
+#define NFP_BEAT_LENGTH         8
+
+/*
+ * Each PF has corresponding word to beat:
+ * Offset | Usage
+ *   0    | magic number
+ *   8    | beat of Pf0
+ *   16   | beat of Pf1
+ *   24   | beat of Pf2
+ *   32   | beat of Pf3
+ */
+#define NFP_BEAT_OFFSET(_x)     (((_x) + 1) * NFP_BEAT_LENGTH)
 
 /* Firmware application ID's */
 enum nfp_app_fw_id {
 	NFP_APP_FW_CORE_NIC               = 0x1,
 	NFP_APP_FW_FLOWER_NIC             = 0x3,
-};
-
-/* Read or Write Pointer of a queue */
-enum nfp_qcp_ptr {
-	NFP_QCP_READ_PTR = 0,
-	NFP_QCP_WRITE_PTR
 };
 
 enum nfp_net_meta_format {
@@ -69,6 +65,17 @@ struct nfp_net_tlv_caps {
 	uint32_t mbox_off;               /**< VNIC mailbox area offset */
 	uint32_t mbox_len;               /**< VNIC mailbox area length */
 	uint32_t mbox_cmsg_types;        /**< Cmsgs which can be passed through the mailbox */
+};
+
+struct nfp_multi_pf {
+	/** Support multiple PF */
+	bool enabled;
+	/** Function index */
+	uint8_t function_id;
+	/** Pointer to CPP area for beat to keepalive */
+	struct nfp_cpp_area *beat_area;
+	/** Pointer to mapped beat address used for keepalive */
+	uint8_t *beat_addr;
 };
 
 struct nfp_pf_dev {
@@ -96,6 +103,9 @@ struct nfp_pf_dev {
 
 	/** Service id of cpp bridge service */
 	uint32_t cpp_bridge_id;
+
+	/** Multiple PF configuration */
+	struct nfp_multi_pf multi_pf;
 };
 
 struct nfp_app_fw_nic {
@@ -113,6 +123,9 @@ struct nfp_app_fw_nic {
 };
 
 struct nfp_net_hw {
+	/** The parent class */
+	struct nfp_hw super;
+
 	/** Backpointer to the PF this port belongs to */
 	struct nfp_pf_dev *pf_dev;
 
@@ -120,9 +133,7 @@ struct nfp_net_hw {
 	struct rte_eth_dev *eth_dev;
 
 	/** Info from the firmware */
-	uint32_t cap_ext;
 	struct nfp_net_fw_ver ver;
-	uint32_t cap;
 	uint32_t max_mtu;
 	uint32_t mtu;
 	uint32_t rx_offset;
@@ -131,10 +142,6 @@ struct nfp_net_hw {
 	/** NFP ASIC params */
 	const struct nfp_dev_info *dev_info;
 
-	/** Current values for control */
-	uint32_t ctrl;
-
-	uint8_t *ctrl_bar;
 	uint8_t *tx_bar;
 	uint8_t *rx_bar;
 
@@ -144,9 +151,6 @@ struct nfp_net_hw {
 	uint16_t vxlan_ports[NFP_NET_N_VXLAN_PORTS];
 	uint8_t vxlan_usecnt[NFP_NET_N_VXLAN_PORTS];
 
-	uint8_t *qcp_cfg;
-	rte_spinlock_t reconfig_lock;
-
 	uint32_t max_tx_queues;
 	uint32_t max_rx_queues;
 	uint16_t flbufsz;
@@ -154,8 +158,6 @@ struct nfp_net_hw {
 	uint16_t vendor_id;
 	uint16_t subsystem_device_id;
 	uint16_t subsystem_vendor_id;
-
-	struct rte_ether_addr mac_addr;
 
 	/** Records starting point for counters */
 	struct rte_eth_stats eth_stats_base;
@@ -177,183 +179,6 @@ struct nfp_net_hw {
 	struct nfp_net_ipsec_data *ipsec_data;
 };
 
-struct nfp_net_adapter {
-	struct nfp_net_hw hw;
-};
-
-static inline uint8_t
-nn_readb(volatile const void *addr)
-{
-	return rte_read8(addr);
-}
-
-static inline void
-nn_writeb(uint8_t val,
-		volatile void *addr)
-{
-	rte_write8(val, addr);
-}
-
-static inline uint32_t
-nn_readl(volatile const void *addr)
-{
-	return rte_read32(addr);
-}
-
-static inline void
-nn_writel(uint32_t val,
-		volatile void *addr)
-{
-	rte_write32(val, addr);
-}
-
-static inline uint16_t
-nn_readw(volatile const void *addr)
-{
-	return rte_read16(addr);
-}
-
-static inline void
-nn_writew(uint16_t val,
-		volatile void *addr)
-{
-	rte_write16(val, addr);
-}
-
-static inline uint64_t
-nn_readq(volatile void *addr)
-{
-	uint32_t low;
-	uint32_t high;
-	const volatile uint32_t *p = addr;
-
-	high = nn_readl((volatile const void *)(p + 1));
-	low = nn_readl((volatile const void *)p);
-
-	return low + ((uint64_t)high << 32);
-}
-
-static inline void
-nn_writeq(uint64_t val,
-		volatile void *addr)
-{
-	nn_writel(val >> 32, (volatile char *)addr + 4);
-	nn_writel(val, addr);
-}
-
-static inline uint8_t
-nn_cfg_readb(struct nfp_net_hw *hw,
-		uint32_t off)
-{
-	return nn_readb(hw->ctrl_bar + off);
-}
-
-static inline void
-nn_cfg_writeb(struct nfp_net_hw *hw,
-		uint32_t off,
-		uint8_t val)
-{
-	nn_writeb(val, hw->ctrl_bar + off);
-}
-
-static inline uint16_t
-nn_cfg_readw(struct nfp_net_hw *hw,
-		uint32_t off)
-{
-	return rte_le_to_cpu_16(nn_readw(hw->ctrl_bar + off));
-}
-
-static inline void
-nn_cfg_writew(struct nfp_net_hw *hw,
-		uint32_t off,
-		uint16_t val)
-{
-	nn_writew(rte_cpu_to_le_16(val), hw->ctrl_bar + off);
-}
-
-static inline uint32_t
-nn_cfg_readl(struct nfp_net_hw *hw,
-		uint32_t off)
-{
-	return rte_le_to_cpu_32(nn_readl(hw->ctrl_bar + off));
-}
-
-static inline void
-nn_cfg_writel(struct nfp_net_hw *hw,
-		uint32_t off,
-		uint32_t val)
-{
-	nn_writel(rte_cpu_to_le_32(val), hw->ctrl_bar + off);
-}
-
-static inline uint64_t
-nn_cfg_readq(struct nfp_net_hw *hw,
-		uint32_t off)
-{
-	return rte_le_to_cpu_64(nn_readq(hw->ctrl_bar + off));
-}
-
-static inline void
-nn_cfg_writeq(struct nfp_net_hw *hw,
-		uint32_t off,
-		uint64_t val)
-{
-	nn_writeq(rte_cpu_to_le_64(val), hw->ctrl_bar + off);
-}
-
-/**
- * Add the value to the selected pointer of a queue.
- *
- * @param queue
- *   Base address for queue structure
- * @param ptr
- *   Add to the read or write pointer
- * @param val
- *   Value to add to the queue pointer
- */
-static inline void
-nfp_qcp_ptr_add(uint8_t *queue,
-		enum nfp_qcp_ptr ptr,
-		uint32_t val)
-{
-	uint32_t off;
-
-	if (ptr == NFP_QCP_READ_PTR)
-		off = NFP_QCP_QUEUE_ADD_RPTR;
-	else
-		off = NFP_QCP_QUEUE_ADD_WPTR;
-
-	nn_writel(rte_cpu_to_le_32(val), queue + off);
-}
-
-/**
- * Read the current read/write pointer value for a queue.
- *
- * @param queue
- *   Base address for queue structure
- * @param ptr
- *   Read or Write pointer
- */
-static inline uint32_t
-nfp_qcp_read(uint8_t *queue,
-		enum nfp_qcp_ptr ptr)
-{
-	uint32_t off;
-	uint32_t val;
-
-	if (ptr == NFP_QCP_READ_PTR)
-		off = NFP_QCP_QUEUE_STS_LO;
-	else
-		off = NFP_QCP_QUEUE_STS_HI;
-
-	val = rte_cpu_to_le_32(nn_readl(queue + off));
-
-	if (ptr == NFP_QCP_READ_PTR)
-		return val & NFP_QCP_QUEUE_STS_LO_READPTR_MASK;
-	else
-		return val & NFP_QCP_QUEUE_STS_HI_WRITEPTR_MASK;
-}
-
 static inline uint32_t
 nfp_qcp_queue_offset(const struct nfp_dev_info *dev_info,
 		uint16_t queue)
@@ -363,8 +188,6 @@ nfp_qcp_queue_offset(const struct nfp_dev_info *dev_info,
 }
 
 /* Prototypes for common NFP functions */
-int nfp_net_reconfig(struct nfp_net_hw *hw, uint32_t ctrl, uint32_t update);
-int nfp_net_ext_reconfig(struct nfp_net_hw *hw, uint32_t ctrl_ext, uint32_t update);
 int nfp_net_mbox_reconfig(struct nfp_net_hw *hw, uint32_t mbox_cmd);
 int nfp_net_configure(struct rte_eth_dev *dev);
 int nfp_net_common_init(struct rte_pci_device *pci_dev, struct nfp_net_hw *hw);
@@ -372,13 +195,18 @@ void nfp_net_log_device_information(const struct nfp_net_hw *hw);
 void nfp_net_enable_queues(struct rte_eth_dev *dev);
 void nfp_net_disable_queues(struct rte_eth_dev *dev);
 void nfp_net_params_setup(struct nfp_net_hw *hw);
-void nfp_net_write_mac(struct nfp_net_hw *hw, uint8_t *mac);
 int nfp_net_set_mac_addr(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr);
 int nfp_configure_rx_interrupt(struct rte_eth_dev *dev,
 		struct rte_intr_handle *intr_handle);
 uint32_t nfp_check_offloads(struct rte_eth_dev *dev);
 int nfp_net_promisc_enable(struct rte_eth_dev *dev);
 int nfp_net_promisc_disable(struct rte_eth_dev *dev);
+int nfp_net_allmulticast_enable(struct rte_eth_dev *dev);
+int nfp_net_allmulticast_disable(struct rte_eth_dev *dev);
+int nfp_net_link_update_common(struct rte_eth_dev *dev,
+		struct nfp_net_hw *hw,
+		struct rte_eth_link *link,
+		uint32_t link_status);
 int nfp_net_link_update(struct rte_eth_dev *dev,
 		__rte_unused int wait_to_complete);
 int nfp_net_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
@@ -406,6 +234,7 @@ int nfp_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id);
 int nfp_rx_queue_intr_disable(struct rte_eth_dev *dev, uint16_t queue_id);
 void nfp_net_params_setup(struct nfp_net_hw *hw);
 void nfp_net_cfg_queue_setup(struct nfp_net_hw *hw);
+void nfp_net_irq_unmask(struct rte_eth_dev *dev);
 void nfp_net_dev_interrupt_handler(void *param);
 void nfp_net_dev_interrupt_delayed_handler(void *param);
 int nfp_net_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
@@ -436,14 +265,13 @@ int nfp_net_check_dma_mask(struct nfp_net_hw *hw, char *name);
 void nfp_net_init_metadata_format(struct nfp_net_hw *hw);
 void nfp_net_cfg_read_version(struct nfp_net_hw *hw);
 int nfp_net_firmware_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size);
-int nfp_repr_firmware_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size);
 bool nfp_net_is_valid_nfd_version(struct nfp_net_fw_ver version);
-
-#define NFP_NET_DEV_PRIVATE_TO_HW(adapter)\
-	(&((struct nfp_net_adapter *)adapter)->hw)
-
-#define NFP_NET_DEV_PRIVATE_TO_PF(dev_priv)\
-	(((struct nfp_net_hw *)dev_priv)->pf_dev)
+struct nfp_net_hw *nfp_net_get_hw(const struct rte_eth_dev *dev);
+int nfp_net_stop(struct rte_eth_dev *dev);
+int nfp_net_flow_ctrl_get(struct rte_eth_dev *dev,
+		struct rte_eth_fc_conf *fc_conf);
+int nfp_net_flow_ctrl_set(struct rte_eth_dev *dev,
+		struct rte_eth_fc_conf *fc_conf);
 
 #define NFP_PRIV_TO_APP_FW_NIC(app_fw_priv)\
 	((struct nfp_app_fw_nic *)app_fw_priv)
@@ -451,4 +279,4 @@ bool nfp_net_is_valid_nfd_version(struct nfp_net_fw_ver version);
 #define NFP_PRIV_TO_APP_FW_FLOWER(app_fw_priv)\
 	((struct nfp_app_fw_flower *)app_fw_priv)
 
-#endif /* __NFP_COMMON_H__ */
+#endif /* __NFP_NET_COMMON_H__ */

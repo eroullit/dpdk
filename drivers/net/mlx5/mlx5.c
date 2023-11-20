@@ -1067,6 +1067,7 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 	struct mlx5_devx_graph_node_attr node = {
 		.modify_field_select = 0,
 	};
+	uint32_t i;
 	uint32_t ids[MLX5_GRAPH_NODE_SAMPLE_NUM];
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_common_dev_config *config = &priv->sh->cdev->config;
@@ -1100,10 +1101,18 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 	node.next_header_field_size = 0x8;
 	node.in[0].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_IP;
 	node.in[0].compare_condition_value = IPPROTO_ROUTING;
-	node.sample[0].flow_match_sample_en = 1;
-	/* First come first serve no matter inner or outer. */
-	node.sample[0].flow_match_sample_tunnel_mode = MLX5_GRAPH_SAMPLE_TUNNEL_FIRST;
-	node.sample[0].flow_match_sample_offset_mode = MLX5_GRAPH_SAMPLE_OFFSET_FIXED;
+	/* Final IPv6 address. */
+	for (i = 0; i <= MLX5_SRV6_SAMPLE_NUM - 1 && i < MLX5_GRAPH_NODE_SAMPLE_NUM; i++) {
+		node.sample[i].flow_match_sample_en = 1;
+		node.sample[i].flow_match_sample_offset_mode =
+					MLX5_GRAPH_SAMPLE_OFFSET_FIXED;
+		/* First come first serve no matter inner or outer. */
+		node.sample[i].flow_match_sample_tunnel_mode =
+					MLX5_GRAPH_SAMPLE_TUNNEL_FIRST;
+		node.sample[i].flow_match_sample_field_base_offset =
+					(i + 1) * sizeof(uint32_t); /* in bytes */
+	}
+	node.sample[0].flow_match_sample_field_base_offset = 0;
 	node.out[0].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_TCP;
 	node.out[0].compare_condition_value = IPPROTO_TCP;
 	node.out[1].arc_parse_graph_node = MLX5_GRAPH_ARC_NODE_UDP;
@@ -1116,8 +1125,8 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 		goto error;
 	}
 	priv->sh->srh_flex_parser.flex.devx_fp->devx_obj = fp;
-	priv->sh->srh_flex_parser.flex.mapnum = 1;
-	priv->sh->srh_flex_parser.flex.devx_fp->num_samples = 1;
+	priv->sh->srh_flex_parser.flex.mapnum = MLX5_SRV6_SAMPLE_NUM;
+	priv->sh->srh_flex_parser.flex.devx_fp->num_samples = MLX5_SRV6_SAMPLE_NUM;
 
 	ret = mlx5_devx_cmd_query_parse_samples(fp, ids, priv->sh->srh_flex_parser.flex.mapnum,
 						&priv->sh->srh_flex_parser.flex.devx_fp->anchor_id);
@@ -1125,12 +1134,22 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 		DRV_LOG(ERR, "Failed to query sample IDs.");
 		goto error;
 	}
-	ret = mlx5_devx_cmd_match_sample_info_query(ibv_ctx, ids[0],
-				&priv->sh->srh_flex_parser.flex.devx_fp->sample_info[0]);
-	if (ret) {
-		DRV_LOG(ERR, "Failed to query sample id information.");
-		goto error;
+	for (i = 0; i <= MLX5_SRV6_SAMPLE_NUM - 1 && i < MLX5_GRAPH_NODE_SAMPLE_NUM; i++) {
+		ret = mlx5_devx_cmd_match_sample_info_query(ibv_ctx, ids[i],
+					&priv->sh->srh_flex_parser.flex.devx_fp->sample_info[i]);
+		if (ret) {
+			DRV_LOG(ERR, "Failed to query sample id %u information.", ids[i]);
+			goto error;
+		}
 	}
+	for (i = 0; i <= MLX5_SRV6_SAMPLE_NUM - 1 && i < MLX5_GRAPH_NODE_SAMPLE_NUM; i++) {
+		priv->sh->srh_flex_parser.flex.devx_fp->sample_ids[i] = ids[i];
+		priv->sh->srh_flex_parser.flex.map[i].width = sizeof(uint32_t) * CHAR_BIT;
+		priv->sh->srh_flex_parser.flex.map[i].reg_id = i;
+		priv->sh->srh_flex_parser.flex.map[i].shift =
+						(i + 1) * sizeof(uint32_t) * CHAR_BIT;
+	}
+	priv->sh->srh_flex_parser.flex.map[0].shift = 0;
 	return 0;
 error:
 	if (fp)
@@ -1599,6 +1618,80 @@ mlx5_rt_timestamp_config(struct mlx5_dev_ctx_shared *sh,
 	}
 }
 
+static void
+mlx5_init_hws_flow_tags_registers(struct mlx5_dev_ctx_shared *sh)
+{
+	struct mlx5_dev_registers *reg = &sh->registers;
+	uint32_t meta_mode = sh->config.dv_xmeta_en;
+	uint16_t masks = (uint16_t)sh->cdev->config.hca_attr.set_reg_c;
+	uint16_t unset = 0;
+	uint32_t i, j;
+
+	/*
+	 * The CAPA is global for common device but only used in net.
+	 * It is shared per eswitch domain.
+	 */
+	if (reg->aso_reg != REG_NON)
+		unset |= 1 << mlx5_regc_index(reg->aso_reg);
+	unset |= 1 << mlx5_regc_index(REG_C_6);
+	if (sh->config.dv_esw_en)
+		unset |= 1 << mlx5_regc_index(REG_C_0);
+	if (meta_mode == MLX5_XMETA_MODE_META32_HWS)
+		unset |= 1 << mlx5_regc_index(REG_C_1);
+	masks &= ~unset;
+	for (i = 0, j = 0; i < MLX5_FLOW_HW_TAGS_MAX; i++) {
+		if (!!((1 << i) & masks))
+			reg->hw_avl_tags[j++] = mlx5_regc_value(i);
+	}
+}
+
+static void
+mlx5_init_aso_register(struct mlx5_dev_ctx_shared *sh)
+{
+#if defined(HAVE_MLX5_DR_CREATE_ACTION_ASO_EXT)
+	const struct mlx5_hca_attr *hca_attr = &sh->cdev->config.hca_attr;
+	const struct mlx5_hca_qos_attr *qos =  &hca_attr->qos;
+	uint8_t reg_c_mask = qos->flow_meter_reg_c_ids & 0xfc;
+
+	if (!(qos->sup && qos->flow_meter_old && sh->config.dv_flow_en))
+		return;
+	/*
+	 * Meter needs two REG_C's for color match and pre-sfx
+	 * flow match. Here get the REG_C for color match.
+	 * REG_C_0 and REG_C_1 is reserved for metadata feature.
+	 */
+	if (rte_popcount32(reg_c_mask) > 0) {
+		/*
+		 * The meter color register is used by the
+		 * flow-hit feature as well.
+		 * The flow-hit feature must use REG_C_3
+		 * Prefer REG_C_3 if it is available.
+		 */
+		if (reg_c_mask & (1 << mlx5_regc_index(REG_C_3)))
+			sh->registers.aso_reg = REG_C_3;
+		else
+			sh->registers.aso_reg =
+				mlx5_regc_value(ffs(reg_c_mask) - 1);
+	}
+#else
+	RTE_SET_USED(sh);
+#endif
+}
+
+static void
+mlx5_init_shared_dev_registers(struct mlx5_dev_ctx_shared *sh)
+{
+	if (sh->cdev->config.devx)
+		mlx5_init_aso_register(sh);
+	if (sh->registers.aso_reg != REG_NON) {
+		DRV_LOG(DEBUG, "ASO register: REG_C%d",
+			mlx5_regc_index(sh->registers.aso_reg));
+	} else {
+		DRV_LOG(DEBUG, "ASO register: NONE");
+	}
+	mlx5_init_hws_flow_tags_registers(sh);
+}
+
 /**
  * Allocate shared device context. If there is multiport device the
  * master and representors will share this context, if there is single
@@ -1720,6 +1813,10 @@ mlx5_alloc_shared_dev_ctx(const struct mlx5_dev_spawn_data *spawn,
 	/* Add context to the global device list. */
 	LIST_INSERT_HEAD(&mlx5_dev_ctx_list, sh, next);
 	rte_spinlock_init(&sh->geneve_tlv_opt_sl);
+	mlx5_init_shared_dev_registers(sh);
+	/* Init counter pool list header and lock. */
+	LIST_INIT(&sh->hws_cpool_list);
+	rte_spinlock_init(&sh->cpool_lock);
 exit:
 	pthread_mutex_unlock(&mlx5_dev_ctx_list_mutex);
 	return sh;
@@ -1851,7 +1948,6 @@ mlx5_free_shared_dev_ctx(struct mlx5_dev_ctx_shared *sh)
 	if (LIST_EMPTY(&mlx5_dev_ctx_list)) {
 		mlx5_os_net_cleanup();
 		mlx5_flow_os_release_workspace();
-		mlx5_flow_workspace_gc_release();
 	}
 	pthread_mutex_unlock(&mlx5_dev_ctx_list_mutex);
 	if (sh->flex_parsers_dv) {
@@ -2168,14 +2264,11 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	/* Free the eCPRI flex parser resource. */
 	mlx5_flex_parser_ecpri_release(dev);
 	mlx5_flex_item_port_cleanup(dev);
+	mlx5_indirect_list_handles_release(dev);
 #ifdef HAVE_MLX5_HWS_SUPPORT
 	flow_hw_destroy_vport_action(dev);
 	flow_hw_resource_release(dev);
 	flow_hw_clear_port_info(dev);
-	if (priv->sh->config.dv_flow_en == 2) {
-		flow_hw_clear_flow_metadata_config();
-		flow_hw_clear_tags_set(dev);
-	}
 #endif
 	if (priv->rxq_privs != NULL) {
 		/* XXX race condition if mlx5_rx_burst() is still running. */
@@ -2616,7 +2709,7 @@ mlx5_port_args_config(struct mlx5_priv *priv, struct mlx5_kvargs_ctrl *mkvlist,
 	config->mprq.max_memcpy_len = MLX5_MPRQ_MEMCPY_DEFAULT_LEN;
 	config->mprq.min_rxqs_num = MLX5_MPRQ_MIN_RXQS;
 	config->mprq.log_stride_num = MLX5_MPRQ_DEFAULT_LOG_STRIDE_NUM;
-	config->mprq.log_stride_size = MLX5_MPRQ_DEFAULT_LOG_STRIDE_SIZE;
+	config->mprq.log_stride_size = MLX5_ARG_UNSET;
 	config->log_hp_size = MLX5_ARG_UNSET;
 	config->std_delay_drop = 0;
 	config->hp_delay_drop = 0;

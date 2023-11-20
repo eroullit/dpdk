@@ -13,7 +13,6 @@
 #include <rte_branch_prediction.h>
 #include <rte_string_fns.h>
 #include <rte_mbuf_dyn.h>
-#include "rte_ethdev.h"
 #include "rte_flow_driver.h"
 #include "rte_flow.h"
 
@@ -267,6 +266,8 @@ static const struct rte_flow_desc_data rte_flow_desc_action[] = {
 	MK_FLOW_ACTION(IPV6_EXT_REMOVE, sizeof(struct rte_flow_action_ipv6_ext_remove)),
 	MK_FLOW_ACTION(INDIRECT_LIST,
 		       sizeof(struct rte_flow_action_indirect_list)),
+	MK_FLOW_ACTION(PROG,
+		       sizeof(struct rte_flow_action_prog)),
 };
 
 int
@@ -722,7 +723,7 @@ rte_flow_conv_action_conf(void *buf, const size_t size,
 		if (src.rss->key_len && src.rss->key) {
 			off = RTE_ALIGN_CEIL(off, sizeof(*dst.rss->key));
 			tmp = sizeof(*src.rss->key) * src.rss->key_len;
-			if (size >= off + tmp)
+			if (size >= (uint64_t)off + (uint64_t)tmp)
 				dst.rss->key = rte_memcpy
 					((void *)((uintptr_t)dst.rss + off),
 					 src.rss->key, tmp);
@@ -731,7 +732,7 @@ rte_flow_conv_action_conf(void *buf, const size_t size,
 		if (src.rss->queue_num) {
 			off = RTE_ALIGN_CEIL(off, sizeof(*dst.rss->queue));
 			tmp = sizeof(*src.rss->queue) * src.rss->queue_num;
-			if (size >= off + tmp)
+			if (size >= (uint64_t)off + (uint64_t)tmp)
 				dst.rss->queue = rte_memcpy
 					((void *)((uintptr_t)dst.rss + off),
 					 src.rss->queue, tmp);

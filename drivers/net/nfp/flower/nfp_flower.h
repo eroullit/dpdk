@@ -6,7 +6,7 @@
 #ifndef __NFP_FLOWER_H__
 #define __NFP_FLOWER_H__
 
-#include "../nfp_common.h"
+#include "../nfp_net_common.h"
 
 /* Extra features bitmap. */
 #define NFP_FL_FEATS_GENEVE             RTE_BIT64(0)
@@ -31,7 +31,6 @@
  */
 #define FLOWER_PKT_DATA_OFFSET (NFP_NET_META_HEADER_SIZE + NFP_NET_META_FIELD_SIZE)
 
-#define MAX_FLOWER_PHYPORTS 8
 #define MAX_FLOWER_VFS 64
 
 /* Forward declaration */
@@ -78,7 +77,7 @@ struct nfp_app_fw_flower {
 	uint64_t ctrl_vnic_tx_count;
 
 	/** Array of phyport representors */
-	struct nfp_flower_representor *phy_reprs[MAX_FLOWER_PHYPORTS];
+	struct nfp_flower_representor *phy_reprs[NFP_MAX_PHYPORTS];
 
 	/** Array of VF representors */
 	struct nfp_flower_representor *vf_reprs[MAX_FLOWER_VFS];
@@ -107,14 +106,13 @@ nfp_flower_support_decap_v2(const struct nfp_app_fw_flower *app_fw_flower)
 
 int nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev,
 		const struct nfp_dev_info *dev_info);
-int nfp_secondary_init_app_fw_flower(struct nfp_cpp *cpp);
+int nfp_secondary_init_app_fw_flower(struct nfp_pf_dev *pf_dev);
 bool nfp_flower_pf_dispatch_pkts(struct nfp_net_hw *hw,
 		struct rte_mbuf *mbuf,
 		uint32_t port_id);
 uint16_t nfp_flower_pf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts);
 int nfp_flower_pf_start(struct rte_eth_dev *dev);
-int nfp_flower_pf_stop(struct rte_eth_dev *dev);
 uint32_t nfp_flower_pkt_add_metadata(struct nfp_app_fw_flower *app_fw_flower,
 		struct rte_mbuf *mbuf, uint32_t port_id);
 

@@ -3,14 +3,13 @@
  * All rights reserved.
  */
 
-#include "nfp_ctrl.h"
+#include "nfp_net_ctrl.h"
 
 #include <ethdev_pci.h>
+#include <nfp_platform.h>
 
-#include "nfpcore/nfp_platform.h"
-
-#include "nfp_common.h"
 #include "nfp_logs.h"
+#include "nfp_net_common.h"
 
 static void
 nfp_net_tlv_caps_reset(struct nfp_net_tlv_caps *caps)
@@ -29,15 +28,15 @@ nfp_net_tlv_caps_parse(struct rte_eth_dev *dev)
 	uint32_t length;
 	uint32_t offset;
 	uint32_t tlv_type;
-	struct nfp_net_hw *hw;
+	struct nfp_net_hw *net_hw;
 	struct nfp_net_tlv_caps *caps;
 
-	hw = NFP_NET_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	caps = &hw->tlv_caps;
+	net_hw = dev->data->dev_private;
+	caps = &net_hw->tlv_caps;
 	nfp_net_tlv_caps_reset(caps);
 
-	data = hw->ctrl_bar + NFP_NET_CFG_TLV_BASE;
-	end = hw->ctrl_bar + NFP_NET_CFG_BAR_SZ;
+	data = net_hw->super.ctrl_bar + NFP_NET_CFG_TLV_BASE;
+	end = net_hw->super.ctrl_bar + NFP_NET_CFG_BAR_SZ;
 
 	hdr = rte_read32(data);
 	if (hdr == 0) {
@@ -46,7 +45,7 @@ nfp_net_tlv_caps_parse(struct rte_eth_dev *dev)
 	}
 
 	for (; ; data += length) {
-		offset = data - hw->ctrl_bar;
+		offset = data - net_hw->super.ctrl_bar;
 
 		if (data + NFP_NET_CFG_TLV_VALUE > end) {
 			PMD_DRV_LOG(ERR, "Reached end of BAR without END TLV");
@@ -87,7 +86,7 @@ nfp_net_tlv_caps_parse(struct rte_eth_dev *dev)
 			caps->mbox_len = length;
 
 			if (length != 0)
-				caps->mbox_off = data - hw->ctrl_bar;
+				caps->mbox_off = data - net_hw->super.ctrl_bar;
 			else
 				caps->mbox_off = 0;
 			break;

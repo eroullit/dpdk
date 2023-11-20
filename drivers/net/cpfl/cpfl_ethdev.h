@@ -212,7 +212,6 @@ struct cpfl_adapter_ext {
 	uint16_t cur_vport_nb;
 
 	uint16_t used_vecs_num;
-	struct cpfl_devargs devargs;
 
 	rte_spinlock_t vport_map_lock;
 	struct rte_hash *vport_map_hash;
@@ -280,7 +279,6 @@ cpfl_get_port_id(struct cpfl_itf *itf)
 static inline uint16_t
 cpfl_get_vsi_id(struct cpfl_itf *itf)
 {
-	struct cpfl_adapter_ext *adapter = itf->adapter;
 	struct cpfl_vport_info *info;
 	uint32_t vport_id;
 	int ret;
@@ -296,12 +294,12 @@ cpfl_get_vsi_id(struct cpfl_itf *itf)
 	} else if (itf->type == CPFL_ITF_TYPE_VPORT) {
 		vport_id = ((struct cpfl_vport *)itf)->base.vport_id;
 
-		vport_identity.func_type = CPCHNL2_FUNC_TYPE_PF;
+		vport_identity.func_type = CPCHNL2_FTYPE_LAN_PF;
 		/* host: CPFL_HOST0_CPF_ID, acc: CPFL_ACC_CPF_ID */
 		vport_identity.pf_id = CPFL_ACC_CPF_ID;
 		vport_identity.vf_id = 0;
 		vport_identity.vport_id = vport_id;
-		ret = rte_hash_lookup_data(adapter->vport_map_hash,
+		ret = rte_hash_lookup_data(itf->adapter->vport_map_hash,
 					   &vport_identity,
 					   (void **)&info);
 		if (ret < 0) {

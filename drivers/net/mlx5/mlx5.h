@@ -186,12 +186,15 @@ struct mlx5_dev_cap {
 	char fw_ver[64]; /* Firmware version of this device. */
 };
 
+#define MLX5_MPESW_PORT_INVALID (-1)
+
 /** Data associated with devices to spawn. */
 struct mlx5_dev_spawn_data {
 	uint32_t ifindex; /**< Network interface index. */
 	uint32_t max_port; /**< Device maximal port index. */
 	uint32_t phys_port; /**< Device physical port index. */
 	int pf_bond; /**< bonding device PF index. < 0 - no bonding */
+	int mpesw_port; /**< MPESW uplink index. Valid if mpesw_owner_port >= 0. */
 	struct mlx5_switch_info info; /**< Switch information. */
 	const char *phys_dev_name; /**< Name of physical device. */
 	struct rte_eth_dev *eth_dev; /**< Associated Ethernet device. */
@@ -199,6 +202,23 @@ struct mlx5_dev_spawn_data {
 	struct mlx5_common_device *cdev; /**< Backend common device. */
 	struct mlx5_bond_info *bond_info;
 };
+
+/**
+ * Check if the port requested to be probed is MPESW physical device
+ * or a representor port.
+ *
+ * @param spawn
+ *   Parameters of the probed port.
+ *
+ * @return
+ *   True if the probed port is a physical device or representor in MPESW setup.
+ *   False otherwise or MPESW was not configured.
+ */
+static inline bool
+mlx5_is_probed_port_on_mpesw_device(struct mlx5_dev_spawn_data *spawn)
+{
+	return spawn->mpesw_port >= 0;
+}
 
 /** Data associated with socket messages. */
 struct mlx5_flow_dump_req  {
@@ -373,6 +393,7 @@ struct mlx5_hw_q_job {
 	};
 	void *user_data; /* Job user data. */
 	uint8_t *encap_data; /* Encap data. */
+	uint8_t *push_data; /* IPv6 routing push data. */
 	struct mlx5_modification_cmd *mhdr_cmd;
 	struct rte_flow_item *items;
 	union {
@@ -1335,6 +1356,7 @@ struct mlx5_flex_pattern_field {
 	uint16_t shift:5;
 	uint16_t reg_id:5;
 };
+
 #define MLX5_INVALID_SAMPLE_REG_ID 0x1F
 
 /* Port flex item context. */
@@ -1346,6 +1368,11 @@ struct mlx5_flex_item {
 	struct mlx5_flex_pattern_field map[MLX5_FLEX_ITEM_MAPPING_NUM];
 };
 
+/*
+ * Sample an IPv6 address and the first dword of SRv6 header.
+ * Then it is 16 + 4 = 20 bytes which is 5 dwords.
+ */
+#define MLX5_SRV6_SAMPLE_NUM 5
 /* Mlx5 internal flex parser profile structure. */
 struct mlx5_internal_flex_parser_profile {
 	uint32_t refcnt;
@@ -1373,6 +1400,19 @@ struct mlx5_hws_cnt_svc_mng {
 	struct mlx5_hws_aso_mng aso_mng __rte_cache_aligned;
 };
 
+#define MLX5_FLOW_HW_TAGS_MAX 12
+
+struct mlx5_dev_registers {
+	enum modify_reg aso_reg;
+	enum modify_reg hw_avl_tags[MLX5_FLOW_HW_TAGS_MAX];
+};
+
+#if defined(HAVE_MLX5DV_DR) && \
+	(defined(HAVE_MLX5_DR_CREATE_ACTION_FLOW_METER) || \
+	 defined(HAVE_MLX5_DR_CREATE_ACTION_ASO))
+#define HAVE_MLX5_DR_CREATE_ACTION_ASO_EXT
+#endif
+
 /*
  * Shared Infiniband device context for Master/Representors
  * which belong to same IB device with multiple IB ports.
@@ -1393,7 +1433,6 @@ struct mlx5_dev_ctx_shared {
 	uint32_t drop_action_check_flag:1; /* Check Flag for drop action. */
 	uint32_t flow_priority_check_flag:1; /* Check Flag for flow priority. */
 	uint32_t metadata_regc_check_flag:1; /* Check Flag for metadata REGC. */
-	uint32_t hws_tags:1; /* Check if tags info for HWS initialized. */
 	uint32_t shared_mark_enabled:1;
 	/* If mark action is enabled on Rxqs (shared E-Switch domain). */
 	uint32_t lag_rx_port_affinity_en:1;
@@ -1482,6 +1521,9 @@ struct mlx5_dev_ctx_shared {
 	uint32_t host_shaper_rate:8;
 	uint32_t lwm_triggered:1;
 	struct mlx5_hws_cnt_svc_mng *cnt_svc;
+	rte_spinlock_t cpool_lock;
+	LIST_HEAD(hws_cpool_list, mlx5_hws_cnt_pool) hws_cpool_list; /* Count pool list. */
+	struct mlx5_dev_registers registers;
 	struct mlx5_dev_shared_port port[]; /* per device port data array. */
 };
 
@@ -1663,10 +1705,50 @@ struct mlx5_obj_ops {
 
 #define MLX5_RSS_HASH_FIELDS_LEN RTE_DIM(mlx5_rss_hash_fields)
 
+enum mlx5_hw_ctrl_flow_type {
+	MLX5_HW_CTRL_FLOW_TYPE_GENERAL,
+	MLX5_HW_CTRL_FLOW_TYPE_SQ_MISS_ROOT,
+	MLX5_HW_CTRL_FLOW_TYPE_SQ_MISS,
+	MLX5_HW_CTRL_FLOW_TYPE_DEFAULT_JUMP,
+	MLX5_HW_CTRL_FLOW_TYPE_TX_META_COPY,
+	MLX5_HW_CTRL_FLOW_TYPE_TX_REPR_MATCH,
+	MLX5_HW_CTRL_FLOW_TYPE_LACP_RX,
+	MLX5_HW_CTRL_FLOW_TYPE_DEFAULT_RX_RSS,
+};
+
+/** Additional info about control flow rule. */
+struct mlx5_hw_ctrl_flow_info {
+	/** Determines the kind of control flow rule. */
+	enum mlx5_hw_ctrl_flow_type type;
+	union {
+		/**
+		 * If control flow is a SQ miss flow (root or not),
+		 * then fields contains matching SQ number.
+		 */
+		uint32_t esw_mgr_sq;
+		/**
+		 * If control flow is a Tx representor matching,
+		 * then fields contains matching SQ number.
+		 */
+		uint32_t tx_repr_sq;
+	};
+};
+
+/** Entry for tracking control flow rules in HWS. */
 struct mlx5_hw_ctrl_flow {
 	LIST_ENTRY(mlx5_hw_ctrl_flow) next;
+	/**
+	 * Owner device is a port on behalf of which flow rule was created.
+	 *
+	 * It's different from the port which really created the flow rule
+	 * if and only if flow rule is created on transfer proxy port
+	 * on behalf of representor port.
+	 */
 	struct rte_eth_dev *owner_dev;
+	/** Pointer to flow rule handle. */
 	struct rte_flow *flow;
+	/** Additional information about the control flow rule. */
+	struct mlx5_hw_ctrl_flow_info info;
 };
 
 /*
@@ -1684,8 +1766,8 @@ struct mlx5_dv_flow_info {
 	struct rte_flow_attr attr;
 };
 
-struct mlx5_flow_engine_mode_info {
-	enum mlx5_flow_engine_mode mode;
+struct rte_pmd_mlx5_flow_engine_mode_info {
+	enum rte_pmd_mlx5_flow_engine_mode mode;
 	uint32_t mode_flag;
 	/* The list is maintained in insertion order. */
 	LIST_HEAD(hot_up_info, mlx5_dv_flow_info) hot_upgrade;
@@ -1755,6 +1837,9 @@ struct mlx5_priv {
 	uint32_t vport_meta_mask; /* Used for vport index field match mask. */
 	uint16_t representor_id; /* UINT16_MAX if not a representor. */
 	int32_t pf_bond; /* >=0, representor owner PF index in bonding. */
+	int32_t mpesw_owner; /* >=0, representor owner PF index in MPESW. */
+	int32_t mpesw_port; /* Related port index of MPESW device. < 0 - no MPESW. */
+	bool mpesw_uplink; /* If true, port is an uplink port. */
 	unsigned int if_index; /* Associated kernel network device index. */
 	/* RX/TX queues. */
 	unsigned int rxqs_n; /* RX queues array size. */
@@ -1770,10 +1855,12 @@ struct mlx5_priv {
 	void *root_drop_action; /* Pointer to root drop action. */
 	rte_spinlock_t hw_ctrl_lock;
 	LIST_HEAD(hw_ctrl_flow, mlx5_hw_ctrl_flow) hw_ctrl_flows;
+	LIST_HEAD(hw_ext_ctrl_flow, mlx5_hw_ctrl_flow) hw_ext_ctrl_flows;
 	struct rte_flow_template_table *hw_esw_sq_miss_root_tbl;
 	struct rte_flow_template_table *hw_esw_sq_miss_tbl;
 	struct rte_flow_template_table *hw_esw_zero_tbl;
 	struct rte_flow_template_table *hw_tx_meta_cpy_tbl;
+	struct rte_flow_template_table *hw_lacp_rx_tbl;
 	struct rte_flow_pattern_template *hw_tx_repr_tagging_pt;
 	struct rte_flow_actions_template *hw_tx_repr_tagging_at;
 	struct rte_flow_template_table *hw_tx_repr_tagging_tbl;
@@ -1791,6 +1878,8 @@ struct mlx5_priv {
 	LIST_HEAD(ind_tables, mlx5_ind_table_obj) ind_tbls;
 	/* Standalone indirect tables. */
 	LIST_HEAD(stdl_ind_tables, mlx5_ind_table_obj) standalone_ind_tbls;
+	/* Objects created with indirect list action */
+	LIST_HEAD(indirect_list, mlx5_indirect_list) indirect_list_head;
 	/* Pointer to next element. */
 	rte_rwlock_t ind_tbls_lock;
 	uint32_t refcnt; /**< Reference counter. */
@@ -1809,7 +1898,6 @@ struct mlx5_priv {
 	/* Hash table of Rx metadata register copy table. */
 	struct mlx5_mtr_config mtr_config; /* Meter configuration */
 	uint8_t mtr_sfx_reg; /* Meter prefix-suffix flow match REG_C. */
-	uint8_t mtr_color_reg; /* Meter color match REG_C. */
 	struct mlx5_legacy_flow_meters flow_meters; /* MTR list. */
 	struct mlx5_l3t_tbl *mtr_profile_tbl; /* Meter index lookup table. */
 	struct mlx5_flow_meter_profile *mtr_profile_arr; /* Profile array. */
@@ -1834,7 +1922,7 @@ struct mlx5_priv {
 	uint32_t nb_queue; /* HW steering queue number. */
 	struct mlx5_hws_cnt_pool *hws_cpool; /* HW steering's counter pool. */
 	uint32_t hws_mark_refcnt; /* HWS mark action reference counter. */
-	struct mlx5_flow_engine_mode_info mode_info; /* Process set flow engine info. */
+	struct rte_pmd_mlx5_flow_engine_mode_info mode_info; /* Process set flow engine info. */
 	struct mlx5_flow_hw_attr *hw_attr; /* HW Steering port configuration. */
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	/* Item template list. */
@@ -1849,6 +1937,8 @@ struct mlx5_priv {
 	struct mlx5_hw_q *hw_q;
 	/* HW steering rte flow table list header. */
 	LIST_HEAD(flow_hw_tbl, rte_flow_template_table) flow_hw_tbl;
+	/* HW steering rte flow group list header */
+	LIST_HEAD(flow_hw_grp, mlx5_flow_group) flow_hw_grp;
 	struct mlx5dr_action *hw_push_vlan[MLX5DR_TABLE_TYPE_MAX];
 	struct mlx5dr_action *hw_pop_vlan[MLX5DR_TABLE_TYPE_MAX];
 	struct mlx5dr_action **hw_vport;
@@ -1856,6 +1946,8 @@ struct mlx5_priv {
 	struct mlx5dr_action *hw_drop[2];
 	/* HW steering global tag action. */
 	struct mlx5dr_action *hw_tag[2];
+	/* HW steering global default miss action. */
+	struct mlx5dr_action *hw_def_miss;
 	/* HW steering global send to kernel action. */
 	struct mlx5dr_action *hw_send_to_kernel[MLX5DR_TABLE_TYPE_MAX];
 	/* HW steering create ongoing rte flow table list header. */
@@ -1913,6 +2005,22 @@ mlx5_devx_obj_ops_en(struct mlx5_dev_ctx_shared *sh)
 	 */
 	return (sh->cdev->config.devx && sh->config.dv_flow_en &&
 		sh->dev_cap.dest_tir);
+}
+
+/**
+ * Check if the port is either MPESW physical device or a representor port.
+ *
+ * @param priv
+ *   Pointer to port's private data.
+ *
+ * @return
+ *   True if the port is a physical device or representor in MPESW setup.
+ *   False otherwise or MPESW was not configured.
+ */
+static inline bool
+mlx5_is_port_on_mpesw_device(struct mlx5_priv *priv)
+{
+	return priv->mpesw_port >= 0;
 }
 
 /* mlx5.c */

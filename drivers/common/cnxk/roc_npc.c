@@ -331,9 +331,8 @@ roc_npc_init(struct roc_npc *roc_npc)
 	 */
 	plt_bitmap_set(npc->rss_grp_entries, 0);
 
-	rc = npc_aged_flows_bitmap_alloc(roc_npc);
-	if (rc != 0)
-		goto done;
+	roc_npc->flow_age.age_flow_refcnt = 0;
+
 	return rc;
 
 done:
@@ -1423,7 +1422,7 @@ npc_inline_dev_ipsec_action_free(struct npc *npc, struct roc_npc_flow *flow)
 	return 1;
 }
 
-static void
+void
 roc_npc_sdp_channel_get(struct roc_npc *roc_npc, uint16_t *chan_base, uint16_t *chan_mask)
 {
 	struct roc_nix *roc_nix = roc_npc->roc_nix;
@@ -1438,8 +1437,9 @@ roc_npc_sdp_channel_get(struct roc_npc *roc_npc, uint16_t *chan_base, uint16_t *
 		num_bits = (sizeof(uint32_t) * 8) - plt_clz32(range) - 1;
 		/* Set mask for (15 - numbits) MSB bits */
 		*chan_mask = (uint16_t)~GENMASK(num_bits, 0);
+		*chan_mask &= 0xFFF;
 	} else {
-		*chan_mask = (uint16_t)GENMASK(15, 0);
+		*chan_mask = (uint16_t)GENMASK(11, 0);
 	}
 
 	mask = (uint16_t)GENMASK(num_bits, 0);
@@ -1510,6 +1510,9 @@ roc_npc_flow_create(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 		goto set_rss_failed;
 	}
 
+	if (flow->has_age_action)
+		npc_age_flow_list_entry_add(roc_npc, flow);
+
 	if (flow->use_pre_alloc == 0)
 		list = &npc->flow_list[flow->priority];
 	else
@@ -1522,8 +1525,6 @@ roc_npc_flow_create(struct roc_npc *roc_npc, const struct roc_npc_attr *attr,
 		}
 	}
 	TAILQ_INSERT_TAIL(list, flow, next);
-
-	npc_age_flow_list_entry_add(roc_npc, flow);
 
 	return flow;
 
@@ -1622,7 +1623,9 @@ roc_npc_flow_destroy(struct roc_npc *roc_npc, struct roc_npc_flow *flow)
 
 	npc_delete_prio_list_entry(npc, flow);
 
-	npc_age_flow_list_entry_delete(roc_npc, flow);
+	if (flow->has_age_action)
+		npc_age_flow_list_entry_delete(roc_npc, flow);
+
 	if (roc_npc->flow_age.age_flow_refcnt == 0 &&
 		plt_thread_is_valid(roc_npc->flow_age.aged_flows_poll_thread))
 		npc_aging_ctrl_thread_destroy(roc_npc);

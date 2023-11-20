@@ -313,6 +313,8 @@ int
 rte_bbdev_stats_reset(uint16_t dev_id);
 
 /** Device information supplied by the device's driver */
+
+/* Structure rte_bbdev_driver_info 8< */
 struct rte_bbdev_driver_info {
 	/** Driver name */
 	const char *driver_name;
@@ -352,6 +354,7 @@ struct rte_bbdev_driver_info {
 	/** FFT windowing width for 2048 FFT - size defined in capability. */
 	uint16_t *fft_window_width;
 };
+/* >8 End of structure rte_bbdev_driver_info. */
 
 /** Macro used at end of bbdev PMD list */
 #define RTE_BBDEV_END_OF_CAPABILITIES_LIST() \
@@ -361,6 +364,8 @@ struct rte_bbdev_driver_info {
  * Device information structure used by an application to discover a devices
  * capabilities and current configuration
  */
+
+/* Structure rte_bbdev_info 8< */
 struct rte_bbdev_info {
 	int socket_id;  /**< NUMA socket that device is on */
 	const char *dev_name;  /**< Unique device name */
@@ -369,6 +374,7 @@ struct rte_bbdev_info {
 	bool started;  /**< Set if device is currently started */
 	struct rte_bbdev_driver_info drv;  /**< Info from device driver */
 };
+/* >8 End of structure rte_bbdev_info. */
 
 /**
  * Retrieve information about a device.
@@ -482,7 +488,7 @@ struct rte_bbdev_data {
 	uint16_t dev_id;  /**< Device ID */
 	int socket_id;  /**< NUMA socket that device is on */
 	bool started;  /**< Device run-time state */
-	uint16_t process_cnt;  /** Counter of processes using the device */
+	RTE_ATOMIC(uint16_t) process_cnt;  /** Counter of processes using the device */
 };
 
 /* Forward declarations */
@@ -675,7 +681,6 @@ rte_bbdev_enqueue_ldpc_dec_ops(uint16_t dev_id, uint16_t queue_id,
  *   The number of operations actually enqueued.
  *   (This is the number of processed entries in the @p ops array.)
  */
-__rte_experimental
 static inline uint16_t
 rte_bbdev_enqueue_fft_ops(uint16_t dev_id, uint16_t queue_id,
 		struct rte_bbdev_fft_op **ops, uint16_t num_ops)
@@ -860,7 +865,6 @@ rte_bbdev_dequeue_ldpc_dec_ops(uint16_t dev_id, uint16_t queue_id,
  *   The number of operations actually dequeued (this is the number of entries
  *   copied into the @p ops array).
  */
-__rte_experimental
 static inline uint16_t
 rte_bbdev_dequeue_fft_ops(uint16_t dev_id, uint16_t queue_id,
 		struct rte_bbdev_fft_op **ops, uint16_t num_ops)
@@ -1042,7 +1046,6 @@ rte_bbdev_queue_intr_ctl(uint16_t dev_id, uint16_t queue_id, int epfd, int op,
  * @returns
  *   Device status as string or NULL if invalid.
  */
-__rte_experimental
 const char*
 rte_bbdev_device_status_str(enum rte_bbdev_device_status status);
 
@@ -1055,7 +1058,6 @@ rte_bbdev_device_status_str(enum rte_bbdev_device_status status);
  * @returns
  *   Queue status as string or NULL if op_type is invalid.
  */
-__rte_experimental
 const char*
 rte_bbdev_enqueue_status_str(enum rte_bbdev_enqueue_status status);
 
