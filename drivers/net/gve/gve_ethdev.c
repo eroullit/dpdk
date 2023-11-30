@@ -296,10 +296,14 @@ gve_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_mac_addrs = 1;
 	dev_info->max_rx_queues = priv->max_nb_rxq;
 	dev_info->max_tx_queues = priv->max_nb_txq;
-	if (gve_is_gqi(priv))
+	if (gve_is_gqi(priv)) {
 		dev_info->min_rx_bufsize = GVE_RX_MIN_BUF_SIZE_GQI;
-	else
+		dev_info->max_rx_bufsize = GVE_RX_MAX_BUF_SIZE_GQI;
+	} else {
 		dev_info->min_rx_bufsize = GVE_RX_MIN_BUF_SIZE_DQO;
+		dev_info->max_rx_bufsize = GVE_RX_MAX_BUF_SIZE_DQO;
+	}
+
 	dev_info->max_rx_pktlen = priv->max_mtu + RTE_ETHER_HDR_LEN;
 	dev_info->max_mtu = priv->max_mtu;
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
@@ -329,14 +333,14 @@ gve_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->default_rxportconf.ring_size = priv->rx_desc_cnt;
 	dev_info->rx_desc_lim = (struct rte_eth_desc_lim) {
-		.nb_max = priv->rx_desc_cnt,
+		.nb_max = gve_is_gqi(priv) ? priv->rx_desc_cnt : GVE_MAX_QUEUE_SIZE_DQO,
 		.nb_min = priv->rx_desc_cnt,
 		.nb_align = 1,
 	};
 
 	dev_info->default_txportconf.ring_size = priv->tx_desc_cnt;
 	dev_info->tx_desc_lim = (struct rte_eth_desc_lim) {
-		.nb_max = priv->tx_desc_cnt,
+		.nb_max = gve_is_gqi(priv) ? priv->tx_desc_cnt : GVE_MAX_QUEUE_SIZE_DQO,
 		.nb_min = priv->tx_desc_cnt,
 		.nb_align = 1,
 	};

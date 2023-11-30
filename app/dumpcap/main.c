@@ -44,7 +44,6 @@
 #include <pcap/pcap.h>
 #include <pcap/bpf.h>
 
-#define RING_NAME "capture-ring"
 #define MONITOR_INTERVAL  (500 * 1000)
 #define MBUF_POOL_CACHE_SIZE 32
 #define BURST_SIZE 32
@@ -67,13 +66,13 @@ static bool print_stats;
 
 /* capture limit options */
 static struct {
-	uint64_t  duration;	/* nanoseconds */
+	time_t  duration;	/* seconds */
 	unsigned long packets;  /* number of packets in file */
 	size_t size;		/* file size (bytes) */
 } stop;
 
 /* Running state */
-static uint64_t start_time, end_time;
+static time_t start_time;
 static uint64_t packets_received;
 static size_t file_size;
 
@@ -198,7 +197,7 @@ static void auto_stop(char *opt)
 		if (*value == '\0' || *endp != '\0' || interval <= 0)
 			rte_exit(EXIT_FAILURE,
 				 "Invalid duration \"%s\"\n", value);
-		stop.duration = NSEC_PER_SEC * interval;
+		stop.duration = interval;
 	} else if (strcmp(opt, "filesize") == 0) {
 		stop.size = get_uint(value, "filesize", 0) * 1024;
 	} else if (strcmp(opt, "packets") == 0) {
@@ -512,15 +511,6 @@ static void statistics_loop(void)
 	}
 }
 
-/* Return the time since 1/1/1970 in nanoseconds */
-static uint64_t create_timestamp(void)
-{
-	struct timespec now;
-
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	return rte_timespec_to_ns(&now);
-}
-
 static void
 cleanup_pdump_resources(void)
 {
@@ -590,9 +580,8 @@ report_packet_stats(dumpcap_out_t out)
 		ifdrop = pdump_stats.nombuf + pdump_stats.ringfull;
 
 		if (use_pcapng)
-			rte_pcapng_write_stats(out.pcapng, intf->port, NULL,
-					       start_time, end_time,
-					       ifrecv, ifdrop);
+			rte_pcapng_write_stats(out.pcapng, intf->port,
+					       ifrecv, ifdrop, NULL);
 
 		if (ifrecv == 0)
 			percent = 0;
@@ -647,6 +636,7 @@ static void dpdk_init(void)
 static struct rte_ring *create_ring(void)
 {
 	struct rte_ring *ring;
+	char ring_name[RTE_RING_NAMESIZE];
 	size_t size, log2;
 
 	/* Find next power of 2 >= size. */
@@ -660,28 +650,28 @@ static struct rte_ring *create_ring(void)
 		ring_size = size;
 	}
 
-	ring = rte_ring_lookup(RING_NAME);
-	if (ring == NULL) {
-		ring = rte_ring_create(RING_NAME, ring_size,
-					rte_socket_id(), 0);
-		if (ring == NULL)
-			rte_exit(EXIT_FAILURE, "Could not create ring :%s\n",
-				 rte_strerror(rte_errno));
-	}
+	/* Want one ring per invocation of program */
+	snprintf(ring_name, sizeof(ring_name),
+		 "dumpcap-%d", getpid());
+
+	ring = rte_ring_create(ring_name, ring_size,
+			       rte_socket_id(), 0);
+	if (ring == NULL)
+		rte_exit(EXIT_FAILURE, "Could not create ring :%s\n",
+			 rte_strerror(rte_errno));
+
 	return ring;
 }
 
 static struct rte_mempool *create_mempool(void)
 {
 	const struct interface *intf;
-	static const char pool_name[] = "capture_mbufs";
+	char pool_name[RTE_MEMPOOL_NAMESIZE];
 	size_t num_mbufs = 2 * ring_size;
 	struct rte_mempool *mp;
 	uint32_t data_size = 128;
 
-	mp = rte_mempool_lookup(pool_name);
-	if (mp)
-		return mp;
+	snprintf(pool_name, sizeof(pool_name), "capture_%d", getpid());
 
 	/* Common pool so size mbuf for biggest snap length */
 	TAILQ_FOREACH(intf, &interfaces, next) {
@@ -826,7 +816,7 @@ static void enable_pdump(struct rte_ring *r, struct rte_mempool *mp)
 			rte_exit(EXIT_FAILURE,
 				"Packet dump enable on %u:%s failed %s\n",
 				intf->port, intf->name,
-				rte_strerror(-ret));
+				rte_strerror(rte_errno));
 		}
 
 		if (intf->opts.promisc_mode) {
@@ -983,7 +973,7 @@ int main(int argc, char **argv)
 	mp = create_mempool();
 	out = create_output();
 
-	start_time = create_timestamp();
+	start_time = time(NULL);
 	enable_pdump(r, mp);
 
 	if (!quiet) {
@@ -1005,11 +995,10 @@ int main(int argc, char **argv)
 			break;
 
 		if (stop.duration != 0 &&
-		    create_timestamp() - start_time > stop.duration)
+		    time(NULL) - start_time > stop.duration)
 			break;
 	}
 
-	end_time = create_timestamp();
 	disable_primary_monitor();
 
 	if (rte_eal_primary_proc_alive(NULL))
