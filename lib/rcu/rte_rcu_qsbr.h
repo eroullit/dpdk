@@ -36,20 +36,19 @@ extern "C" {
 #include <rte_ring.h>
 
 extern int rte_rcu_log_type;
+#define RTE_LOGTYPE_RCU rte_rcu_log_type
 
 #if RTE_LOG_DP_LEVEL >= RTE_LOG_DEBUG
 #define __RTE_RCU_DP_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, rte_rcu_log_type, \
-		"%s(): " fmt "\n", __func__, ## args)
+	RTE_LOG_LINE(level, RCU, "%s(): " fmt, __func__, ## args)
 #else
 #define __RTE_RCU_DP_LOG(level, fmt, args...)
 #endif
 
 #if defined(RTE_LIBRTE_RCU_DEBUG)
-#define __RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, level, fmt, args...) do {\
+#define __RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, level, fmt, args...) do { \
 	if (v->qsbr_cnt[thread_id].lock_cnt) \
-		rte_log(RTE_LOG_ ## level, rte_rcu_log_type, \
-			"%s(): " fmt "\n", __func__, ## args); \
+		RTE_LOG_LINE(level, RCU, "%s(): " fmt, __func__, ## args); \
 } while (0)
 #else
 #define __RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, level, fmt, args...)
@@ -299,7 +298,7 @@ rte_rcu_qsbr_thread_online(struct rte_rcu_qsbr *v, unsigned int thread_id)
 
 	RTE_ASSERT(v != NULL && thread_id < v->max_threads);
 
-	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, ERR, "Lock counter %u\n",
+	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, ERR, "Lock counter %u",
 				v->qsbr_cnt[thread_id].lock_cnt);
 
 	/* Copy the current value of token.
@@ -350,7 +349,7 @@ rte_rcu_qsbr_thread_offline(struct rte_rcu_qsbr *v, unsigned int thread_id)
 {
 	RTE_ASSERT(v != NULL && thread_id < v->max_threads);
 
-	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, ERR, "Lock counter %u\n",
+	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, ERR, "Lock counter %u",
 				v->qsbr_cnt[thread_id].lock_cnt);
 
 	/* The reader can go offline only after the load of the
@@ -427,7 +426,7 @@ rte_rcu_qsbr_unlock(__rte_unused struct rte_rcu_qsbr *v,
 				1, rte_memory_order_release);
 
 	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, WARNING,
-				"Lock counter %u. Nested locks?\n",
+				"Lock counter %u. Nested locks?",
 				v->qsbr_cnt[thread_id].lock_cnt);
 #endif
 }
@@ -481,7 +480,7 @@ rte_rcu_qsbr_quiescent(struct rte_rcu_qsbr *v, unsigned int thread_id)
 
 	RTE_ASSERT(v != NULL && thread_id < v->max_threads);
 
-	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, ERR, "Lock counter %u\n",
+	__RTE_RCU_IS_LOCK_CNT_ZERO(v, thread_id, ERR, "Lock counter %u",
 				v->qsbr_cnt[thread_id].lock_cnt);
 
 	/* Acquire the changes to the shared data structure released

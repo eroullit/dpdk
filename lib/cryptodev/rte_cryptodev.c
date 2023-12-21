@@ -49,6 +49,8 @@ struct rte_crypto_fp_ops rte_crypto_fp_ops[RTE_CRYPTO_MAX_DEVS];
 /* spinlock for crypto device callbacks */
 static rte_spinlock_t rte_cryptodev_cb_lock = RTE_SPINLOCK_INITIALIZER;
 
+RTE_LOG_REGISTER_DEFAULT(rte_cryptodev_logtype, INFO);
+
 /**
  * The user application callback description.
  *
@@ -2072,7 +2074,7 @@ rte_cryptodev_sym_session_create(uint8_t dev_id,
 	}
 
 	if (xforms == NULL) {
-		CDEV_LOG_ERR("Invalid xform\n");
+		CDEV_LOG_ERR("Invalid xform");
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -2682,7 +2684,7 @@ rte_cryptodev_driver_id_get(const char *name)
 	int driver_id = -1;
 
 	if (name == NULL) {
-		RTE_LOG(DEBUG, CRYPTODEV, "name pointer NULL");
+		CDEV_LOG_DEBUG("name pointer NULL");
 		return -1;
 	}
 

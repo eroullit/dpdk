@@ -43,6 +43,7 @@
 #include <rte_spinlock.h>
 #include <rte_debug.h>
 #include <rte_lcore.h>
+#include <rte_log.h>
 #include <rte_branch_prediction.h>
 #include <rte_ring.h>
 #include <rte_memcpy.h>
@@ -175,6 +176,14 @@ struct rte_mempool_objtlr {
 };
 
 #endif
+
+/**
+ * @internal Logtype used for mempool related messages.
+ */
+extern int rte_mempool_logtype;
+#define RTE_LOGTYPE_MEMPOOL	rte_mempool_logtype
+#define RTE_MEMPOOL_LOG(level, ...) \
+	RTE_LOG_LINE(level, MEMPOOL, "" __VA_ARGS__)
 
 /**
  * A list of memory where objects are stored
@@ -840,7 +849,7 @@ rte_mempool_ops_enqueue_bulk(struct rte_mempool *mp, void * const *obj_table,
 	ret = ops->enqueue(mp, obj_table, n);
 #ifdef RTE_LIBRTE_MEMPOOL_DEBUG
 	if (unlikely(ret < 0))
-		RTE_LOG(CRIT, MEMPOOL, "cannot enqueue %u objects to mempool %s\n",
+		RTE_MEMPOOL_LOG(CRIT, "cannot enqueue %u objects to mempool %s",
 			n, mp->name);
 #endif
 	return ret;

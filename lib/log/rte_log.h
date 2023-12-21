@@ -17,6 +17,7 @@
 extern "C" {
 #endif
 
+#include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -27,26 +28,26 @@ extern "C" {
 
 /* SDK log type */
 #define RTE_LOGTYPE_EAL        0 /**< Log related to eal. */
-#define RTE_LOGTYPE_MALLOC     1 /**< Log related to malloc. */
-#define RTE_LOGTYPE_RING       2 /**< Log related to ring. */
-#define RTE_LOGTYPE_MEMPOOL    3 /**< Log related to mempool. */
-#define RTE_LOGTYPE_TIMER      4 /**< Log related to timers. */
+				 /* was RTE_LOGTYPE_MALLOC */
+				 /* was RTE_LOGTYPE_RING */
+				 /* was RTE_LOGTYPE_MEMPOOL */
+				 /* was RTE_LOGTYPE_TIMER */
 #define RTE_LOGTYPE_PMD        5 /**< Log related to poll mode driver. */
-#define RTE_LOGTYPE_HASH       6 /**< Log related to hash table. */
-#define RTE_LOGTYPE_LPM        7 /**< Log related to LPM. */
+				 /* was RTE_LOGTYPE_HASH */
+				 /* was RTE_LOGTYPE_LPM */
 				 /* was RTE_LOGTYPE_KNI */
-#define RTE_LOGTYPE_ACL        9 /**< Log related to ACL. */
-#define RTE_LOGTYPE_POWER     10 /**< Log related to power. */
-#define RTE_LOGTYPE_METER     11 /**< Log related to QoS meter. */
-#define RTE_LOGTYPE_SCHED     12 /**< Log related to QoS port scheduler. */
+				 /* was RTE_LOGTYPE_ACL */
+				 /* was RTE_LOGTYPE_POWER */
+				 /* was RTE_LOGTYPE_METER */
+				 /* was RTE_LOGTYPE_SCHED */
 #define RTE_LOGTYPE_PORT      13 /**< Log related to port. */
 #define RTE_LOGTYPE_TABLE     14 /**< Log related to table. */
 #define RTE_LOGTYPE_PIPELINE  15 /**< Log related to pipeline. */
-#define RTE_LOGTYPE_MBUF      16 /**< Log related to mbuf. */
-#define RTE_LOGTYPE_CRYPTODEV 17 /**< Log related to cryptodev. */
-#define RTE_LOGTYPE_EFD       18 /**< Log related to EFD. */
+				 /* was RTE_LOGTYPE_MBUF */
+				 /* was RTE_LOGTYPE_CRYPTODEV */
+				 /* was RTE_LOGTYPE_EFD */
 #define RTE_LOGTYPE_EVENTDEV  19 /**< Log related to eventdev. */
-#define RTE_LOGTYPE_GSO       20 /**< Log related to GSO. */
+				 /* was RTE_LOGTYPE_GSO */
 
 /* these log types can be used in an application */
 #define RTE_LOGTYPE_USER1     24 /**< User-defined log type 1. */
@@ -357,6 +358,26 @@ int rte_vlog(uint32_t level, uint32_t logtype, const char *format, va_list ap)
 	 rte_log(RTE_LOG_ ## l,					\
 		 RTE_LOGTYPE_ ## t, # t ": " __VA_ARGS__) :	\
 	 0)
+
+#if defined(RTE_TOOLCHAIN_GCC) && !defined(PEDANTIC)
+#define RTE_LOG_CHECK_NO_NEWLINE(fmt) \
+	static_assert(!__builtin_strchr(fmt, '\n'), \
+		"This log format string contains a \\n")
+#else
+#define RTE_LOG_CHECK_NO_NEWLINE(...)
+#endif
+
+#define RTE_LOG_LINE(l, t, ...) do { \
+	RTE_LOG_CHECK_NO_NEWLINE(RTE_FMT_HEAD(__VA_ARGS__ ,)); \
+	RTE_LOG(l, t, RTE_FMT(RTE_FMT_HEAD(__VA_ARGS__ ,) "\n", \
+		RTE_FMT_TAIL(__VA_ARGS__ ,))); \
+} while (0)
+
+#define RTE_LOG_DP_LINE(l, t, ...) do { \
+	RTE_LOG_CHECK_NO_NEWLINE(RTE_FMT_HEAD(__VA_ARGS__ ,)); \
+	RTE_LOG_DP(l, t, RTE_FMT(RTE_FMT_HEAD(__VA_ARGS__ ,) "\n", \
+		RTE_FMT_TAIL(__VA_ARGS__ ,))); \
+} while (0)
 
 #define RTE_LOG_REGISTER_IMPL(type, name, level)			    \
 int type;								    \

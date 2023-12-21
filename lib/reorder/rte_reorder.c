@@ -16,6 +16,11 @@
 
 #include "rte_reorder.h"
 
+RTE_LOG_REGISTER_DEFAULT(reorder_logtype, INFO);
+#define RTE_LOGTYPE_REORDER reorder_logtype
+#define REORDER_LOG(level, ...) \
+	RTE_LOG_LINE(level, REORDER, "" __VA_ARGS__)
+
 TAILQ_HEAD(rte_reorder_list, rte_tailq_entry);
 
 static struct rte_tailq_elem rte_reorder_tailq = {
@@ -26,9 +31,6 @@ EAL_REGISTER_TAILQ(rte_reorder_tailq)
 #define NO_FLAGS 0
 #define RTE_REORDER_PREFIX "RO_"
 #define RTE_REORDER_NAMESIZE 32
-
-/* Macros for printing using RTE_LOG */
-#define RTE_LOGTYPE_REORDER	RTE_LOGTYPE_USER1
 
 #define RTE_REORDER_SEQN_DYNFIELD_NAME "rte_reorder_seqn_dynfield"
 int rte_reorder_seqn_dynfield_offset = -1;
@@ -74,34 +76,34 @@ rte_reorder_init(struct rte_reorder_buffer *b, unsigned int bufsize,
 	};
 
 	if (b == NULL) {
-		RTE_LOG(ERR, REORDER, "Invalid reorder buffer parameter:"
-					" NULL\n");
+		REORDER_LOG(ERR, "Invalid reorder buffer parameter:"
+					" NULL");
 		rte_errno = EINVAL;
 		return NULL;
 	}
 	if (!rte_is_power_of_2(size)) {
-		RTE_LOG(ERR, REORDER, "Invalid reorder buffer size"
-				" - Not a power of 2\n");
+		REORDER_LOG(ERR, "Invalid reorder buffer size"
+				" - Not a power of 2");
 		rte_errno = EINVAL;
 		return NULL;
 	}
 	if (name == NULL) {
-		RTE_LOG(ERR, REORDER, "Invalid reorder buffer name ptr:"
-					" NULL\n");
+		REORDER_LOG(ERR, "Invalid reorder buffer name ptr:"
+					" NULL");
 		rte_errno = EINVAL;
 		return NULL;
 	}
 	if (bufsize < min_bufsize) {
-		RTE_LOG(ERR, REORDER, "Invalid reorder buffer memory size: %u, "
-			"minimum required: %u\n", bufsize, min_bufsize);
+		REORDER_LOG(ERR, "Invalid reorder buffer memory size: %u, "
+			"minimum required: %u", bufsize, min_bufsize);
 		rte_errno = EINVAL;
 		return NULL;
 	}
 
 	rte_reorder_seqn_dynfield_offset = rte_mbuf_dynfield_register(&reorder_seqn_dynfield_desc);
 	if (rte_reorder_seqn_dynfield_offset < 0) {
-		RTE_LOG(ERR, REORDER,
-			"Failed to register mbuf field for reorder sequence number, rte_errno: %i\n",
+		REORDER_LOG(ERR,
+			"Failed to register mbuf field for reorder sequence number, rte_errno: %i",
 			rte_errno);
 		rte_errno = ENOMEM;
 		return NULL;
@@ -161,14 +163,14 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 
 	/* Check user arguments. */
 	if (!rte_is_power_of_2(size)) {
-		RTE_LOG(ERR, REORDER, "Invalid reorder buffer size"
-				" - Not a power of 2\n");
+		REORDER_LOG(ERR, "Invalid reorder buffer size"
+				" - Not a power of 2");
 		rte_errno = EINVAL;
 		return NULL;
 	}
 	if (name == NULL) {
-		RTE_LOG(ERR, REORDER, "Invalid reorder buffer name ptr:"
-					" NULL\n");
+		REORDER_LOG(ERR, "Invalid reorder buffer name ptr:"
+					" NULL");
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -176,7 +178,7 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 	/* allocate tailq entry */
 	te = rte_zmalloc("REORDER_TAILQ_ENTRY", sizeof(*te), 0);
 	if (te == NULL) {
-		RTE_LOG(ERR, REORDER, "Failed to allocate tailq entry\n");
+		REORDER_LOG(ERR, "Failed to allocate tailq entry");
 		rte_errno = ENOMEM;
 		return NULL;
 	}
@@ -184,7 +186,7 @@ rte_reorder_create(const char *name, unsigned socket_id, unsigned int size)
 	/* Allocate memory to store the reorder buffer structure. */
 	b = rte_zmalloc_socket("REORDER_BUFFER", bufsize, 0, socket_id);
 	if (b == NULL) {
-		RTE_LOG(ERR, REORDER, "Memzone allocation failed\n");
+		REORDER_LOG(ERR, "Memzone allocation failed");
 		rte_errno = ENOMEM;
 		rte_free(te);
 		return NULL;

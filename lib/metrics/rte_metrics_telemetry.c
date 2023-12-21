@@ -16,11 +16,11 @@
 struct telemetry_metrics_data tel_met_data;
 
 int metrics_log_level;
+#define RTE_LOGTYPE_METRICS metrics_log_level
 
 /* Logging Macros */
 #define METRICS_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ##level, metrics_log_level, "%s(): "fmt "\n", \
-		__func__, ##args)
+	RTE_LOG_LINE(level, METRICS, "%s(): "fmt, __func__, ## args)
 
 #define METRICS_LOG_ERR(fmt, args...) \
 	METRICS_LOG(ERR, fmt, ## args)
@@ -363,7 +363,7 @@ rte_metrics_tel_stat_names_to_ids(const char * const *stat_names,
 			}
 		}
 		if (j == num_metrics) {
-			METRICS_LOG_WARN("Invalid stat name %s\n",
+			METRICS_LOG_WARN("Invalid stat name %s",
 					stat_names[i]);
 			free(names);
 			return -EINVAL;

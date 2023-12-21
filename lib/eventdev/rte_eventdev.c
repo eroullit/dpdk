@@ -1007,13 +1007,13 @@ rte_event_port_profile_links_set(uint8_t dev_id, uint8_t port_id, const uint8_t 
 	}
 
 	if (*dev->dev_ops->port_link == NULL) {
-		RTE_EDEV_LOG_ERR("Function not supported\n");
+		RTE_EDEV_LOG_ERR("Function not supported");
 		rte_errno = ENOTSUP;
 		return 0;
 	}
 
 	if (profile_id && *dev->dev_ops->port_link_profile == NULL) {
-		RTE_EDEV_LOG_ERR("Function not supported\n");
+		RTE_EDEV_LOG_ERR("Function not supported");
 		rte_errno = ENOTSUP;
 		return 0;
 	}
@@ -1428,8 +1428,8 @@ rte_event_vector_pool_create(const char *name, unsigned int n,
 	int ret;
 
 	if (!nb_elem) {
-		RTE_LOG(ERR, EVENTDEV,
-			"Invalid number of elements=%d requested\n", nb_elem);
+		RTE_EDEV_LOG_ERR("Invalid number of elements=%d requested",
+			nb_elem);
 		rte_errno = EINVAL;
 		return NULL;
 	}
@@ -1444,7 +1444,7 @@ rte_event_vector_pool_create(const char *name, unsigned int n,
 	mp_ops_name = rte_mbuf_best_mempool_ops();
 	ret = rte_mempool_set_ops_byname(mp, mp_ops_name, NULL);
 	if (ret != 0) {
-		RTE_LOG(ERR, EVENTDEV, "error setting mempool handler\n");
+		RTE_EDEV_LOG_ERR("error setting mempool handler");
 		goto err;
 	}
 

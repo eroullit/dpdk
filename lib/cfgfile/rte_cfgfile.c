@@ -29,10 +29,10 @@ struct rte_cfgfile {
 
 /* Setting up dynamic logging 8< */
 RTE_LOG_REGISTER_DEFAULT(cfgfile_logtype, INFO);
+#define RTE_LOGTYPE_CFGFILE cfgfile_logtype
 
 #define CFG_LOG(level, fmt, args...)					\
-	rte_log(RTE_LOG_ ## level, cfgfile_logtype, "%s(): " fmt "\n",	\
-		__func__, ## args)
+	RTE_LOG_LINE(level, CFGFILE, "%s(): " fmt, __func__, ## args)
 /* >8 End of setting up dynamic logging */
 
 /** when we resize a file structure, how many extra entries
@@ -137,7 +137,7 @@ rte_cfgfile_check_params(const struct rte_cfgfile_parameters *params)
 	unsigned int i;
 
 	if (!params) {
-		CFG_LOG(ERR, "missing cfgfile parameters\n");
+		CFG_LOG(ERR, "missing cfgfile parameters");
 		return -EINVAL;
 	}
 
@@ -150,7 +150,7 @@ rte_cfgfile_check_params(const struct rte_cfgfile_parameters *params)
 	}
 
 	if (valid_comment == 0)	{
-		CFG_LOG(ERR, "invalid comment characters %c\n",
+		CFG_LOG(ERR, "invalid comment characters %c",
 		       params->comment_character);
 		return -ENOTSUP;
 	}
@@ -188,7 +188,7 @@ rte_cfgfile_load_with_params(const char *filename, int flags,
 		lineno++;
 		if ((len >= sizeof(buffer) - 1) && (buffer[len-1] != '\n')) {
 			CFG_LOG(ERR, " line %d - no \\n found on string. "
-					"Check if line too long\n", lineno);
+					"Check if line too long", lineno);
 			goto error1;
 		}
 		/* skip parsing if comment character found */
@@ -209,7 +209,7 @@ rte_cfgfile_load_with_params(const char *filename, int flags,
 			char *end = memchr(buffer, ']', len);
 			if (end == NULL) {
 				CFG_LOG(ERR,
-					"line %d - no terminating ']' character found\n",
+					"line %d - no terminating ']' character found",
 					lineno);
 				goto error1;
 			}
@@ -225,7 +225,7 @@ rte_cfgfile_load_with_params(const char *filename, int flags,
 			split[1] = memchr(buffer, '=', len);
 			if (split[1] == NULL) {
 				CFG_LOG(ERR,
-					"line %d - no '=' character found\n",
+					"line %d - no '=' character found",
 					lineno);
 				goto error1;
 			}
@@ -249,7 +249,7 @@ rte_cfgfile_load_with_params(const char *filename, int flags,
 			if (!(flags & CFG_FLAG_EMPTY_VALUES) &&
 					(*split[1] == '\0')) {
 				CFG_LOG(ERR,
-					"line %d - cannot use empty values\n",
+					"line %d - cannot use empty values",
 					lineno);
 				goto error1;
 			}
@@ -414,7 +414,7 @@ int rte_cfgfile_set_entry(struct rte_cfgfile *cfg, const char *sectionname,
 			return 0;
 		}
 
-	CFG_LOG(ERR, "entry name doesn't exist\n");
+	CFG_LOG(ERR, "entry name doesn't exist");
 	return -EINVAL;
 }
 

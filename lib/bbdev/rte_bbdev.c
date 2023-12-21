@@ -28,10 +28,11 @@
 
 /* BBDev library logging ID */
 RTE_LOG_REGISTER_DEFAULT(bbdev_logtype, NOTICE);
+#define RTE_LOGTYPE_BBDEV bbdev_logtype
 
 /* Helper macro for logging */
-#define rte_bbdev_log(level, fmt, ...) \
-	rte_log(RTE_LOG_ ## level, bbdev_logtype, fmt "\n", ##__VA_ARGS__)
+#define rte_bbdev_log(level, ...) \
+	RTE_LOG_LINE(level, BBDEV, "" __VA_ARGS__)
 
 #define rte_bbdev_log_debug(fmt, ...) \
 	rte_bbdev_log(DEBUG, RTE_STR(__LINE__) ":%s() " fmt, __func__, \
@@ -1106,12 +1107,12 @@ rte_bbdev_queue_intr_ctl(uint16_t dev_id, uint16_t queue_id, int epfd, int op,
 
 	intr_handle = dev->intr_handle;
 	if (intr_handle == NULL) {
-		rte_bbdev_log(ERR, "Device %u intr handle unset\n", dev_id);
+		rte_bbdev_log(ERR, "Device %u intr handle unset", dev_id);
 		return -ENOTSUP;
 	}
 
 	if (queue_id >= RTE_MAX_RXTX_INTR_VEC_ID) {
-		rte_bbdev_log(ERR, "Device %u queue_id %u is too big\n",
+		rte_bbdev_log(ERR, "Device %u queue_id %u is too big",
 				dev_id, queue_id);
 		return -ENOTSUP;
 	}
@@ -1120,7 +1121,7 @@ rte_bbdev_queue_intr_ctl(uint16_t dev_id, uint16_t queue_id, int epfd, int op,
 	ret = rte_intr_rx_ctl(intr_handle, epfd, op, vec, data);
 	if (ret && (ret != -EEXIST)) {
 		rte_bbdev_log(ERR,
-				"dev %u q %u int ctl error op %d epfd %d vec %u\n",
+				"dev %u q %u int ctl error op %d epfd %d vec %u",
 				dev_id, queue_id, op, epfd, vec);
 		return ret;
 	}
