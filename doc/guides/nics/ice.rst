@@ -75,6 +75,8 @@ are listed in the Tested Platforms section of the Release Notes for each release
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    23.07  |     1.12.6    |      1.3.35     |  1.3.45   |    1.3.13    |    4.3    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    23.11  |     1.13.7    |      1.3.36     |  1.3.46   |    1.3.14    |    4.4    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
 
 Configuration
 -------------
@@ -350,6 +352,26 @@ queue 3 using a raw pattern::
 
 Currently, raw pattern support is limited to the FDIR and Hash engines.
 
+Traffic Management Support
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The ice PMD provides support for the Traffic Management API (RTE_TM),
+allow users to offload a 3-layers Tx scheduler on the E810 NIC:
+
+- ``Port Layer``
+
+  This is the root layer, support peak bandwidth configuration,
+  max to 32 children.
+
+- ``Queue Group Layer``
+
+  The middle layer, support peak / committed bandwidth, weight, priority configurations,
+  max to 8 children.
+
+- ``Queue Layer``
+
+  The leaf layer, support peak / committed bandwidth, weight, priority configurations.
+
 Additional Options
 ++++++++++++++++++
 
@@ -410,6 +432,40 @@ To start ``testpmd``, and add vlan 10 to port 0:
     ...
 
     testpmd> rx_vlan add 10 0
+
+Diagnostic Utilities
+--------------------
+
+Dump DDP Package
+~~~~~~~~~~~~~~~~
+
+Dump the runtime packet processing pipeline configuration into a binary file.
+This helps the support team diagnose hardware configuration issues.
+
+Usage::
+
+    testpmd> ddp dump <port_id> <output_file>
+
+Dump Switch Configurations
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Dump detail hardware configurations related to the switch pipeline stage into a binary file.
+
+Usage::
+
+    testpmd> ddp dump switch <port_id> <output_file>
+
+Dump Tx Scheduling Tree
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Dump the runtime Tx scheduling tree into a DOT file.
+
+Usage::
+
+    testpmd> txsched dump <port_id> <brief|detail> <output_file>
+
+In "brief" mode, all scheduling nodes in the tree are displayed.
+In "detail" mode, each node's configuration parameters are also displayed.
 
 Limitations or Known issues
 ---------------------------

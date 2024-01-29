@@ -41,6 +41,7 @@
 #define IAVF_NO_POLL_ON_LINK_DOWN_ARG "no-poll-on-link-down"
 uint64_t iavf_timestamp_dynflag;
 int iavf_timestamp_dynfield_offset = -1;
+int rte_pmd_iavf_tx_lldp_dynfield_offset = -1;
 
 static const char * const iavf_valid_args[] = {
 	IAVF_PROTO_XTR_ARG,
@@ -296,6 +297,7 @@ iavf_dev_watchdog(void *cb_arg)
 			PMD_DRV_LOG(INFO, "VF \"%s\" reset has completed",
 				adapter->vf.eth_dev->data->name);
 			adapter->vf.vf_reset = false;
+			iavf_set_no_poll(adapter, false);
 		}
 	/* If not in reset then poll vfr_inprogress register for VFLR event */
 	} else {
@@ -308,6 +310,7 @@ iavf_dev_watchdog(void *cb_arg)
 
 			/* enter reset state with VFLR event */
 			adapter->vf.vf_reset = true;
+			iavf_set_no_poll(adapter, false);
 			adapter->vf.link_up = false;
 
 			iavf_dev_event_post(adapter->vf.eth_dev, RTE_ETH_EVENT_INTR_RESET,
@@ -1017,6 +1020,10 @@ iavf_dev_start(struct rte_eth_dev *dev)
 		}
 	}
 
+	/* Check Tx LLDP dynfield */
+	rte_pmd_iavf_tx_lldp_dynfield_offset =
+		rte_mbuf_dynfield_lookup(IAVF_TX_LLDP_DYNFIELD, NULL);
+
 	if (iavf_init_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "failed to do Queue init");
 		return -1;
@@ -1085,9 +1092,6 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = dev->intr_handle;
 
 	PMD_INIT_FUNC_TRACE();
-
-	if (vf->vf_reset)
-		return 0;
 
 	if (adapter->closed)
 		return -1;
@@ -2916,8 +2920,10 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	 * effect.
 	 */
 out:
-	if (vf->vf_reset && !rte_pci_set_bus_master(pci_dev, true))
+	if (vf->vf_reset && !rte_pci_set_bus_master(pci_dev, true)) {
 		vf->vf_reset = false;
+		iavf_set_no_poll(adapter, false);
+	}
 
 	/* disable watchdog */
 	iavf_dev_watchdog_disable(adapter);
@@ -2948,8 +2954,9 @@ static int
 iavf_dev_reset(struct rte_eth_dev *dev)
 {
 	int ret;
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 
 	/*
 	 * Check whether the VF reset has been done and inform application,
@@ -2961,7 +2968,7 @@ iavf_dev_reset(struct rte_eth_dev *dev)
 		PMD_DRV_LOG(ERR, "Wait too long for reset done!\n");
 		return ret;
 	}
-	vf->vf_reset = false;
+	iavf_set_no_poll(adapter, false);
 
 	PMD_DRV_LOG(DEBUG, "Start dev_reset ...\n");
 	ret = iavf_dev_uninit(dev);
@@ -2971,16 +2978,49 @@ iavf_dev_reset(struct rte_eth_dev *dev)
 	return iavf_dev_init(dev);
 }
 
+static inline bool
+iavf_is_reset(struct iavf_hw *hw)
+{
+	return !(IAVF_READ_REG(hw, IAVF_VF_ARQLEN1) &
+		IAVF_VF_ARQLEN1_ARQENABLE_MASK);
+}
+
+static bool
+iavf_is_reset_detected(struct iavf_adapter *adapter)
+{
+	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(adapter);
+	int i;
+
+	/* poll until we see the reset actually happen */
+	for (i = 0; i < IAVF_RESET_DETECTED_CNT; i++) {
+		if (iavf_is_reset(hw))
+			return true;
+		rte_delay_ms(20);
+	}
+
+	return false;
+}
+
 /*
  * Handle hardware reset
  */
-int
+void
 iavf_handle_hw_reset(struct rte_eth_dev *dev)
 {
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
+	struct iavf_adapter *adapter = dev->data->dev_private;
 	int ret;
 
+	if (!dev->data->dev_started)
+		return;
+
+	if (!iavf_is_reset_detected(adapter)) {
+		PMD_DRV_LOG(DEBUG, "reset not start\n");
+		return;
+	}
+
 	vf->in_reset_recovery = true;
+	iavf_set_no_poll(adapter, false);
 
 	ret = iavf_dev_reset(dev);
 	if (ret)
@@ -2997,15 +3037,26 @@ iavf_handle_hw_reset(struct rte_eth_dev *dev)
 	ret = iavf_dev_start(dev);
 	if (ret)
 		goto error;
-	dev->data->dev_started = 1;
 
-	vf->in_reset_recovery = false;
-	return 0;
+	dev->data->dev_started = 1;
+	goto exit;
 
 error:
 	PMD_DRV_LOG(DEBUG, "RESET recover with error code=%d\n", ret);
+exit:
 	vf->in_reset_recovery = false;
-	return ret;
+	iavf_set_no_poll(adapter, false);
+
+	return;
+}
+
+void
+iavf_set_no_poll(struct iavf_adapter *adapter, bool link_change)
+{
+	struct iavf_info *vf = &adapter->vf;
+
+	adapter->no_poll = (link_change & !vf->link_up) ||
+		vf->vf_reset || vf->in_reset_recovery;
 }
 
 static int

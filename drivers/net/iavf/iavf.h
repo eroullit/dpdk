@@ -18,7 +18,8 @@
 
 #define IAVF_AQ_LEN               32
 #define IAVF_AQ_BUF_SZ            4096
-#define IAVF_RESET_WAIT_CNT       500
+#define IAVF_RESET_WAIT_CNT       2000
+#define IAVF_RESET_DETECTED_CNT   500
 #define IAVF_BUF_SIZE_MIN         1024
 #define IAVF_FRAME_SIZE_MAX       9728
 #define IAVF_QUEUE_BASE_ADDR_UNIT 128
@@ -313,6 +314,45 @@ struct iavf_devargs {
 
 struct iavf_security_ctx;
 
+enum iavf_rx_burst_type {
+	IAVF_RX_DEFAULT,
+	IAVF_RX_FLEX_RXD,
+	IAVF_RX_BULK_ALLOC,
+	IAVF_RX_SCATTERED,
+	IAVF_RX_SCATTERED_FLEX_RXD,
+	IAVF_RX_SSE,
+	IAVF_RX_AVX2,
+	IAVF_RX_AVX2_OFFLOAD,
+	IAVF_RX_SSE_FLEX_RXD,
+	IAVF_RX_AVX2_FLEX_RXD,
+	IAVF_RX_AVX2_FLEX_RXD_OFFLOAD,
+	IAVF_RX_SSE_SCATTERED,
+	IAVF_RX_AVX2_SCATTERED,
+	IAVF_RX_AVX2_SCATTERED_OFFLOAD,
+	IAVF_RX_SSE_SCATTERED_FLEX_RXD,
+	IAVF_RX_AVX2_SCATTERED_FLEX_RXD,
+	IAVF_RX_AVX2_SCATTERED_FLEX_RXD_OFFLOAD,
+	IAVF_RX_AVX512,
+	IAVF_RX_AVX512_OFFLOAD,
+	IAVF_RX_AVX512_FLEX_RXD,
+	IAVF_RX_AVX512_FLEX_RXD_OFFLOAD,
+	IAVF_RX_AVX512_SCATTERED,
+	IAVF_RX_AVX512_SCATTERED_OFFLOAD,
+	IAVF_RX_AVX512_SCATTERED_FLEX_RXD,
+	IAVF_RX_AVX512_SCATTERED_FLEX_RXD_OFFLOAD,
+};
+
+enum iavf_tx_burst_type {
+	IAVF_TX_DEFAULT,
+	IAVF_TX_SSE,
+	IAVF_TX_AVX2,
+	IAVF_TX_AVX2_OFFLOAD,
+	IAVF_TX_AVX512,
+	IAVF_TX_AVX512_OFFLOAD,
+	IAVF_TX_AVX512_CTX,
+	IAVF_TX_AVX512_CTX_OFFLOAD,
+};
+
 /* Structure to store private data for each VF instance. */
 struct iavf_adapter {
 	struct iavf_hw hw;
@@ -328,8 +368,8 @@ struct iavf_adapter {
 	bool stopped;
 	bool closed;
 	bool no_poll;
-	eth_rx_burst_t rx_pkt_burst;
-	eth_tx_burst_t tx_pkt_burst;
+	enum iavf_rx_burst_type rx_burst_type;
+	enum iavf_tx_burst_type tx_burst_type;
 	uint16_t fdir_ref_cnt;
 	struct iavf_devargs devargs;
 };
@@ -511,5 +551,6 @@ int iavf_flow_sub_check(struct iavf_adapter *adapter,
 			struct iavf_fsub_conf *filter);
 void iavf_dev_watchdog_enable(struct iavf_adapter *adapter);
 void iavf_dev_watchdog_disable(struct iavf_adapter *adapter);
-int iavf_handle_hw_reset(struct rte_eth_dev *dev);
+void iavf_handle_hw_reset(struct rte_eth_dev *dev);
+void iavf_set_no_poll(struct iavf_adapter *adapter, bool link_change);
 #endif /* _IAVF_ETHDEV_H_ */

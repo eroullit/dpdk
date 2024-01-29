@@ -470,21 +470,20 @@ struct ice_tm_shaper_profile {
 struct ice_tm_node {
 	TAILQ_ENTRY(ice_tm_node) node;
 	uint32_t id;
-	uint32_t tc;
 	uint32_t priority;
 	uint32_t weight;
+	uint32_t level;
 	uint32_t reference_count;
 	struct ice_tm_node *parent;
 	struct ice_tm_node **children;
 	struct ice_tm_shaper_profile *shaper_profile;
 	struct rte_tm_node_params params;
+	struct ice_sched_node *sched_node;
 };
 
 /* node type of Traffic Manager */
 enum ice_tm_node_type {
 	ICE_TM_NODE_TYPE_PORT,
-	ICE_TM_NODE_TYPE_TC,
-	ICE_TM_NODE_TYPE_VSI,
 	ICE_TM_NODE_TYPE_QGROUP,
 	ICE_TM_NODE_TYPE_QUEUE,
 	ICE_TM_NODE_TYPE_MAX,
@@ -494,15 +493,8 @@ enum ice_tm_node_type {
 struct ice_tm_conf {
 	struct ice_shaper_profile_list shaper_profile_list;
 	struct ice_tm_node *root; /* root node - port */
-	struct ice_tm_node_list tc_list; /* node list for all the TCs */
-	struct ice_tm_node_list vsi_list; /* node list for all the VSIs */
-	struct ice_tm_node_list qgroup_list; /* node list for all the queue groups */
-	struct ice_tm_node_list queue_list; /* node list for all the queues */
-	uint32_t nb_tc_node;
-	uint32_t nb_vsi_node;
-	uint32_t nb_qgroup_node;
-	uint32_t nb_queue_node;
 	bool committed;
+	bool clear_on_fail;
 };
 
 struct ice_pf {
@@ -548,6 +540,10 @@ struct ice_pf {
 	uint64_t rss_hf;
 	struct ice_tm_conf tm_conf;
 	uint16_t outer_ethertype;
+	/* lock prevent race condition between lsc interrupt handler
+	 * and link status update during dev_start.
+	 */
+	rte_spinlock_t link_lock;
 };
 
 #define ICE_MAX_QUEUE_NUM  2048
@@ -681,6 +677,9 @@ int ice_rem_rss_cfg_wrap(struct ice_pf *pf, uint16_t vsi_id,
 			 struct ice_rss_hash_cfg *cfg);
 void ice_tm_conf_init(struct rte_eth_dev *dev);
 void ice_tm_conf_uninit(struct rte_eth_dev *dev);
+int ice_do_hierarchy_commit(struct rte_eth_dev *dev,
+			    int clear_on_fail,
+			    struct rte_tm_error *error);
 extern const struct rte_tm_ops ice_tm_ops;
 
 static inline int
@@ -735,4 +734,7 @@ int rte_pmd_ice_dump_package(uint16_t port, uint8_t **buff, uint32_t *size);
 
 __rte_experimental
 int rte_pmd_ice_dump_switch(uint16_t port, uint8_t **buff, uint32_t *size);
+
+__rte_experimental
+int rte_pmd_ice_dump_txsched(uint16_t port, bool detail, FILE *stream);
 #endif /* _ICE_ETHDEV_H_ */

@@ -66,6 +66,7 @@
 #define IAVF_VECTOR_PATH 0
 #define IAVF_VECTOR_OFFLOAD_PATH 1
 #define IAVF_VECTOR_CTX_OFFLOAD_PATH 2
+#define IAVF_VECTOR_CTX_PATH 3
 
 #define DEFAULT_TX_RS_THRESH     32
 #define DEFAULT_TX_FREE_THRESH   32
@@ -107,8 +108,16 @@
 #define IAVF_MAX_DATA_PER_TXD \
 	(IAVF_TXD_QW1_TX_BUF_SZ_MASK >> IAVF_TXD_QW1_TX_BUF_SZ_SHIFT)
 
+#define IAVF_TX_LLDP_DYNFIELD "intel_pmd_dynfield_tx_lldp"
+#define IAVF_CHECK_TX_LLDP(m) \
+	((rte_pmd_iavf_tx_lldp_dynfield_offset > 0) && \
+	(*RTE_MBUF_DYNFIELD((m), \
+			rte_pmd_iavf_tx_lldp_dynfield_offset, \
+			uint8_t *)))
+
 extern uint64_t iavf_timestamp_dynflag;
 extern int iavf_timestamp_dynfield_offset;
+extern int rte_pmd_iavf_tx_lldp_dynfield_offset;
 
 /**
  * Rx Flex Descriptors
@@ -751,6 +760,8 @@ uint16_t iavf_xmit_pkts_vec_avx512_offload(void *tx_queue,
 					   struct rte_mbuf **tx_pkts,
 					   uint16_t nb_pkts);
 uint16_t iavf_xmit_pkts_vec_avx512_ctx_offload(void *tx_queue, struct rte_mbuf **tx_pkts,
+				  uint16_t nb_pkts);
+uint16_t iavf_xmit_pkts_vec_avx512_ctx(void *tx_queue, struct rte_mbuf **tx_pkts,
 				  uint16_t nb_pkts);
 int iavf_txq_vec_setup_avx512(struct iavf_tx_queue *txq);
 

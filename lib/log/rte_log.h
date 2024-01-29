@@ -40,13 +40,13 @@ extern "C" {
 				 /* was RTE_LOGTYPE_POWER */
 				 /* was RTE_LOGTYPE_METER */
 				 /* was RTE_LOGTYPE_SCHED */
-#define RTE_LOGTYPE_PORT      13 /**< Log related to port. */
-#define RTE_LOGTYPE_TABLE     14 /**< Log related to table. */
-#define RTE_LOGTYPE_PIPELINE  15 /**< Log related to pipeline. */
+				 /* was RTE_LOGTYPE_PORT */
+				 /* was RTE_LOGTYPE_TABLE */
+				 /* was RTE_LOGTYPE_PIPELINE */
 				 /* was RTE_LOGTYPE_MBUF */
 				 /* was RTE_LOGTYPE_CRYPTODEV */
 				 /* was RTE_LOGTYPE_EFD */
-#define RTE_LOGTYPE_EVENTDEV  19 /**< Log related to eventdev. */
+				 /* was RTE_LOGTYPE_EVENTDEV */
 				 /* was RTE_LOGTYPE_GSO */
 
 /* these log types can be used in an application */
