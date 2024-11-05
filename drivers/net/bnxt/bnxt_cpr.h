@@ -53,11 +53,10 @@ struct bnxt_db_info {
 	bool                    db_64;
 	uint32_t		db_ring_mask;
 	uint32_t		db_epoch_mask;
-	uint32_t		db_epoch_shift;
 };
 
-#define DB_EPOCH(db, idx)	(((idx) & (db)->db_epoch_mask) <<	\
-				 ((db)->db_epoch_shift))
+#define DB_EPOCH(db, idx)	(!!((idx) & (db)->db_epoch_mask) <<	\
+				 DBR_EPOCH_SFT)
 #define DB_RING_IDX(db, idx)	(((idx) & (db)->db_ring_mask) |		\
 				 DB_EPOCH(db, idx))
 
@@ -69,7 +68,8 @@ struct bnxt_cp_ring_info {
 	struct bnxt_db_info     cp_db;
 	rte_iova_t		cp_desc_mapping;
 
-	struct ctx_hw_stats	*hw_stats;
+	char			*hw_stats;
+	uint16_t		hw_ring_stats_size;
 	rte_iova_t		hw_stats_map;
 	uint32_t		hw_stats_ctx_id;
 
@@ -107,7 +107,7 @@ void bnxt_stop_rxtx(struct rte_eth_dev *eth_dev);
 
 /**
  * Check validity of a completion ring entry. If the entry is valid, include a
- * C11 __ATOMIC_ACQUIRE fence to ensure that subsequent loads of fields in the
+ * C11 rte_memory_order_acquire fence to ensure that subsequent loads of fields in the
  * completion are not hoisted by the compiler or by the CPU to come before the
  * loading of the "valid" field.
  *
@@ -130,7 +130,7 @@ bnxt_cpr_cmp_valid(const void *cmpl, uint32_t raw_cons, uint32_t ring_size)
 	expected = !(raw_cons & ring_size);
 	valid = !!(rte_le_to_cpu_32(c->info3_v) & CMPL_BASE_V);
 	if (valid == expected) {
-		rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
+		rte_atomic_thread_fence(rte_memory_order_acquire);
 		return true;
 	}
 	return false;

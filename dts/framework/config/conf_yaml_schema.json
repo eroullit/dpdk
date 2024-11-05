@@ -146,13 +146,13 @@
         "compiler"
       ]
     },
-    "hugepages": {
+    "hugepages_2mb": {
       "type": "object",
       "description": "Optional hugepage configuration. If not specified, hugepages won't be configured and DTS will use system configuration.",
       "properties": {
-        "amount": {
+        "number_of": {
           "type": "integer",
-          "description": "The amount of hugepages to configure. Hugepage size will be the system default."
+          "description": "The number of hugepages to configure. Hugepage size will be the system default."
         },
         "force_first_numa": {
           "type": "boolean",
@@ -161,7 +161,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "amount"
+        "number_of"
       ]
     },
     "mac_address": {
@@ -186,7 +186,8 @@
       "type": "string",
       "enum": [
         "hello_world",
-        "os_udp"
+        "os_udp",
+        "pmd_buffer_scatter"
       ]
     },
     "test_target": {
@@ -197,7 +198,7 @@
         },
         "cases": {
           "type": "array",
-          "description": "If specified, only this subset of test suite's test cases will be run. Unknown test cases will be silently ignored.",
+          "description": "If specified, only this subset of test suite's test cases will be run.",
           "items": {
             "type": "string"
           },
@@ -252,8 +253,8 @@
             "type": "integer",
             "description": "How many memory channels to use. Optional, defaults to 1."
           },
-          "hugepages": {
-            "$ref": "#/definitions/hugepages"
+          "hugepages_2mb": {
+            "$ref": "#/definitions/hugepages_2mb"
           },
           "ports": {
             "type": "array",
@@ -321,7 +322,7 @@
       },
       "minimum": 1
     },
-    "executions": {
+    "test_runs": {
       "type": "array",
       "items": {
         "type": "object",
@@ -365,7 +366,7 @@
                 "$ref": "#/definitions/node_name"
               },
               "vdevs": {
-                "description": "Optional list of names of vdevs to be used in execution",
+                "description": "Optional list of names of vdevs to be used in the test run",
                 "type": "array",
                 "items": {
                   "type": "string"
@@ -378,6 +379,10 @@
           },
           "traffic_generator_node": {
             "$ref": "#/definitions/node_name"
+          },
+          "random_seed": {
+            "type": "integer",
+            "description": "Optional field. Allows you to set a seed for pseudo-random generation."
           }
         },
         "additionalProperties": false,
@@ -394,7 +399,7 @@
     }
   },
   "required": [
-    "executions",
+    "test_runs",
     "nodes"
   ],
   "additionalProperties": false

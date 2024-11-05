@@ -95,6 +95,13 @@ int rte_eal_memzone_init(void);
 int rte_eal_cpu_init(void);
 
 /**
+ * Check for architecture supported MMU.
+ *
+ * This function is private to EAL.
+ */
+bool eal_mmu_supported(void);
+
+/**
  * Create memseg lists
  *
  * This function is private to EAL.
@@ -367,7 +374,7 @@ void set_tsc_freq(void);
  *
  * This function is private to the EAL.
  */
-uint64_t get_tsc_freq(void);
+uint64_t get_tsc_freq(uint64_t arch_hz);
 
 /**
  * Get TSC frequency if the architecture supports.
@@ -528,28 +535,6 @@ int local_dev_remove(struct rte_device *dev);
  *	 1 no bus can handler the sigbus
  */
 int rte_bus_sigbus_handler(const void *failure_addr);
-
-/**
- * @internal
- * Register the sigbus handler.
- *
- * @return
- *   - On success, zero.
- *   - On failure, a negative value.
- */
-int
-dev_sigbus_handler_register(void);
-
-/**
- * @internal
- * Unregister the sigbus handler.
- *
- * @return
- *   - On success, zero.
- *   - On failure, a negative value.
- */
-int
-dev_sigbus_handler_unregister(void);
 
 /**
  * Get OS-specific EAL mapping base address.

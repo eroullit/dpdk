@@ -37,8 +37,6 @@
 #define SFC_XSTAT_ID_INVALID_VAL  UINT64_MAX
 #define SFC_XSTAT_ID_INVALID_NAME '\0'
 
-uint32_t sfc_logtype_driver;
-
 static struct sfc_dp_list sfc_dp_head =
 	TAILQ_HEAD_INITIALIZER(sfc_dp_head);
 
@@ -194,11 +192,12 @@ sfc_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 }
 
 static const uint32_t *
-sfc_dev_supported_ptypes_get(struct rte_eth_dev *dev)
+sfc_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 {
 	const struct sfc_adapter_priv *sap = sfc_adapter_priv_by_eth_dev(dev);
 
-	return sap->dp_rx->supported_ptypes_get(sap->shared->tunnel_encaps);
+	return sap->dp_rx->supported_ptypes_get(sap->shared->tunnel_encaps,
+						no_of_elements);
 }
 
 static int
@@ -2836,8 +2835,8 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 	if (encp->enc_rx_es_super_buffer_supported)
 		avail_caps |= SFC_DP_HW_FW_CAP_RX_ES_SUPER_BUFFER;
 
-	rc = sfc_kvargs_process(sa, SFC_KVARG_RX_DATAPATH,
-				sfc_kvarg_string_handler, &rx_name);
+	rc = sfc_kvargs_process_opt(sa, SFC_KVARG_RX_DATAPATH,
+				    sfc_kvarg_string_handler, &rx_name);
 	if (rc != 0)
 		goto fail_kvarg_rx_datapath;
 
@@ -2879,8 +2878,8 @@ sfc_eth_dev_set_ops(struct rte_eth_dev *dev)
 
 	sfc_notice(sa, "use %s Rx datapath", sas->dp_rx_name);
 
-	rc = sfc_kvargs_process(sa, SFC_KVARG_TX_DATAPATH,
-				sfc_kvarg_string_handler, &tx_name);
+	rc = sfc_kvargs_process_opt(sa, SFC_KVARG_TX_DATAPATH,
+				    sfc_kvarg_string_handler, &tx_name);
 	if (rc != 0)
 		goto fail_kvarg_tx_datapath;
 
@@ -3074,8 +3073,8 @@ sfc_parse_switch_mode(struct sfc_adapter *sa, bool has_representors)
 
 	sfc_log_init(sa, "entry");
 
-	rc = sfc_kvargs_process(sa, SFC_KVARG_SWITCH_MODE,
-				sfc_kvarg_string_handler, &switch_mode);
+	rc = sfc_kvargs_process_opt(sa, SFC_KVARG_SWITCH_MODE,
+				    sfc_kvarg_string_handler, &switch_mode);
 	if (rc != 0)
 		goto fail_kvargs;
 
@@ -3305,8 +3304,8 @@ sfc_parse_rte_devargs(const char *args, struct rte_eth_devargs *devargs)
 	int rc;
 
 	if (args != NULL) {
-		rc = rte_eth_devargs_parse(args, &eth_da);
-		if (rc != 0) {
+		rc = rte_eth_devargs_parse(args, &eth_da, 1);
+		if (rc < 0) {
 			SFC_GENERIC_LOG(ERR,
 					"Failed to parse generic devargs '%s'",
 					args);
@@ -3617,12 +3616,4 @@ RTE_PMD_REGISTER_PARAM_STRING(net_sfc_efx,
 	SFC_KVARG_FW_VARIANT "=" SFC_KVARG_VALUES_FW_VARIANT " "
 	SFC_KVARG_RXD_WAIT_TIMEOUT_NS "=<long> "
 	SFC_KVARG_STATS_UPDATE_PERIOD_MS "=<long>");
-
-RTE_INIT(sfc_driver_register_logtype)
-{
-	int ret;
-
-	ret = rte_log_register_type_and_pick_level(SFC_LOGTYPE_PREFIX "driver",
-						   RTE_LOG_NOTICE);
-	sfc_logtype_driver = (ret < 0) ? RTE_LOGTYPE_EAL : ret;
-}
+RTE_LOG_REGISTER_SUFFIX(sfc_logtype_driver, driver, NOTICE);

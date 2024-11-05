@@ -15,10 +15,6 @@
  * after GRE header decapsulating)
  */
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <stdint.h>
 
 #include <rte_byteorder.h>
@@ -28,6 +24,10 @@ extern "C" {
 
 #if defined(RTE_ARCH_X86) || defined(__ARM_NEON)
 #include <rte_vect.h>
+#endif
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 #ifdef RTE_ARCH_X86
@@ -88,8 +88,8 @@ struct rte_ipv4_tuple {
  * ports/sctp_tag have to be CPU byte order
  */
 struct rte_ipv6_tuple {
-	uint8_t		src_addr[16];
-	uint8_t		dst_addr[16];
+	struct rte_ipv6_addr src_addr;
+	struct rte_ipv6_addr dst_addr;
 	union {
 		struct {
 			uint16_t dport;
@@ -99,14 +99,14 @@ struct rte_ipv6_tuple {
 	};
 };
 
+#ifdef RTE_ARCH_X86
+union __rte_aligned(XMM_SIZE) rte_thash_tuple {
+#else
 union rte_thash_tuple {
+#endif
 	struct rte_ipv4_tuple	v4;
 	struct rte_ipv6_tuple	v6;
-#ifdef RTE_ARCH_X86
-} __rte_aligned(XMM_SIZE);
-#else
 };
-#endif
 
 /**
  * Prepare special converted key to use with rte_softrss_be()
@@ -139,24 +139,24 @@ rte_thash_load_v6_addrs(const struct rte_ipv6_hdr *orig,
 			union rte_thash_tuple *targ)
 {
 #ifdef RTE_ARCH_X86
-	__m128i ipv6 = _mm_loadu_si128((const __m128i *)orig->src_addr);
-	*(__m128i *)targ->v6.src_addr =
+	__m128i ipv6 = _mm_loadu_si128((const __m128i *)&orig->src_addr);
+	*(__m128i *)&targ->v6.src_addr =
 			_mm_shuffle_epi8(ipv6, rte_thash_ipv6_bswap_mask);
-	ipv6 = _mm_loadu_si128((const __m128i *)orig->dst_addr);
-	*(__m128i *)targ->v6.dst_addr =
+	ipv6 = _mm_loadu_si128((const __m128i *)&orig->dst_addr);
+	*(__m128i *)&targ->v6.dst_addr =
 			_mm_shuffle_epi8(ipv6, rte_thash_ipv6_bswap_mask);
 #elif defined(__ARM_NEON)
-	uint8x16_t ipv6 = vld1q_u8((uint8_t const *)orig->src_addr);
-	vst1q_u8((uint8_t *)targ->v6.src_addr, vrev32q_u8(ipv6));
-	ipv6 = vld1q_u8((uint8_t const *)orig->dst_addr);
-	vst1q_u8((uint8_t *)targ->v6.dst_addr, vrev32q_u8(ipv6));
+	uint8x16_t ipv6 = vld1q_u8(orig->src_addr.a);
+	vst1q_u8(targ->v6.src_addr.a, vrev32q_u8(ipv6));
+	ipv6 = vld1q_u8(orig->dst_addr.a);
+	vst1q_u8(targ->v6.dst_addr.a, vrev32q_u8(ipv6));
 #else
 	int i;
 	for (i = 0; i < 4; i++) {
-		*((uint32_t *)targ->v6.src_addr + i) =
-			rte_be_to_cpu_32(*((const uint32_t *)orig->src_addr + i));
-		*((uint32_t *)targ->v6.dst_addr + i) =
-			rte_be_to_cpu_32(*((const uint32_t *)orig->dst_addr + i));
+		*((uint32_t *)&targ->v6.src_addr + i) =
+			rte_be_to_cpu_32(*((const uint32_t *)&orig->src_addr + i));
+		*((uint32_t *)&targ->v6.dst_addr + i) =
+			rte_be_to_cpu_32(*((const uint32_t *)&orig->dst_addr + i));
 	}
 #endif
 }

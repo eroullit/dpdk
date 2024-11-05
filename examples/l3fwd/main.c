@@ -96,11 +96,11 @@ struct lcore_conf lcore_conf[RTE_MAX_LCORE];
 
 struct parm_cfg parm_config;
 
-struct lcore_params {
+struct __rte_cache_aligned lcore_params {
 	uint16_t port_id;
-	uint8_t queue_id;
-	uint8_t lcore_id;
-} __rte_cache_aligned;
+	uint16_t queue_id;
+	uint32_t lcore_id;
+};
 
 static struct lcore_params lcore_params_array[MAX_LCORE_PARAMS];
 static struct lcore_params lcore_params_array_default[] = {
@@ -228,22 +228,22 @@ const struct ipv4_l3fwd_route ipv4_l3fwd_route_array[] = {
  * 2001:200:0:{0-f}::/64 = Port {0-15}
  */
 const struct ipv6_l3fwd_route ipv6_l3fwd_route_array[] = {
-	{{32, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 0},
-	{{32, 1, 2, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 1},
-	{{32, 1, 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 2},
-	{{32, 1, 2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 3},
-	{{32, 1, 2, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 4},
-	{{32, 1, 2, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 5},
-	{{32, 1, 2, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 6},
-	{{32, 1, 2, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 7},
-	{{32, 1, 2, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 8},
-	{{32, 1, 2, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 9},
-	{{32, 1, 2, 0, 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 10},
-	{{32, 1, 2, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 11},
-	{{32, 1, 2, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 12},
-	{{32, 1, 2, 0, 0, 0, 0, 13, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 13},
-	{{32, 1, 2, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 14},
-	{{32, 1, 2, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0}, 64, 15},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x0, 0, 0, 0, 0), 64, 0},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x1, 0, 0, 0, 0), 64, 1},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x2, 0, 0, 0, 0), 64, 2},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x3, 0, 0, 0, 0), 64, 3},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x4, 0, 0, 0, 0), 64, 4},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x5, 0, 0, 0, 0), 64, 5},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x6, 0, 0, 0, 0), 64, 6},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x7, 0, 0, 0, 0), 64, 7},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x8, 0, 0, 0, 0), 64, 8},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0x9, 0, 0, 0, 0), 64, 9},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0xa, 0, 0, 0, 0), 64, 10},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0xb, 0, 0, 0, 0), 64, 11},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0xc, 0, 0, 0, 0), 64, 12},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0xd, 0, 0, 0, 0), 64, 13},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0xe, 0, 0, 0, 0), 64, 14},
+	{RTE_IPV6(0x2001, 0x0200, 0, 0xf, 0, 0, 0, 0), 64, 15},
 };
 
 /*
@@ -292,24 +292,24 @@ setup_l3fwd_lookup_tables(void)
 static int
 check_lcore_params(void)
 {
-	uint8_t queue, lcore;
-	uint16_t i;
+	uint16_t queue, i;
+	uint32_t lcore;
 	int socketid;
 
 	for (i = 0; i < nb_lcore_params; ++i) {
 		queue = lcore_params[i].queue_id;
 		if (queue >= MAX_RX_QUEUE_PER_PORT) {
-			printf("invalid queue number: %hhu\n", queue);
+			printf("invalid queue number: %" PRIu16 "\n", queue);
 			return -1;
 		}
 		lcore = lcore_params[i].lcore_id;
 		if (!rte_lcore_is_enabled(lcore)) {
-			printf("error: lcore %hhu is not enabled in lcore mask\n", lcore);
+			printf("error: lcore %u is not enabled in lcore mask\n", lcore);
 			return -1;
 		}
 		if ((socketid = rte_lcore_to_socket_id(lcore) != 0) &&
 			(numa_on == 0)) {
-			printf("warning: lcore %hhu is on socket %d with numa off \n",
+			printf("warning: lcore %u is on socket %d with numa off\n",
 				lcore, socketid);
 		}
 	}
@@ -336,7 +336,7 @@ check_port_config(void)
 	return 0;
 }
 
-static uint8_t
+static uint16_t
 get_port_n_rx_queues(const uint16_t port)
 {
 	int queue = -1;
@@ -352,21 +352,21 @@ get_port_n_rx_queues(const uint16_t port)
 						lcore_params[i].port_id);
 		}
 	}
-	return (uint8_t)(++queue);
+	return (uint16_t)(++queue);
 }
 
 static int
 init_lcore_rx_queues(void)
 {
 	uint16_t i, nb_rx_queue;
-	uint8_t lcore;
+	uint32_t lcore;
 
 	for (i = 0; i < nb_lcore_params; ++i) {
 		lcore = lcore_params[i].lcore_id;
 		nb_rx_queue = lcore_conf[lcore].n_rx_queue;
 		if (nb_rx_queue >= MAX_RX_QUEUE_PER_LCORE) {
 			printf("error: too many queues (%u) for lcore: %u\n",
-				(unsigned)nb_rx_queue + 1, (unsigned)lcore);
+				(unsigned int)nb_rx_queue + 1, lcore);
 			return -1;
 		} else {
 			lcore_conf[lcore].rx_queue_list[nb_rx_queue].port_id =
@@ -500,6 +500,11 @@ parse_config(const char *q_arg)
 	char *str_fld[_NUM_FLD];
 	int i;
 	unsigned size;
+	uint16_t max_fld[_NUM_FLD] = {
+		RTE_MAX_ETHPORTS,
+		RTE_MAX_QUEUES_PER_PORT,
+		RTE_MAX_LCORE
+	};
 
 	nb_lcore_params = 0;
 
@@ -518,7 +523,7 @@ parse_config(const char *q_arg)
 		for (i = 0; i < _NUM_FLD; i++){
 			errno = 0;
 			int_fld[i] = strtoul(str_fld[i], &end, 0);
-			if (errno != 0 || end == str_fld[i] || int_fld[i] > 255)
+			if (errno != 0 || end == str_fld[i] || int_fld[i] > max_fld[i])
 				return -1;
 		}
 		if (nb_lcore_params >= MAX_LCORE_PARAMS) {
@@ -527,11 +532,11 @@ parse_config(const char *q_arg)
 			return -1;
 		}
 		lcore_params_array[nb_lcore_params].port_id =
-			(uint8_t)int_fld[FLD_PORT];
+			(uint16_t)int_fld[FLD_PORT];
 		lcore_params_array[nb_lcore_params].queue_id =
-			(uint8_t)int_fld[FLD_QUEUE];
+			(uint16_t)int_fld[FLD_QUEUE];
 		lcore_params_array[nb_lcore_params].lcore_id =
-			(uint8_t)int_fld[FLD_LCORE];
+			(uint32_t)int_fld[FLD_LCORE];
 		++nb_lcore_params;
 	}
 	lcore_params = lcore_params_array;
@@ -630,7 +635,7 @@ parse_event_eth_rx_queues(const char *eth_rx_queues)
 {
 	struct l3fwd_event_resources *evt_rsrc = l3fwd_get_eventdev_rsrc();
 	char *end = NULL;
-	uint8_t num_eth_rx_queues;
+	uint16_t num_eth_rx_queues;
 
 	/* parse decimal string */
 	num_eth_rx_queues = strtoul(eth_rx_queues, &end, 10);
@@ -1211,7 +1216,8 @@ config_port_max_pkt_len(struct rte_eth_conf *conf,
 static void
 l3fwd_poll_resource_setup(void)
 {
-	uint8_t nb_rx_queue, queue, socketid;
+	uint8_t socketid;
+	uint16_t nb_rx_queue, queue;
 	struct rte_eth_dev_info dev_info;
 	uint32_t n_tx_queue, nb_lcores;
 	struct rte_eth_txconf *txconf;
@@ -1388,6 +1394,7 @@ l3fwd_poll_resource_setup(void)
 		fflush(stdout);
 		/* init RX queues */
 		for(queue = 0; queue < qconf->n_rx_queue; ++queue) {
+			struct rte_eth_conf local_conf;
 			struct rte_eth_rxconf rxq_conf;
 
 			portid = qconf->rx_queue_list[queue].port_id;
@@ -1408,8 +1415,14 @@ l3fwd_poll_resource_setup(void)
 					"Error during getting device (port %u) info: %s\n",
 					portid, strerror(-ret));
 
+			ret = rte_eth_dev_conf_get(portid, &local_conf);
+			if (ret != 0)
+				rte_exit(EXIT_FAILURE,
+					"Error during getting device (port %u) configuration: %s\n",
+					portid, strerror(-ret));
+
 			rxq_conf = dev_info.default_rxconf;
-			rxq_conf.offloads = port_conf.rxmode.offloads;
+			rxq_conf.offloads = local_conf.rxmode.offloads;
 			if (!per_port_pool)
 				ret = rte_eth_rx_queue_setup(portid, queueid,
 						nb_rxd, socketid,
@@ -1528,7 +1541,7 @@ main(int argc, char **argv)
 	struct lcore_conf *qconf;
 	uint16_t queueid, portid;
 	unsigned int lcore_id;
-	uint8_t queue;
+	uint16_t queue;
 	int ret;
 
 	/* init EAL */
@@ -1577,7 +1590,6 @@ main(int argc, char **argv)
 			l3fwd_lkp.main_loop = evt_rsrc->ops.fib_event_loop;
 		else
 			l3fwd_lkp.main_loop = evt_rsrc->ops.lpm_event_loop;
-		l3fwd_event_service_setup();
 	} else
 #endif
 		l3fwd_poll_resource_setup();
@@ -1608,6 +1620,11 @@ main(int argc, char **argv)
 					rte_strerror(-ret), portid);
 		}
 	}
+
+#ifdef RTE_LIB_EVENTDEV
+	if (evt_rsrc->enabled)
+		l3fwd_event_service_setup();
+#endif
 
 	printf("\n");
 

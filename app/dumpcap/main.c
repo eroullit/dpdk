@@ -24,6 +24,7 @@
 #include <unistd.h>
 
 #include <rte_alarm.h>
+#include <rte_bitops.h>
 #include <rte_bpf.h>
 #include <rte_config.h>
 #include <rte_debug.h>
@@ -38,6 +39,7 @@
 #include <rte_pdump.h>
 #include <rte_ring.h>
 #include <rte_string_fns.h>
+#include <rte_thread.h>
 #include <rte_time.h>
 #include <rte_version.h>
 
@@ -51,7 +53,7 @@
 
 /* command line flags */
 static const char *progname;
-static bool quit_signal;
+static RTE_ATOMIC(bool) quit_signal;
 static bool group_read;
 static bool quiet;
 static bool use_pcapng = true;
@@ -60,6 +62,7 @@ static const char *tmp_dir = "/tmp";
 static unsigned int ring_size = 2048;
 static const char *capture_comment;
 static const char *file_prefix;
+static const char *lcore_arg;
 static bool dump_bpf;
 static bool show_interfaces;
 static bool print_stats;
@@ -143,6 +146,7 @@ static void usage(void)
 	       "                           (default: /tmp)\n"
 	       "\n"
 	       "Miscellaneous:\n"
+	       "  --lcore=<core>           CPU core to run on (default: any)\n"
 	       "  --file-prefix=<prefix>   prefix to use for multi-process\n"
 	       "  -q                       don't report packet capture counts\n"
 	       "  -v, --version            print version information and exit\n"
@@ -343,6 +347,7 @@ static void parse_opts(int argc, char **argv)
 		{ "ifdescr",	     required_argument, NULL, 0 },
 		{ "ifname",	     required_argument, NULL, 0 },
 		{ "interface",       required_argument, NULL, 'i' },
+		{ "lcore",           required_argument, NULL, 0 },
 		{ "list-interfaces", no_argument,       NULL, 'D' },
 		{ "no-promiscuous-mode", no_argument,   NULL, 'p' },
 		{ "output-file",     required_argument, NULL, 'w' },
@@ -369,6 +374,8 @@ static void parse_opts(int argc, char **argv)
 
 			if (!strcmp(longopt, "capture-comment")) {
 				capture_comment = optarg;
+			} else if (!strcmp(longopt, "lcore")) {
+				lcore_arg = optarg;
 			} else if (!strcmp(longopt, "file-prefix")) {
 				file_prefix = optarg;
 			} else if (!strcmp(longopt, "temp-dir")) {
@@ -475,7 +482,7 @@ static void parse_opts(int argc, char **argv)
 static void
 signal_handler(int sig_num __rte_unused)
 {
-	__atomic_store_n(&quit_signal, true, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&quit_signal, true, rte_memory_order_relaxed);
 }
 
 
@@ -490,7 +497,7 @@ static void statistics_loop(void)
 	printf("%-15s  %10s  %10s\n",
 	       "Interface", "Received", "Dropped");
 
-	while (!__atomic_load_n(&quit_signal, __ATOMIC_RELAXED)) {
+	while (!rte_atomic_load_explicit(&quit_signal, rte_memory_order_relaxed)) {
 		RTE_ETH_FOREACH_DEV(p) {
 			if (rte_eth_dev_get_name_by_port(p, name) < 0)
 				continue;
@@ -528,7 +535,7 @@ cleanup_pdump_resources(void)
 static void
 monitor_primary(void *arg __rte_unused)
 {
-	if (__atomic_load_n(&quit_signal, __ATOMIC_RELAXED))
+	if (rte_atomic_load_explicit(&quit_signal, rte_memory_order_relaxed))
 		return;
 
 	if (rte_eal_primary_proc_alive(NULL)) {
@@ -536,7 +543,7 @@ monitor_primary(void *arg __rte_unused)
 	} else {
 		fprintf(stderr,
 			"Primary process is no longer active, exiting...\n");
-		__atomic_store_n(&quit_signal, true, __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&quit_signal, true, rte_memory_order_relaxed);
 	}
 }
 
@@ -608,10 +615,14 @@ static void dpdk_init(void)
 		"--log-level", "notice"
 	};
 	int eal_argc = RTE_DIM(args);
+	rte_cpuset_t cpuset = { };
 	char **eal_argv;
 	unsigned int i;
 
 	if (file_prefix != NULL)
+		eal_argc += 2;
+
+	if (lcore_arg != NULL)
 		eal_argc += 2;
 
 	/* DPDK API requires mutable versions of command line arguments. */
@@ -623,13 +634,39 @@ static void dpdk_init(void)
 	for (i = 1; i < RTE_DIM(args); i++)
 		eal_argv[i] = strdup(args[i]);
 
+	if (lcore_arg != NULL) {
+		eal_argv[i++] = strdup("--lcores");
+		eal_argv[i++] = strdup(lcore_arg);
+	}
+
 	if (file_prefix != NULL) {
 		eal_argv[i++] = strdup("--file-prefix");
 		eal_argv[i++] = strdup(file_prefix);
 	}
 
+	for (i = 0; i < (unsigned int)eal_argc; i++) {
+		if (eal_argv[i] == NULL)
+			rte_panic("No memory\n");
+	}
+
+	/*
+	 * Need to get the original cpuset, before EAL init changes
+	 * the affinity of this thread (main lcore).
+	 */
+	if (lcore_arg == NULL &&
+	    rte_thread_get_affinity_by_id(rte_thread_self(), &cpuset) != 0)
+		rte_panic("rte_thread_getaffinity failed\n");
+
 	if (rte_eal_init(eal_argc, eal_argv) < 0)
 		rte_exit(EXIT_FAILURE, "EAL init failed: is primary process running?\n");
+
+	/*
+	 * If no lcore argument was specified, then run this program as a normal process
+	 * which can be scheduled on any non-isolated CPU.
+	 */
+	if (lcore_arg == NULL &&
+	    rte_thread_set_affinity_by_id(rte_thread_self(), &cpuset) != 0)
+		rte_exit(EXIT_FAILURE, "Can not restore original CPU affinity\n");
 }
 
 /* Create packet ring shared between callbacks and process */
@@ -641,7 +678,7 @@ static struct rte_ring *create_ring(void)
 
 	/* Find next power of 2 >= size. */
 	size = ring_size;
-	log2 = sizeof(size) * 8 - __builtin_clzl(size - 1);
+	log2 = sizeof(size) * 8 - rte_clz64(size - 1);
 	size = 1u << log2;
 
 	if (size != ring_size) {
@@ -764,9 +801,10 @@ static dumpcap_out_t create_output(void)
 		free(os);
 
 		TAILQ_FOREACH(intf, &interfaces, next) {
-			rte_pcapng_add_interface(ret.pcapng, intf->port,
-						 intf->ifname, intf->ifdescr,
-						 intf->opts.filter);
+			if (rte_pcapng_add_interface(ret.pcapng, intf->port, intf->ifname,
+						     intf->ifdescr, intf->opts.filter) < 0)
+				rte_exit(EXIT_FAILURE, "rte_pcapng_add_interface %u failed\n",
+					intf->port);
 		}
 	} else {
 		pcap_t *pcap;
@@ -823,12 +861,9 @@ static void enable_pdump(struct rte_ring *r, struct rte_mempool *mp)
 			if (rte_eth_promiscuous_get(intf->port) == 1) {
 				/* promiscuous already enabled */
 				intf->opts.promisc_mode = false;
-			} else {
-				ret = rte_eth_promiscuous_enable(intf->port);
-				if (ret != 0)
-					fprintf(stderr,
-						"port %u set promiscuous enable failed: %d\n",
-						intf->port, ret);
+			} else if (rte_eth_promiscuous_enable(intf->port) < 0) {
+				fprintf(stderr, "port %u:%s set promiscuous failed\n",
+					intf->port, intf->name);
 				intf->opts.promisc_mode = false;
 			}
 		}
@@ -869,7 +904,7 @@ static ssize_t
 pcap_write_packets(pcap_dumper_t *dumper,
 		   struct rte_mbuf *pkts[], uint16_t n)
 {
-	uint8_t temp_data[RTE_MBUF_DEFAULT_BUF_SIZE];
+	uint8_t temp_data[RTE_ETHER_MAX_JUMBO_FRAME_LEN];
 	struct pcap_pkthdr header;
 	uint16_t i;
 	size_t total = 0;
@@ -878,14 +913,19 @@ pcap_write_packets(pcap_dumper_t *dumper,
 
 	for (i = 0; i < n; i++) {
 		struct rte_mbuf *m = pkts[i];
+		size_t len, caplen;
 
-		header.len = rte_pktmbuf_pkt_len(m);
-		header.caplen = RTE_MIN(header.len, sizeof(temp_data));
+		len = caplen = rte_pktmbuf_pkt_len(m);
+		if (unlikely(!rte_pktmbuf_is_contiguous(m) && len > sizeof(temp_data)))
+			caplen = sizeof(temp_data);
+
+		header.len = len;
+		header.caplen = caplen;
 
 		pcap_dump((u_char *)dumper, &header,
-			  rte_pktmbuf_read(m, 0, header.caplen, temp_data));
+			  rte_pktmbuf_read(m, 0, caplen, temp_data));
 
-		total += sizeof(header) + header.len;
+		total += sizeof(header) + caplen;
 	}
 
 	return total;
@@ -934,6 +974,11 @@ int main(int argc, char **argv)
 {
 	struct rte_ring *r;
 	struct rte_mempool *mp;
+	struct sigaction action = {
+		.sa_flags = SA_RESTART,
+		.sa_handler = signal_handler,
+	};
+	struct sigaction origaction;
 	dumpcap_out_t out;
 	char *p;
 
@@ -959,8 +1004,13 @@ int main(int argc, char **argv)
 
 	compile_filters();
 
-	signal(SIGINT, signal_handler);
-	signal(SIGPIPE, SIG_IGN);
+	sigemptyset(&action.sa_mask);
+	sigaction(SIGTERM, &action, NULL);
+	sigaction(SIGINT, &action, NULL);
+	sigaction(SIGPIPE, &action, NULL);
+	sigaction(SIGHUP, NULL, &origaction);
+	if (origaction.sa_handler == SIG_DFL)
+		sigaction(SIGHUP, &action, NULL);
 
 	enable_primary_monitor();
 
@@ -981,7 +1031,7 @@ int main(int argc, char **argv)
 		show_count(0);
 	}
 
-	while (!__atomic_load_n(&quit_signal, __ATOMIC_RELAXED)) {
+	while (!rte_atomic_load_explicit(&quit_signal, rte_memory_order_relaxed)) {
 		if (process_ring(out, r) < 0) {
 			fprintf(stderr, "pcapng file write failed; %s\n",
 				strerror(errno));

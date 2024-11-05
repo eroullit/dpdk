@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <inttypes.h>
+#include <stdalign.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <math.h>
@@ -41,9 +42,8 @@ static struct rte_event_timer_adapter *adapters;
 static const struct event_timer_adapter_ops swtim_ops;
 
 #define EVTIM_LOG(level, logtype, ...) \
-	RTE_LOG_LINE(level, logtype, \
-		RTE_FMT("EVTIMER: %s() line %u: " RTE_FMT_HEAD(__VA_ARGS__ ,), \
-			__func__, __LINE__, RTE_FMT_TAIL(__VA_ARGS__ ,)))
+	RTE_LOG_LINE_PREFIX(level, logtype, \
+		"EVTIMER: %s() line %u: ", __func__ RTE_LOG_COMMA __LINE__, __VA_ARGS__)
 
 #define EVTIM_LOG_ERR(...) EVTIM_LOG(ERR, EVTIM, __VA_ARGS__)
 
@@ -512,11 +512,11 @@ rte_event_timer_remaining_ticks_get(
 
 #define EXP_TIM_BUF_SZ 128
 
-struct event_buffer {
+struct __rte_cache_aligned event_buffer {
 	size_t head;
 	size_t tail;
 	struct rte_event events[EVENT_BUFFER_SZ];
-} __rte_cache_aligned;
+};
 
 static inline bool
 event_buffer_full(struct event_buffer *bufp)
@@ -632,9 +632,9 @@ struct swtim {
 	/* Identifier of timer data instance */
 	uint32_t timer_data_id;
 	/* Track which cores have actually armed a timer */
-	struct {
+	alignas(RTE_CACHE_LINE_SIZE) struct {
 		RTE_ATOMIC(uint16_t) v;
-	} __rte_cache_aligned in_use[RTE_MAX_LCORE];
+	} in_use[RTE_MAX_LCORE];
 	/* Track which cores' timer lists should be polled */
 	RTE_ATOMIC(unsigned int) poll_lcores[RTE_MAX_LCORE];
 	/* The number of lists that should be polled */

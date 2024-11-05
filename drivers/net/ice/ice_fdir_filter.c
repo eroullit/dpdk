@@ -334,7 +334,7 @@ ice_fdir_counter_alloc(struct ice_pf *pf, uint32_t shared, uint32_t id)
 	}
 
 	if (!counter_free) {
-		PMD_DRV_LOG(ERR, "No free counter found\n");
+		PMD_DRV_LOG(ERR, "No free counter found");
 		return NULL;
 	}
 
@@ -375,12 +375,17 @@ ice_fdir_init_filter_list(struct ice_pf *pf)
 {
 	struct rte_eth_dev *dev = &rte_eth_devices[pf->dev_data->port_id];
 	struct ice_fdir_info *fdir_info = &pf->fdir;
+	struct ice_hw *hw = &pf->adapter->hw;
 	char fdir_hash_name[RTE_HASH_NAMESIZE];
+	const uint32_t max_fd_filter_entries =
+			hw->func_caps.fd_fltr_guar + hw->func_caps.fd_fltr_best_effort;
+	/* dimension hash table as max filters + 12.5% to ensure a little headroom */
+	const uint32_t hash_table_entries = max_fd_filter_entries + (max_fd_filter_entries >> 3);
 	int ret;
 
 	struct rte_hash_parameters fdir_hash_params = {
 		.name = fdir_hash_name,
-		.entries = ICE_MAX_FDIR_FILTER_NUM,
+		.entries = hash_table_entries,
 		.key_len = sizeof(struct ice_fdir_fltr_pattern),
 		.hash_func = rte_hash_crc,
 		.hash_func_init_val = 0,
@@ -398,7 +403,7 @@ ice_fdir_init_filter_list(struct ice_pf *pf)
 	}
 	fdir_info->hash_map = rte_zmalloc("ice_fdir_hash_map",
 					  sizeof(*fdir_info->hash_map) *
-					  ICE_MAX_FDIR_FILTER_NUM,
+					  hash_table_entries,
 					  0);
 	if (!fdir_info->hash_map) {
 		PMD_INIT_LOG(ERR,
@@ -2092,11 +2097,11 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 				return -rte_errno;
 			}
 
-			if (!memcmp(ipv6_mask->hdr.src_addr, ipv6_addr_mask,
-				    RTE_DIM(ipv6_mask->hdr.src_addr)))
+			if (!memcmp(&ipv6_mask->hdr.src_addr, ipv6_addr_mask,
+				    sizeof(ipv6_mask->hdr.src_addr)))
 				*input_set |= ICE_INSET_IPV6_SRC;
-			if (!memcmp(ipv6_mask->hdr.dst_addr, ipv6_addr_mask,
-				    RTE_DIM(ipv6_mask->hdr.dst_addr)))
+			if (!memcmp(&ipv6_mask->hdr.dst_addr, ipv6_addr_mask,
+				    sizeof(ipv6_mask->hdr.dst_addr)))
 				*input_set |= ICE_INSET_IPV6_DST;
 
 			if ((ipv6_mask->hdr.vtc_flow &
@@ -2108,8 +2113,8 @@ ice_fdir_parse_pattern(__rte_unused struct ice_adapter *ad,
 			if (ipv6_mask->hdr.hop_limits == UINT8_MAX)
 				*input_set |= ICE_INSET_IPV6_HOP_LIMIT;
 
-			rte_memcpy(&p_v6->dst_ip, ipv6_spec->hdr.dst_addr, 16);
-			rte_memcpy(&p_v6->src_ip, ipv6_spec->hdr.src_addr, 16);
+			rte_memcpy(&p_v6->dst_ip, &ipv6_spec->hdr.dst_addr, 16);
+			rte_memcpy(&p_v6->src_ip, &ipv6_spec->hdr.src_addr, 16);
 			vtc_flow_cpu = rte_be_to_cpu_32(ipv6_spec->hdr.vtc_flow);
 			p_v6->tc = (uint8_t)(vtc_flow_cpu >> ICE_FDIR_IPV6_TC_OFFSET);
 			p_v6->proto = ipv6_spec->hdr.proto;

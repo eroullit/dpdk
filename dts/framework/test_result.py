@@ -7,7 +7,7 @@ r"""Record and process DTS results.
 The results are recorded in a hierarchical manner:
 
     * :class:`DTSResult` contains
-    * :class:`ExecutionResult` contains
+    * :class:`TestRunResult` contains
     * :class:`BuildTargetResult` contains
     * :class:`TestSuiteResult` contains
     * :class:`TestCaseResult`
@@ -25,7 +25,11 @@ variable modify the directory where the files with results will be stored.
 
 import os.path
 from collections.abc import MutableSequence
+from dataclasses import dataclass, field
 from enum import Enum, auto
+from typing import Union
+
+from framework.testbed_model.capability import Capability
 
 from .config import (
     OS,
@@ -34,12 +38,89 @@ from .config import (
     BuildTargetInfo,
     Compiler,
     CPUType,
-    NodeConfiguration,
     NodeInfo,
+    TestRunConfiguration,
+    TestSuiteConfig,
 )
 from .exception import DTSError, ErrorSeverity
-from .logger import DTSLOG
+from .logger import DTSLogger
 from .settings import SETTINGS
+from .test_suite import TestCase, TestSuite
+
+
+@dataclass(slots=True, frozen=True)
+class TestSuiteWithCases:
+    """A test suite class with test case methods.
+
+    An auxiliary class holding a test case class with test case methods. The intended use of this
+    class is to hold a subset of test cases (which could be all test cases) because we don't have
+    all the data to instantiate the class at the point of inspection. The knowledge of this subset
+    is needed in case an error occurs before the class is instantiated and we need to record
+    which test cases were blocked by the error.
+
+    Attributes:
+        test_suite_class: The test suite class.
+        test_cases: The test case methods.
+        required_capabilities: The combined required capabilities of both the test suite
+            and the subset of test cases.
+    """
+
+    test_suite_class: type[TestSuite]
+    test_cases: list[type[TestCase]]
+    required_capabilities: set[Capability] = field(default_factory=set, init=False)
+
+    def __post_init__(self):
+        """Gather the required capabilities of the test suite and all test cases."""
+        for test_object in [self.test_suite_class] + self.test_cases:
+            self.required_capabilities.update(test_object.required_capabilities)
+
+    def create_config(self) -> TestSuiteConfig:
+        """Generate a :class:`TestSuiteConfig` from the stored test suite with test cases.
+
+        Returns:
+            The :class:`TestSuiteConfig` representation.
+        """
+        return TestSuiteConfig(
+            test_suite=self.test_suite_class.__name__,
+            test_cases=[test_case.__name__ for test_case in self.test_cases],
+        )
+
+    def mark_skip_unsupported(self, supported_capabilities: set[Capability]) -> None:
+        """Mark the test suite and test cases to be skipped.
+
+        The mark is applied if object to be skipped requires any capabilities and at least one of
+        them is not among `supported_capabilities`.
+
+        Args:
+            supported_capabilities: The supported capabilities.
+        """
+        for test_object in [self.test_suite_class, *self.test_cases]:
+            capabilities_not_supported = test_object.required_capabilities - supported_capabilities
+            if capabilities_not_supported:
+                test_object.skip = True
+                capability_str = (
+                    "capability" if len(capabilities_not_supported) == 1 else "capabilities"
+                )
+                test_object.skip_reason = (
+                    f"Required {capability_str} '{capabilities_not_supported}' not found."
+                )
+        if not self.test_suite_class.skip:
+            if all(test_case.skip for test_case in self.test_cases):
+                self.test_suite_class.skip = True
+
+                self.test_suite_class.skip_reason = (
+                    "All test cases are marked to be skipped with reasons: "
+                    f"{' '.join(test_case.skip_reason for test_case in self.test_cases)}"
+                )
+
+    @property
+    def skip(self) -> bool:
+        """Skip the test suite if all test cases or the suite itself are to be skipped.
+
+        Returns:
+            :data:`True` if the test suite should be skipped, :data:`False` otherwise.
+        """
+        return all(test_case.skip for test_case in self.test_cases) or self.test_suite_class.skip
 
 
 class Result(Enum):
@@ -52,14 +133,16 @@ class Result(Enum):
     #:
     ERROR = auto()
     #:
+    BLOCK = auto()
+    #:
     SKIP = auto()
 
     def __bool__(self) -> bool:
-        """Only PASS is True."""
+        """Only :attr:`PASS` is True."""
         return self is self.PASS
 
 
-class FixtureResult(object):
+class FixtureResult:
     """A record that stores the result of a setup or a teardown.
 
     :attr:`~Result.FAIL` is a sensible default since it prevents false positives (which could happen
@@ -95,83 +178,36 @@ class FixtureResult(object):
         return bool(self.result)
 
 
-class Statistics(dict):
-    """How many test cases ended in which result state along some other basic information.
-
-    Subclassing :class:`dict` provides a convenient way to format the data.
-
-    The data are stored in the following keys:
-
-    * **PASS RATE** (:class:`int`) -- The FAIL/PASS ratio of all test cases.
-    * **DPDK VERSION** (:class:`str`) -- The tested DPDK version.
-    """
-
-    def __init__(self, dpdk_version: str | None):
-        """Extend the constructor with keys in which the data are stored.
-
-        Args:
-            dpdk_version: The version of tested DPDK.
-        """
-        super(Statistics, self).__init__()
-        for result in Result:
-            self[result.name] = 0
-        self["PASS RATE"] = 0.0
-        self["DPDK VERSION"] = dpdk_version
-
-    def __iadd__(self, other: Result) -> "Statistics":
-        """Add a Result to the final count.
-
-        Example:
-            stats: Statistics = Statistics()  # empty Statistics
-            stats += Result.PASS  # add a Result to `stats`
-
-        Args:
-            other: The Result to add to this statistics object.
-
-        Returns:
-            The modified statistics object.
-        """
-        self[other.name] += 1
-        self["PASS RATE"] = (
-            float(self[Result.PASS.name]) * 100 / sum(self[result.name] for result in Result)
-        )
-        return self
-
-    def __str__(self) -> str:
-        """Each line contains the formatted key = value pair."""
-        stats_str = ""
-        for key, value in self.items():
-            stats_str += f"{key:<12} = {value}\n"
-            # according to docs, we should use \n when writing to text files
-            # on all platforms
-        return stats_str
-
-
-class BaseResult(object):
+class BaseResult:
     """Common data and behavior of DTS results.
 
     Stores the results of the setup and teardown portions of the corresponding stage.
     The hierarchical nature of DTS results is captured recursively in an internal list.
-    A stage is each level in this particular hierarchy (pre-execution or the top-most level,
-    execution, build target, test suite and test case.)
+    A stage is each level in this particular hierarchy (pre-run or the top-most level,
+    test run, build target, test suite and test case.)
 
     Attributes:
         setup_result: The result of the setup of the particular stage.
         teardown_result: The results of the teardown of the particular stage.
+        child_results: The results of the descendants in the results hierarchy.
     """
 
     setup_result: FixtureResult
     teardown_result: FixtureResult
-    _inner_results: MutableSequence["BaseResult"]
+    child_results: MutableSequence["BaseResult"]
 
     def __init__(self):
         """Initialize the constructor."""
         self.setup_result = FixtureResult()
         self.teardown_result = FixtureResult()
-        self._inner_results = []
+        self.child_results = []
 
     def update_setup(self, result: Result, error: Exception | None = None) -> None:
         """Store the setup result.
+
+        If the result is :attr:`~Result.BLOCK`, :attr:`~Result.ERROR` or :attr:`~Result.FAIL`,
+        then the corresponding child results in result hierarchy
+        are also marked with :attr:`~Result.BLOCK`.
 
         Args:
             result: The result of the setup.
@@ -179,6 +215,17 @@ class BaseResult(object):
         """
         self.setup_result.result = result
         self.setup_result.error = error
+
+        if result != Result.PASS:
+            result_to_mark = Result.BLOCK if result != Result.SKIP else Result.SKIP
+            self.update_teardown(result_to_mark)
+            self._mark_results(result_to_mark)
+
+    def _mark_results(self, result) -> None:
+        """Mark the child results or the result of the level itself as `result`.
+
+        The marking of results should be done in overloaded methods.
+        """
 
     def update_teardown(self, result: Result, error: Exception | None = None) -> None:
         """Store the teardown result.
@@ -198,10 +245,8 @@ class BaseResult(object):
             errors.append(self.teardown_result.error)
         return errors
 
-    def _get_inner_errors(self) -> list[Exception]:
-        return [
-            error for inner_result in self._inner_results for error in inner_result.get_errors()
-        ]
+    def _get_child_errors(self) -> list[Exception]:
+        return [error for child_result in self.child_results for error in child_result.get_errors()]
 
     def get_errors(self) -> list[Exception]:
         """Compile errors from the whole result hierarchy.
@@ -209,214 +254,22 @@ class BaseResult(object):
         Returns:
             The errors from setup, teardown and all errors found in the whole result hierarchy.
         """
-        return self._get_setup_teardown_errors() + self._get_inner_errors()
+        return self._get_setup_teardown_errors() + self._get_child_errors()
 
-    def add_stats(self, statistics: Statistics) -> None:
+    def add_stats(self, statistics: "Statistics") -> None:
         """Collate stats from the whole result hierarchy.
 
         Args:
             statistics: The :class:`Statistics` object where the stats will be collated.
         """
-        for inner_result in self._inner_results:
-            inner_result.add_stats(statistics)
-
-
-class TestCaseResult(BaseResult, FixtureResult):
-    r"""The test case specific result.
-
-    Stores the result of the actual test case. This is done by adding an extra superclass
-    in :class:`FixtureResult`. The setup and teardown results are :class:`FixtureResult`\s and
-    the class is itself a record of the test case.
-
-    Attributes:
-        test_case_name: The test case name.
-    """
-
-    test_case_name: str
-
-    def __init__(self, test_case_name: str):
-        """Extend the constructor with `test_case_name`.
-
-        Args:
-            test_case_name: The test case's name.
-        """
-        super(TestCaseResult, self).__init__()
-        self.test_case_name = test_case_name
-
-    def update(self, result: Result, error: Exception | None = None) -> None:
-        """Update the test case result.
-
-        This updates the result of the test case itself and doesn't affect
-        the results of the setup and teardown steps in any way.
-
-        Args:
-            result: The result of the test case.
-            error: The error that occurred in case of a failure.
-        """
-        self.result = result
-        self.error = error
-
-    def _get_inner_errors(self) -> list[Exception]:
-        if self.error:
-            return [self.error]
-        return []
-
-    def add_stats(self, statistics: Statistics) -> None:
-        r"""Add the test case result to statistics.
-
-        The base method goes through the hierarchy recursively and this method is here to stop
-        the recursion, as the :class:`TestCaseResult`\s are the leaves of the hierarchy tree.
-
-        Args:
-            statistics: The :class:`Statistics` object where the stats will be added.
-        """
-        statistics += self.result
-
-    def __bool__(self) -> bool:
-        """The test case passed only if setup, teardown and the test case itself passed."""
-        return bool(self.setup_result) and bool(self.teardown_result) and bool(self.result)
-
-
-class TestSuiteResult(BaseResult):
-    """The test suite specific result.
-
-    The internal list stores the results of all test cases in a given test suite.
-
-    Attributes:
-        suite_name: The test suite name.
-    """
-
-    suite_name: str
-
-    def __init__(self, suite_name: str):
-        """Extend the constructor with `suite_name`.
-
-        Args:
-            suite_name: The test suite's name.
-        """
-        super(TestSuiteResult, self).__init__()
-        self.suite_name = suite_name
-
-    def add_test_case(self, test_case_name: str) -> TestCaseResult:
-        """Add and return the inner result (test case).
-
-        Returns:
-            The test case's result.
-        """
-        test_case_result = TestCaseResult(test_case_name)
-        self._inner_results.append(test_case_result)
-        return test_case_result
-
-
-class BuildTargetResult(BaseResult):
-    """The build target specific result.
-
-    The internal list stores the results of all test suites in a given build target.
-
-    Attributes:
-        arch: The DPDK build target architecture.
-        os: The DPDK build target operating system.
-        cpu: The DPDK build target CPU.
-        compiler: The DPDK build target compiler.
-        compiler_version: The DPDK build target compiler version.
-        dpdk_version: The built DPDK version.
-    """
-
-    arch: Architecture
-    os: OS
-    cpu: CPUType
-    compiler: Compiler
-    compiler_version: str | None
-    dpdk_version: str | None
-
-    def __init__(self, build_target: BuildTargetConfiguration):
-        """Extend the constructor with the `build_target`'s build target config.
-
-        Args:
-            build_target: The build target's test run configuration.
-        """
-        super(BuildTargetResult, self).__init__()
-        self.arch = build_target.arch
-        self.os = build_target.os
-        self.cpu = build_target.cpu
-        self.compiler = build_target.compiler
-        self.compiler_version = None
-        self.dpdk_version = None
-
-    def add_build_target_info(self, versions: BuildTargetInfo) -> None:
-        """Add information about the build target gathered at runtime.
-
-        Args:
-            versions: The additional information.
-        """
-        self.compiler_version = versions.compiler_version
-        self.dpdk_version = versions.dpdk_version
-
-    def add_test_suite(self, test_suite_name: str) -> TestSuiteResult:
-        """Add and return the inner result (test suite).
-
-        Returns:
-            The test suite's result.
-        """
-        test_suite_result = TestSuiteResult(test_suite_name)
-        self._inner_results.append(test_suite_result)
-        return test_suite_result
-
-
-class ExecutionResult(BaseResult):
-    """The execution specific result.
-
-    The internal list stores the results of all build targets in a given execution.
-
-    Attributes:
-        sut_node: The SUT node used in the execution.
-        sut_os_name: The operating system of the SUT node.
-        sut_os_version: The operating system version of the SUT node.
-        sut_kernel_version: The operating system kernel version of the SUT node.
-    """
-
-    sut_node: NodeConfiguration
-    sut_os_name: str
-    sut_os_version: str
-    sut_kernel_version: str
-
-    def __init__(self, sut_node: NodeConfiguration):
-        """Extend the constructor with the `sut_node`'s config.
-
-        Args:
-            sut_node: The SUT node's test run configuration used in the execution.
-        """
-        super(ExecutionResult, self).__init__()
-        self.sut_node = sut_node
-
-    def add_build_target(self, build_target: BuildTargetConfiguration) -> BuildTargetResult:
-        """Add and return the inner result (build target).
-
-        Args:
-            build_target: The build target's test run configuration.
-
-        Returns:
-            The build target's result.
-        """
-        build_target_result = BuildTargetResult(build_target)
-        self._inner_results.append(build_target_result)
-        return build_target_result
-
-    def add_sut_info(self, sut_info: NodeInfo) -> None:
-        """Add SUT information gathered at runtime.
-
-        Args:
-            sut_info: The additional SUT node information.
-        """
-        self.sut_os_name = sut_info.os_name
-        self.sut_os_version = sut_info.os_version
-        self.sut_kernel_version = sut_info.kernel_version
+        for child_result in self.child_results:
+            child_result.add_stats(statistics)
 
 
 class DTSResult(BaseResult):
     """Stores environment information and test results from a DTS run.
 
-        * Execution level information, such as testbed and the test suite list,
+        * Test run level information, such as testbed and the test suite list,
         * Build target level information, such as compiler, target OS and cpu,
         * Test suite and test case results,
         * All errors that are caught and recorded during DTS execution.
@@ -424,26 +277,26 @@ class DTSResult(BaseResult):
     The information is stored hierarchically. This is the first level of the hierarchy
     and as such is where the data form the whole hierarchy is collated or processed.
 
-    The internal list stores the results of all executions.
+    The internal list stores the results of all test runs.
 
     Attributes:
         dpdk_version: The DPDK version to record.
     """
 
     dpdk_version: str | None
-    _logger: DTSLOG
+    _logger: DTSLogger
     _errors: list[Exception]
     _return_code: ErrorSeverity
-    _stats_result: Statistics | None
+    _stats_result: Union["Statistics", None]
     _stats_filename: str
 
-    def __init__(self, logger: DTSLOG):
+    def __init__(self, logger: DTSLogger):
         """Extend the constructor with top-level specifics.
 
         Args:
             logger: The logger instance the whole result will use.
         """
-        super(DTSResult, self).__init__()
+        super().__init__()
         self.dpdk_version = None
         self._logger = logger
         self._errors = []
@@ -451,21 +304,21 @@ class DTSResult(BaseResult):
         self._stats_result = None
         self._stats_filename = os.path.join(SETTINGS.output_dir, "statistics.txt")
 
-    def add_execution(self, sut_node: NodeConfiguration) -> ExecutionResult:
-        """Add and return the inner result (execution).
+    def add_test_run(self, test_run_config: TestRunConfiguration) -> "TestRunResult":
+        """Add and return the child result (test run).
 
         Args:
-            sut_node: The SUT node's test run configuration.
+            test_run_config: A test run configuration.
 
         Returns:
-            The execution's result.
+            The test run's result.
         """
-        execution_result = ExecutionResult(sut_node)
-        self._inner_results.append(execution_result)
-        return execution_result
+        result = TestRunResult(test_run_config)
+        self.child_results.append(result)
+        return result
 
     def add_error(self, error: Exception) -> None:
-        """Record an error that occurred outside any execution.
+        """Record an error that occurred outside any test run.
 
         Args:
             error: The exception to record.
@@ -475,8 +328,8 @@ class DTSResult(BaseResult):
     def process(self) -> None:
         """Process the data after a whole DTS run.
 
-        The data is added to inner objects during runtime and this object is not updated
-        at that time. This requires us to process the inner data after it's all been gathered.
+        The data is added to child objects during runtime and this object is not updated
+        at that time. This requires us to process the child data after it's all been gathered.
 
         The processing gathers all errors and the statistics of test case results.
         """
@@ -506,3 +359,324 @@ class DTSResult(BaseResult):
                 self._return_code = error_return_code
 
         return int(self._return_code)
+
+
+class TestRunResult(BaseResult):
+    """The test run specific result.
+
+    The internal list stores the results of all build targets in a given test run.
+
+    Attributes:
+        sut_os_name: The operating system of the SUT node.
+        sut_os_version: The operating system version of the SUT node.
+        sut_kernel_version: The operating system kernel version of the SUT node.
+    """
+
+    sut_os_name: str
+    sut_os_version: str
+    sut_kernel_version: str
+    _config: TestRunConfiguration
+    _parent_result: DTSResult
+    _test_suites_with_cases: list[TestSuiteWithCases]
+
+    def __init__(self, test_run_config: TestRunConfiguration):
+        """Extend the constructor with the test run's config and DTSResult.
+
+        Args:
+            test_run_config: A test run configuration.
+        """
+        super().__init__()
+        self._config = test_run_config
+        self._test_suites_with_cases = []
+
+    def add_build_target(
+        self, build_target_config: BuildTargetConfiguration
+    ) -> "BuildTargetResult":
+        """Add and return the child result (build target).
+
+        Args:
+            build_target_config: The build target's test run configuration.
+
+        Returns:
+            The build target's result.
+        """
+        result = BuildTargetResult(
+            self._test_suites_with_cases,
+            build_target_config,
+        )
+        self.child_results.append(result)
+        return result
+
+    @property
+    def test_suites_with_cases(self) -> list[TestSuiteWithCases]:
+        """The test suites with test cases to be executed in this test run.
+
+        The test suites can only be assigned once.
+
+        Returns:
+            The list of test suites with test cases. If an error occurs between
+            the initialization of :class:`TestRunResult` and assigning test cases to the instance,
+            return an empty list, representing that we don't know what to execute.
+        """
+        return self._test_suites_with_cases
+
+    @test_suites_with_cases.setter
+    def test_suites_with_cases(self, test_suites_with_cases: list[TestSuiteWithCases]) -> None:
+        if self._test_suites_with_cases:
+            raise ValueError(
+                "Attempted to assign test suites to a test run result "
+                "which already has test suites."
+            )
+        self._test_suites_with_cases = test_suites_with_cases
+
+    def add_sut_info(self, sut_info: NodeInfo) -> None:
+        """Add SUT information gathered at runtime.
+
+        Args:
+            sut_info: The additional SUT node information.
+        """
+        self.sut_os_name = sut_info.os_name
+        self.sut_os_version = sut_info.os_version
+        self.sut_kernel_version = sut_info.kernel_version
+
+    def _mark_results(self, result) -> None:
+        """Mark the build target results as `result`."""
+        for build_target in self._config.build_targets:
+            child_result = self.add_build_target(build_target)
+            child_result.update_setup(result)
+
+
+class BuildTargetResult(BaseResult):
+    """The build target specific result.
+
+    The internal list stores the results of all test suites in a given build target.
+
+    Attributes:
+        arch: The DPDK build target architecture.
+        os: The DPDK build target operating system.
+        cpu: The DPDK build target CPU.
+        compiler: The DPDK build target compiler.
+        compiler_version: The DPDK build target compiler version.
+        dpdk_version: The built DPDK version.
+    """
+
+    arch: Architecture
+    os: OS
+    cpu: CPUType
+    compiler: Compiler
+    compiler_version: str | None
+    dpdk_version: str | None
+    _test_suites_with_cases: list[TestSuiteWithCases]
+
+    def __init__(
+        self,
+        test_suites_with_cases: list[TestSuiteWithCases],
+        build_target_config: BuildTargetConfiguration,
+    ):
+        """Extend the constructor with the build target's config and test suites with cases.
+
+        Args:
+            test_suites_with_cases: The test suites with test cases to be run in this build target.
+            build_target_config: The build target's test run configuration.
+        """
+        super().__init__()
+        self.arch = build_target_config.arch
+        self.os = build_target_config.os
+        self.cpu = build_target_config.cpu
+        self.compiler = build_target_config.compiler
+        self.compiler_version = None
+        self.dpdk_version = None
+        self._test_suites_with_cases = test_suites_with_cases
+
+    def add_test_suite(
+        self,
+        test_suite_with_cases: TestSuiteWithCases,
+    ) -> "TestSuiteResult":
+        """Add and return the child result (test suite).
+
+        Args:
+            test_suite_with_cases: The test suite with test cases.
+
+        Returns:
+            The test suite's result.
+        """
+        result = TestSuiteResult(test_suite_with_cases)
+        self.child_results.append(result)
+        return result
+
+    def add_build_target_info(self, versions: BuildTargetInfo) -> None:
+        """Add information about the build target gathered at runtime.
+
+        Args:
+            versions: The additional information.
+        """
+        self.compiler_version = versions.compiler_version
+        self.dpdk_version = versions.dpdk_version
+
+    def _mark_results(self, result) -> None:
+        """Mark the test suite results as `result`."""
+        for test_suite_with_cases in self._test_suites_with_cases:
+            child_result = self.add_test_suite(test_suite_with_cases)
+            child_result.update_setup(result)
+
+
+class TestSuiteResult(BaseResult):
+    """The test suite specific result.
+
+    The internal list stores the results of all test cases in a given test suite.
+
+    Attributes:
+        test_suite_name: The test suite name.
+    """
+
+    test_suite_name: str
+    _test_suite_with_cases: TestSuiteWithCases
+    _parent_result: BuildTargetResult
+    _child_configs: list[str]
+
+    def __init__(self, test_suite_with_cases: TestSuiteWithCases):
+        """Extend the constructor with test suite's config and BuildTargetResult.
+
+        Args:
+            test_suite_with_cases: The test suite with test cases.
+        """
+        super().__init__()
+        self.test_suite_name = test_suite_with_cases.test_suite_class.__name__
+        self._test_suite_with_cases = test_suite_with_cases
+
+    def add_test_case(self, test_case_name: str) -> "TestCaseResult":
+        """Add and return the child result (test case).
+
+        Args:
+            test_case_name: The name of the test case.
+
+        Returns:
+            The test case's result.
+        """
+        result = TestCaseResult(test_case_name)
+        self.child_results.append(result)
+        return result
+
+    def _mark_results(self, result) -> None:
+        """Mark the test case results as `result`."""
+        for test_case_method in self._test_suite_with_cases.test_cases:
+            child_result = self.add_test_case(test_case_method.__name__)
+            child_result.update_setup(result)
+
+
+class TestCaseResult(BaseResult, FixtureResult):
+    r"""The test case specific result.
+
+    Stores the result of the actual test case. This is done by adding an extra superclass
+    in :class:`FixtureResult`. The setup and teardown results are :class:`FixtureResult`\s and
+    the class is itself a record of the test case.
+
+    Attributes:
+        test_case_name: The test case name.
+    """
+
+    test_case_name: str
+
+    def __init__(self, test_case_name: str):
+        """Extend the constructor with test case's name and TestSuiteResult.
+
+        Args:
+            test_case_name: The test case's name.
+        """
+        super().__init__()
+        self.test_case_name = test_case_name
+
+    def update(self, result: Result, error: Exception | None = None) -> None:
+        """Update the test case result.
+
+        This updates the result of the test case itself and doesn't affect
+        the results of the setup and teardown steps in any way.
+
+        Args:
+            result: The result of the test case.
+            error: The error that occurred in case of a failure.
+        """
+        self.result = result
+        self.error = error
+
+    def _get_child_errors(self) -> list[Exception]:
+        if self.error:
+            return [self.error]
+        return []
+
+    def add_stats(self, statistics: "Statistics") -> None:
+        r"""Add the test case result to statistics.
+
+        The base method goes through the hierarchy recursively and this method is here to stop
+        the recursion, as the :class:`TestCaseResult`\s are the leaves of the hierarchy tree.
+
+        Args:
+            statistics: The :class:`Statistics` object where the stats will be added.
+        """
+        statistics += self.result
+
+    def _mark_results(self, result) -> None:
+        r"""Mark the result as `result`."""
+        self.update(result)
+
+    def __bool__(self) -> bool:
+        """The test case passed only if setup, teardown and the test case itself passed."""
+        return bool(self.setup_result) and bool(self.teardown_result) and bool(self.result)
+
+
+class Statistics(dict):
+    """How many test cases ended in which result state along some other basic information.
+
+    Subclassing :class:`dict` provides a convenient way to format the data.
+
+    The data are stored in the following keys:
+
+    * **PASS RATE** (:class:`int`) -- The :attr:`~Result.FAIL`/:attr:`~Result.PASS` ratio
+        of all test cases.
+    * **DPDK VERSION** (:class:`str`) -- The tested DPDK version.
+    """
+
+    def __init__(self, dpdk_version: str | None):
+        """Extend the constructor with keys in which the data are stored.
+
+        Args:
+            dpdk_version: The version of tested DPDK.
+        """
+        super().__init__()
+        for result in Result:
+            self[result.name] = 0
+        self["PASS RATE"] = 0.0
+        self["DPDK VERSION"] = dpdk_version
+
+    def __iadd__(self, other: Result) -> "Statistics":
+        """Add a :class:`Result` to the final count.
+
+        :attr:`~Result.SKIP` is not taken into account
+
+        Example:
+            stats: Statistics = Statistics()  # empty :class:`Statistics`
+            stats += Result.PASS  # add a :class:`Result` to `stats`
+
+        Args:
+            other: The :class:`Result` to add to this statistics object.
+
+        Returns:
+            The modified statistics object.
+        """
+        self[other.name] += 1
+        if other != Result.SKIP:
+            self["PASS RATE"] = (
+                float(self[Result.PASS.name])
+                * 100
+                / sum([self[result.name] for result in Result if result != Result.SKIP])
+            )
+        return self
+
+    def __str__(self) -> str:
+        """Each line contains the formatted key = value pair."""
+        stats_str = ""
+        for key, value in self.items():
+            stats_str += f"{key:<12} = {value}\n"
+            # according to docs, we should use \n when writing to text files
+            # on all platforms
+        return stats_str

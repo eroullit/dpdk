@@ -10,28 +10,34 @@ only count the number of received packets.
 
 from abc import ABC, abstractmethod
 
-from scapy.packet import Packet  # type: ignore[import]
+from scapy.packet import Packet  # type: ignore[import-untyped]
 
 from framework.config import TrafficGeneratorConfig
-from framework.logger import DTSLOG, getLogger
+from framework.logger import DTSLogger, get_dts_logger
 from framework.testbed_model.node import Node
 from framework.testbed_model.port import Port
-from framework.utils import get_packet_summaries
+from framework.utils import MultiInheritanceBaseClass, get_packet_summaries
 
 
-class TrafficGenerator(ABC):
+class TrafficGenerator(MultiInheritanceBaseClass, ABC):
     """The base traffic generator.
 
     Exposes the common public methods of all traffic generators and defines private methods
-    that must implement the traffic generation logic in subclasses.
+    that must implement the traffic generation logic in subclasses. This class also extends from
+    :class:`framework.utils.MultiInheritanceBaseClass` to allow subclasses the ability to inherit
+    from multiple classes to fulfil the traffic generating functionality without breaking
+    single inheritance.
     """
 
     _config: TrafficGeneratorConfig
     _tg_node: Node
-    _logger: DTSLOG
+    _logger: DTSLogger
 
-    def __init__(self, tg_node: Node, config: TrafficGeneratorConfig):
+    def __init__(self, tg_node: Node, config: TrafficGeneratorConfig, **kwargs):
         """Initialize the traffic generator.
+
+        Additional keyword arguments can be passed through `kwargs` if needed for fulfilling other
+        constructors in the case of multiple inheritance.
 
         Args:
             tg_node: The traffic generator node where the created traffic generator will be running.
@@ -39,7 +45,8 @@ class TrafficGenerator(ABC):
         """
         self._config = config
         self._tg_node = tg_node
-        self._logger = getLogger(f"{self._tg_node.name} {self._config.traffic_generator_type}")
+        self._logger = get_dts_logger(f"{self._tg_node.name} {self._config.traffic_generator_type}")
+        super().__init__(tg_node, **kwargs)
 
     def send_packet(self, packet: Packet, port: Port) -> None:
         """Send `packet` and block until it is fully sent.

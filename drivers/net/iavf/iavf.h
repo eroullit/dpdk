@@ -114,9 +114,14 @@ struct iavf_ipsec_crypto_stats {
 	} ierrors;
 };
 
+struct iavf_mbuf_stats {
+	uint64_t tx_pkt_errors;
+};
+
 struct iavf_eth_xstats {
 	struct virtchnl_eth_stats eth_stats;
 	struct iavf_ipsec_crypto_stats ips_stats;
+	struct iavf_mbuf_stats mbuf_stats;
 };
 
 /* Structure that defines a VSI, associated with a adapter. */
@@ -233,8 +238,8 @@ struct iavf_info {
 	struct virtchnl_vlan_caps vlan_v2_caps;
 	uint64_t supported_rxdid;
 	uint8_t *proto_xtr; /* proto xtr type for all queues */
-	volatile enum virtchnl_ops pend_cmd; /* pending command not finished */
-	uint32_t pend_cmd_count;
+	volatile RTE_ATOMIC(enum virtchnl_ops) pend_cmd; /* pending command not finished */
+	RTE_ATOMIC(uint32_t) pend_cmd_count;
 	int cmd_retval; /* return value of the cmd response from PF */
 	uint8_t *aq_resp; /* buffer to store the adminq response from PF */
 
@@ -310,6 +315,7 @@ struct iavf_devargs {
 	uint32_t watchdog_period;
 	int auto_reset;
 	int no_poll_on_link_down;
+	uint64_t mbuf_check;
 };
 
 struct iavf_security_ctx;
@@ -353,6 +359,11 @@ enum iavf_tx_burst_type {
 	IAVF_TX_AVX512_CTX_OFFLOAD,
 };
 
+#define IAVF_MBUF_CHECK_F_TX_MBUF        (1ULL << 0)
+#define IAVF_MBUF_CHECK_F_TX_SIZE        (1ULL << 1)
+#define IAVF_MBUF_CHECK_F_TX_SEGMENT     (1ULL << 2)
+#define IAVF_MBUF_CHECK_F_TX_OFFLOAD     (1ULL << 3)
+
 /* Structure to store private data for each VF instance. */
 struct iavf_adapter {
 	struct iavf_hw hw;
@@ -364,7 +375,7 @@ struct iavf_adapter {
 	/* For vector PMD */
 	bool rx_vec_allowed;
 	bool tx_vec_allowed;
-	uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE] __rte_cache_min_aligned;
+	alignas(RTE_CACHE_LINE_MIN_SIZE) uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE];
 	bool stopped;
 	bool closed;
 	bool no_poll;
@@ -445,13 +456,13 @@ static inline int
 _atomic_set_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
 {
 	enum virtchnl_ops op_unk = VIRTCHNL_OP_UNKNOWN;
-	int ret = __atomic_compare_exchange(&vf->pend_cmd, &op_unk, &ops,
-			0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE);
+	int ret = rte_atomic_compare_exchange_strong_explicit(&vf->pend_cmd, &op_unk, ops,
+			rte_memory_order_acquire, rte_memory_order_acquire);
 
 	if (!ret)
 		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
 
-	__atomic_store_n(&vf->pend_cmd_count, 1, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&vf->pend_cmd_count, 1, rte_memory_order_relaxed);
 
 	return !ret;
 }
@@ -461,13 +472,13 @@ static inline int
 _atomic_set_async_response_cmd(struct iavf_info *vf, enum virtchnl_ops ops)
 {
 	enum virtchnl_ops op_unk = VIRTCHNL_OP_UNKNOWN;
-	int ret = __atomic_compare_exchange(&vf->pend_cmd, &op_unk, &ops,
-			0, __ATOMIC_ACQUIRE, __ATOMIC_ACQUIRE);
+	int ret = rte_atomic_compare_exchange_strong_explicit(&vf->pend_cmd, &op_unk, ops,
+			rte_memory_order_acquire, rte_memory_order_acquire);
 
 	if (!ret)
 		PMD_DRV_LOG(ERR, "There is incomplete cmd %d", vf->pend_cmd);
 
-	__atomic_store_n(&vf->pend_cmd_count, 2, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&vf->pend_cmd_count, 2, rte_memory_order_relaxed);
 
 	return !ret;
 }

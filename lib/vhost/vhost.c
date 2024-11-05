@@ -55,6 +55,7 @@ static const struct vhost_vq_stats_name_off vhost_vq_stat_strings[] = {
 	{"iotlb_misses",           offsetof(struct vhost_virtqueue, stats.iotlb_misses)},
 	{"inflight_submitted",     offsetof(struct vhost_virtqueue, stats.inflight_submitted)},
 	{"inflight_completed",     offsetof(struct vhost_virtqueue, stats.inflight_completed)},
+	{"mbuf_alloc_failed",      offsetof(struct vhost_virtqueue, stats.mbuf_alloc_failed)},
 };
 
 #define VHOST_NB_VQ_STATS RTE_DIM(vhost_vq_stat_strings)
@@ -1711,9 +1712,11 @@ rte_vhost_set_vring_base(int vid, uint16_t queue_id,
 		vq->avail_wrap_counter = !!(last_avail_idx & (1 << 15));
 		vq->last_used_idx = last_used_idx & 0x7fff;
 		vq->used_wrap_counter = !!(last_used_idx & (1 << 15));
+		vhost_virtqueue_reconnect_log_packed(vq);
 	} else {
 		vq->last_avail_idx = last_avail_idx;
 		vq->last_used_idx = last_used_idx;
+		vhost_virtqueue_reconnect_log_split(vq);
 	}
 
 	return 0;

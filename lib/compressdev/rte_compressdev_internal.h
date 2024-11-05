@@ -5,16 +5,16 @@
 #ifndef _RTE_COMPRESSDEV_INTERNAL_H_
 #define _RTE_COMPRESSDEV_INTERNAL_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 /* rte_compressdev_internal.h
  * This file holds Compressdev private data structures.
  */
 #include <rte_log.h>
 
 #include "rte_comp.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define RTE_COMPRESSDEV_NAME_MAX_LEN	(64)
 /**< Max length of name of comp PMD */
@@ -23,8 +23,8 @@ extern "C" {
 extern int compressdev_logtype;
 #define RTE_LOGTYPE_COMPRESSDEV compressdev_logtype
 
-#define COMPRESSDEV_LOG(level, fmt, args...) \
-	RTE_LOG_LINE(level, COMPRESSDEV, "%s(): " fmt, __func__, ## args)
+#define COMPRESSDEV_LOG(level, ...) \
+	RTE_LOG_LINE_PREFIX(level, COMPRESSDEV, "%s(): ", __func__, __VA_ARGS__)
 
 /**
  * Dequeue processed packets from queue pair of a device.
@@ -69,7 +69,7 @@ typedef uint16_t (*compressdev_enqueue_pkt_burst_t)(void *qp,
 		struct rte_comp_op **ops, uint16_t nb_ops);
 
 /** The data structure associated with each comp device. */
-struct rte_compressdev {
+struct __rte_cache_aligned rte_compressdev {
 	compressdev_dequeue_pkt_burst_t dequeue_burst;
 	/**< Pointer to PMD receive function */
 	compressdev_enqueue_pkt_burst_t enqueue_burst;
@@ -87,7 +87,7 @@ struct rte_compressdev {
 	__extension__
 	uint8_t attached : 1;
 	/**< Flag indicating the device is attached */
-} __rte_cache_aligned;
+};
 
 /**
  *
@@ -96,7 +96,7 @@ struct rte_compressdev {
  * This structure is safe to place in shared memory to be common among
  * different processes in a multi-process configuration.
  */
-struct rte_compressdev_data {
+struct __rte_cache_aligned rte_compressdev_data {
 	uint8_t dev_id;
 	/**< Compress device identifier */
 	int socket_id;
@@ -115,7 +115,7 @@ struct rte_compressdev_data {
 
 	void *dev_private;
 	/**< PMD-specific private data */
-} __rte_cache_aligned;
+};
 
 #ifdef __cplusplus
 }

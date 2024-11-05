@@ -1158,6 +1158,12 @@ mlx5_dev_start(struct rte_eth_dev *dev)
 	DRV_LOG(DEBUG, "port %u starting device", dev->data->port_id);
 #ifdef HAVE_MLX5_HWS_SUPPORT
 	if (priv->sh->config.dv_flow_en == 2) {
+		/*If previous configuration does not exist. */
+		if (!(priv->dr_ctx)) {
+			ret = flow_hw_init(dev, NULL);
+			if (ret)
+				return ret;
+		}
 		/* If there is no E-Switch, then there are no start/stop order limitations. */
 		if (!priv->sh->config.dv_esw_en)
 			goto continue_dev_start;
@@ -1440,12 +1446,7 @@ continue_dev_stop:
 	mlx5_mp_os_req_stop_rxtx(dev);
 	rte_delay_us_sleep(1000 * priv->rxqs_n);
 	DRV_LOG(DEBUG, "port %u stopping device", dev->data->port_id);
-	if (priv->sh->config.dv_flow_en == 2) {
-		if (!__atomic_load_n(&priv->hws_mark_refcnt, __ATOMIC_RELAXED))
-			flow_hw_rxq_flag_set(dev, false);
-	} else {
-		mlx5_flow_stop_default(dev);
-	}
+	mlx5_flow_stop_default(dev);
 	/* Control flows for default traffic can be removed firstly. */
 	mlx5_traffic_disable(dev);
 	/* All RX queue flags will be cleared in the flush interface. */
@@ -1498,7 +1499,9 @@ mlx5_traffic_enable_hws(struct rte_eth_dev *dev)
 		if (!txq)
 			continue;
 		queue = mlx5_txq_get_sqn(txq);
-		if ((priv->representor || priv->master) && config->dv_esw_en) {
+		if ((priv->representor || priv->master) &&
+		    config->dv_esw_en &&
+		    config->fdb_def_rule) {
 			if (mlx5_flow_hw_esw_create_sq_miss_flow(dev, queue, false)) {
 				mlx5_txq_release(dev, i);
 				goto error;
@@ -1524,7 +1527,7 @@ mlx5_traffic_enable_hws(struct rte_eth_dev *dev)
 	}
 	if (priv->isolated)
 		return 0;
-	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0)
+	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0 && priv->master)
 		if (mlx5_flow_hw_lacp_rx_flow(dev))
 			goto error;
 	if (dev->data->promiscuous)
@@ -1560,23 +1563,23 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct rte_flow_item_eth bcast = {
-		.hdr.dst_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
 	};
 	struct rte_flow_item_eth ipv6_multi_spec = {
-		.hdr.dst_addr.addr_bytes = "\x33\x33\x00\x00\x00\x00",
+		.hdr.dst_addr.addr_bytes = { 0x33, 0x33, 0x00, 0x00, 0x00, 0x00 },
 	};
 	struct rte_flow_item_eth ipv6_multi_mask = {
-		.hdr.dst_addr.addr_bytes = "\xff\xff\x00\x00\x00\x00",
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0x00, 0x00, 0x00, 0x00 },
 	};
 	struct rte_flow_item_eth unicast = {
-		.hdr.src_addr.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+		.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 	};
 	struct rte_flow_item_eth unicast_mask = {
-		.hdr.dst_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
 	};
 	const unsigned int vlan_filter_n = priv->vlan_filter_n;
 	const struct rte_ether_addr cmp = {
-		.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+		.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 	};
 	unsigned int i;
 	unsigned int j;
@@ -1632,21 +1635,21 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 		DRV_LOG(INFO, "port %u FDB default rule is disabled",
 			dev->data->port_id);
 	}
-	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0) {
+	if (!priv->sh->config.lacp_by_user && priv->pf_bond >= 0 && priv->master) {
 		ret = mlx5_flow_lacp_miss(dev);
 		if (ret)
 			DRV_LOG(INFO, "port %u LACP rule cannot be created - "
 				"forward LACP to kernel.", dev->data->port_id);
 		else
-			DRV_LOG(INFO, "LACP traffic will be missed in port %u."
-				, dev->data->port_id);
+			DRV_LOG(INFO, "LACP traffic will be missed in port %u.",
+				dev->data->port_id);
 	}
 	if (priv->isolated)
 		return 0;
 	if (dev->data->promiscuous) {
 		struct rte_flow_item_eth promisc = {
-			.hdr.dst_addr.addr_bytes = "\x00\x00\x00\x00\x00\x00",
-			.hdr.src_addr.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+			.hdr.dst_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 			.hdr.ether_type = 0,
 		};
 
@@ -1656,8 +1659,8 @@ mlx5_traffic_enable(struct rte_eth_dev *dev)
 	}
 	if (dev->data->all_multicast) {
 		struct rte_flow_item_eth multicast = {
-			.hdr.dst_addr.addr_bytes = "\x01\x00\x00\x00\x00\x00",
-			.hdr.src_addr.addr_bytes = "\x00\x00\x00\x00\x00\x00",
+			.hdr.dst_addr.addr_bytes = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 },
+			.hdr.src_addr.addr_bytes = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 			.hdr.ether_type = 0,
 		};
 

@@ -577,21 +577,23 @@ static uint64_t
 process_outer_cksums(void *outer_l3_hdr, struct testpmd_offload_info *info,
 	uint64_t tx_offloads, int tso_enabled, struct rte_mbuf *m)
 {
-	struct rte_ipv4_hdr *ipv4_hdr = outer_l3_hdr;
-	struct rte_ipv6_hdr *ipv6_hdr = outer_l3_hdr;
 	struct rte_udp_hdr *udp_hdr;
 	uint64_t ol_flags = 0;
 
 	if (info->outer_ethertype == _htons(RTE_ETHER_TYPE_IPV4)) {
-		ipv4_hdr->hdr_checksum = 0;
 		ol_flags |= RTE_MBUF_F_TX_OUTER_IPV4;
 
-		if (tx_offloads	& RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM)
+		if (tx_offloads	& RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM) {
 			ol_flags |= RTE_MBUF_F_TX_OUTER_IP_CKSUM;
-		else
+		} else {
+			struct rte_ipv4_hdr *ipv4_hdr = outer_l3_hdr;
+
+			ipv4_hdr->hdr_checksum = 0;
 			ipv4_hdr->hdr_checksum = rte_ipv4_cksum(ipv4_hdr);
-	} else
+		}
+	} else {
 		ol_flags |= RTE_MBUF_F_TX_OUTER_IPV6;
+	}
 
 	if (info->outer_l4_proto != IPPROTO_UDP)
 		return ol_flags;
@@ -606,30 +608,17 @@ process_outer_cksums(void *outer_l3_hdr, struct testpmd_offload_info *info,
 
 	/* Skip SW outer UDP checksum generation if HW supports it */
 	if (tx_offloads & RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM) {
-		if (info->outer_ethertype == _htons(RTE_ETHER_TYPE_IPV4))
-			udp_hdr->dgram_cksum
-				= rte_ipv4_phdr_cksum(ipv4_hdr, ol_flags);
-		else
-			udp_hdr->dgram_cksum
-				= rte_ipv6_phdr_cksum(ipv6_hdr, ol_flags);
-
 		ol_flags |= RTE_MBUF_F_TX_OUTER_UDP_CKSUM;
 		return ol_flags;
 	}
 
-	/* outer UDP checksum is done in software. In the other side, for
-	 * UDP tunneling, like VXLAN or Geneve, outer UDP checksum can be
-	 * set to zero.
+	/* Outer UDP checksum is done in software.
 	 *
 	 * If a packet will be TSOed into small packets by NIC, we cannot
 	 * set/calculate a non-zero checksum, because it will be a wrong
 	 * value after the packet be split into several small packets.
 	 */
-	if (tso_enabled)
-		udp_hdr->dgram_cksum = 0;
-
-	/* do not recalculate udp cksum if it was 0 */
-	if (udp_hdr->dgram_cksum != 0) {
+	if (!tso_enabled && udp_hdr->dgram_cksum != 0) {
 		udp_hdr->dgram_cksum = 0;
 		udp_hdr->dgram_cksum = get_udptcp_checksum(m, outer_l3_hdr,
 					info->outer_l2_len + info->outer_l3_len,
@@ -870,16 +859,28 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 
 	/* receive a burst of packet */
 	nb_rx = common_fwd_stream_receive(fs, pkts_burst, nb_pkt_per_burst);
-	if (unlikely(nb_rx == 0))
+	if (unlikely(nb_rx == 0)) {
+#ifndef RTE_LIB_GRO
 		return false;
+#else
+		gro_enable = gro_ports[fs->rx_port].enable;
+		/*
+		 * Check if packets need to be flushed in the GRO context
+		 * due to a timeout.
+		 *
+		 * Continue only in GRO heavyweight mode and if there are
+		 * packets in the GRO context.
+		 */
+		if (!gro_enable || (gro_flush_cycles == GRO_DEFAULT_FLUSH_CYCLES) ||
+			(rte_gro_get_pkt_count(current_fwd_lcore()->gro_ctx) == 0))
+			return false;
+#endif
+	}
 
 	rx_bad_ip_csum = 0;
 	rx_bad_l4_csum = 0;
 	rx_bad_outer_l4_csum = 0;
 	rx_bad_outer_ip_csum = 0;
-#ifdef RTE_LIB_GRO
-	gro_enable = gro_ports[fs->rx_port].enable;
-#endif
 
 	txp = &ports[fs->tx_port];
 	tx_offloads = txp->dev_conf.txmode.offloads;
@@ -1110,6 +1111,7 @@ tunnel_update:
 	}
 
 #ifdef RTE_LIB_GRO
+	gro_enable = gro_ports[fs->rx_port].enable;
 	if (unlikely(gro_enable)) {
 		if (gro_flush_cycles == GRO_DEFAULT_FLUSH_CYCLES) {
 			nb_rx = rte_gro_reassemble_burst(pkts_burst, nb_rx,
@@ -1129,6 +1131,8 @@ tunnel_update:
 						gro_pkts_num);
 				fs->gro_times = 0;
 			}
+			if (nb_rx == 0)
+				return false;
 		}
 
 		pkts_ip_csum_recalc(pkts_burst, nb_rx, tx_offloads);

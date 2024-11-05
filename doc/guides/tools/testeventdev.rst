@@ -124,6 +124,10 @@ The following are the application command-line options:
 
         Use crypto device as producer.
 
+* ``--prod_type_dmadev``
+
+        Use DMA device as producer.
+
 * ``--timer_tick_nsec``
 
        Used to dictate number of nano seconds between bucket traversal of the
@@ -156,6 +160,10 @@ The following are the application command-line options:
 
         Set crypto adapter mode. Use 0 for OP_NEW (default) and 1 for
         OP_FORWARD mode.
+
+* ``--dma_adptr_mode``
+
+        Set dma adapter mode. DMA adapter supports only OP_FORWARD mode.
 
 * ``--crypto_op_type``
 
@@ -227,6 +235,13 @@ The following are the application command-line options:
 
        Packet size to use for `--tx_first`.
        Only applicable for `pipeline_atq` and `pipeline_queue` tests.
+
+* ``--preschedule``
+
+       Enable pre-scheduling of events.
+       0 - Disable pre-scheduling.
+       1 - Enable pre-scheduling.
+       2 - Enable pre-schedule with adaptive mode (Default).
 
 
 Eventdev Tests
@@ -308,7 +323,7 @@ Example command to run order queue test:
 
 .. code-block:: console
 
-   sudo <build_dir>/app/dpdk-test-eventdev --vdev=event_sw0 -- \
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0x1f -s 0x10 --vdev=event_sw0 -- \
                 --test=order_queue --plcores 1 --wlcores 2,3
 
 
@@ -371,7 +386,7 @@ Example command to run order ``all types queue`` test:
 
 .. code-block:: console
 
-   sudo <build_dir>/app/dpdk-test-eventdev --vdev=event_octeontx -- \
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0x1f -- \
                         --test=order_atq --plcores 1 --wlcores 2,3
 
 
@@ -459,6 +474,7 @@ Supported application command line options are following::
         --prod_type_timerdev_burst
         --prod_type_timerdev
         --prod_type_cryptodev
+        --prod_type_dmadev
         --prod_enq_burst_sz
         --timer_tick_nsec
         --max_tmo_nsec
@@ -467,6 +483,7 @@ Supported application command line options are following::
         --nb_timer_adptrs
         --deq_tmo_nsec
         --crypto_adptr_mode
+        --dma_adptr_mode
 
 Example
 ^^^^^^^
@@ -475,14 +492,14 @@ Example command to run perf queue test:
 
 .. code-block:: console
 
-   sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -s 0x1 --vdev=event_sw0 -- \
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -s 0x2 --vdev=event_sw0 -- \
         --test=perf_queue --plcores=2 --wlcore=3 --stlist=p --nb_pkts=0
 
 Example command to run perf queue test with producer enqueuing a burst of events:
 
 .. code-block:: console
 
-   sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -s 0x1 --vdev=event_sw0 -- \
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -s 0x2 --vdev=event_sw0 -- \
         --test=perf_queue --plcores=2 --wlcore=3 --stlist=p --nb_pkts=0 \
         --prod_enq_burst_sz=32
 
@@ -490,16 +507,24 @@ Example command to run perf queue test with ethernet ports:
 
 .. code-block:: console
 
-   sudo build/app/dpdk-test-eventdev --vdev=event_sw0 -- \
+   sudo build/app/dpdk-test-eventdev -c 0xf -s 0x2 --vdev=event_sw0 -- \
         --test=perf_queue --plcores=2 --wlcore=3 --stlist=p --prod_type_ethdev
 
 Example command to run perf queue test with event timer adapter:
 
 .. code-block:: console
 
-   sudo  <build_dir>/app/dpdk-test-eventdev --vdev="event_octeontx" -- \
-                --wlcores 4 --plcores 12 --test perf_queue --stlist=a \
+   sudo  <build_dir>/app/dpdk-test-eventdev -c 0xfff1 \
+                -- --wlcores 4 --plcores 12 --test perf_queue --stlist=a \
                 --prod_type_timerdev --fwd_latency
+
+Example command to run perf queue test with event DMA adapter:
+
+.. code-block:: console
+
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0x1f -s 0x2 \
+               -- --test=perf_queue --plcores= 2 --wlcore=3 --stlist=a \
+               --prod_type_dmadev --dma_adptr_mode=1
 
 PERF_ATQ Test
 ~~~~~~~~~~~~~~~
@@ -570,6 +595,7 @@ Supported application command line options are following::
         --prod_type_timerdev_burst
         --prod_type_timerdev
         --prod_type_cryptodev
+        --prod_type_dmadev
         --timer_tick_nsec
         --max_tmo_nsec
         --expiry_nsec
@@ -577,6 +603,7 @@ Supported application command line options are following::
         --nb_timer_adptrs
         --deq_tmo_nsec
         --crypto_adptr_mode
+        --dma_adptr_mode
 
 Example
 ^^^^^^^
@@ -585,17 +612,24 @@ Example command to run perf ``all types queue`` test:
 
 .. code-block:: console
 
-   sudo <build_dir>/app/dpdk-test-eventdev --vdev=event_octeontx -- \
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -- \
                 --test=perf_atq --plcores=2 --wlcore=3 --stlist=p --nb_pkts=0
 
 Example command to run perf ``all types queue`` test with event timer adapter:
 
 .. code-block:: console
 
-   sudo  <build_dir>/app/dpdk-test-eventdev --vdev="event_octeontx" -- \
-                --wlcores 4 --plcores 12 --test perf_atq --verbose 20 \
+   sudo  <build_dir>/app/dpdk-test-eventdev -c 0xfff1 \
+                -- --wlcores 4 --plcores 12 --test perf_atq --verbose 20 \
                 --stlist=a --prod_type_timerdev --fwd_latency
 
+Example command to run perf atq test with event DMA adapter:
+
+.. code-block:: console
+
+   sudo <build_dir>/app/dpdk-test-eventdev -c 0x1f -s 0x2 \
+               -- --test=perf_atq --plcores= 2 --wlcore=3 --stlist=a \
+               --prod_type_dmadev --dma_adptr_mode=1
 
 PIPELINE_QUEUE Test
 ~~~~~~~~~~~~~~~~~~~
@@ -817,13 +851,13 @@ Example command to run pipeline atq test:
 
 .. code-block:: console
 
-    sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -s 0x8 --vdev=event_sw0 -- \
+    sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -- \
         --test=pipeline_atq --wlcore=1 --prod_type_ethdev --stlist=a
 
 Example command to run pipeline atq test with vector events:
 
 .. code-block:: console
 
-    sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -s 0x8 --vdev=event_sw0 -- \
+    sudo <build_dir>/app/dpdk-test-eventdev -c 0xf -- \
         --test=pipeline_atq --wlcore=1 --prod_type_ethdev --stlist=a \
         --enable_vector  --vector_size 512

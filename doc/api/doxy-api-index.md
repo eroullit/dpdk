@@ -49,6 +49,7 @@ The public API headers are grouped by topics:
   [iavf](@ref rte_pmd_iavf.h),
   [bnxt](@ref rte_pmd_bnxt.h),
   [cnxk](@ref rte_pmd_cnxk.h),
+  [cnxk_crypto](@ref rte_pmd_cnxk_crypto.h),
   [cnxk_eventdev](@ref rte_pmd_cnxk_eventdev.h),
   [cnxk_mempool](@ref rte_pmd_cnxk_mempool.h),
   [dpaa](@ref rte_pmd_dpaa.h),
@@ -102,6 +103,7 @@ The public API headers are grouped by topics:
   [service cores](@ref rte_service.h),
   [keepalive](@ref rte_keepalive.h),
   [power/freq](@ref rte_power.h),
+  [power/uncore](@ref rte_power_uncore.h),
   [PMD power](@ref rte_power_pmd_mgmt.h)
 
 - **layers**:
@@ -115,7 +117,8 @@ The public API headers are grouped by topics:
   [IPsec group](@ref rte_ipsec_group.h),
   [IPsec SA](@ref rte_ipsec_sa.h),
   [IPsec SAD](@ref rte_ipsec_sad.h),
-  [IP](@ref rte_ip.h),
+  [IPv4](@ref rte_ip4.h),
+  [IPv6](@ref rte_ip6.h),
   [frag/reass](@ref rte_ip_frag.h),
   [UDP](@ref rte_udp.h),
   [SCTP](@ref rte_sctp.h),
@@ -172,6 +175,7 @@ The public API headers are grouped by topics:
   [ring](@ref rte_ring.h),
   [stack](@ref rte_stack.h),
   [tailq](@ref rte_tailq.h),
+  [bitset](@ref rte_bitset.h),
   [bitmap](@ref rte_bitmap.h)
 
 - **packet framework**:
@@ -218,8 +222,11 @@ The public API headers are grouped by topics:
   [bitops](@ref rte_bitops.h),
   [approx fraction](@ref rte_approx.h),
   [random](@ref rte_random.h),
+  [checksum](@ref rte_cksum.h),
   [config file](@ref rte_cfgfile.h),
   [key/value args](@ref rte_kvargs.h),
+  [argument parsing](@ref rte_argparse.h),
+  [ptr_compress](@ref rte_ptr_compress.h),
   [string](@ref rte_string_fns.h),
   [thread](@ref rte_thread.h)
 
@@ -241,3 +248,6 @@ The public API headers are grouped by topics:
   [experimental APIs](@ref rte_compat.h),
   [ABI versioning](@ref rte_function_versioning.h),
   [version](@ref rte_version.h)
+
+- **tests**:
+  [**DTS**](@dts_api_main_page)

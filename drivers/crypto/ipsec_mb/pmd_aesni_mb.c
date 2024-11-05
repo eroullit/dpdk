@@ -8,11 +8,14 @@
 
 RTE_DEFINE_PER_LCORE(pid_t, pid);
 
+uint8_t pmd_driver_id_aesni_mb;
+
 struct aesni_mb_op_buf_data {
 	struct rte_mbuf *m;
 	uint32_t offset;
 };
 
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 /**
  * Calculate the authentication pre-computes
  *
@@ -32,8 +35,8 @@ calculate_auth_precomputes(hash_one_block_t one_block_hash,
 {
 	uint32_t i, length;
 
-	uint8_t ipad_buf[blocksize] __rte_aligned(16);
-	uint8_t opad_buf[blocksize] __rte_aligned(16);
+	alignas(16) uint8_t ipad_buf[blocksize];
+	alignas(16) uint8_t opad_buf[blocksize];
 
 	/* Setup inner and outer pads */
 	memset(ipad_buf, HMAC_IPAD_VALUE, blocksize);
@@ -55,6 +58,7 @@ calculate_auth_precomputes(hash_one_block_t one_block_hash,
 	memset(ipad_buf, 0, blocksize);
 	memset(opad_buf, 0, blocksize);
 }
+#endif
 
 static inline int
 is_aead_algo(IMB_HASH_ALG hash_alg, IMB_CIPHER_MODE cipher_mode)
@@ -66,12 +70,14 @@ is_aead_algo(IMB_HASH_ALG hash_alg, IMB_CIPHER_MODE cipher_mode)
 
 /** Set session authentication parameters */
 static int
-aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
+aesni_mb_set_session_auth_parameters(IMB_MGR *mb_mgr,
 		struct aesni_mb_session *sess,
 		const struct rte_crypto_sym_xform *xform)
 {
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 	hash_one_block_t hash_oneblock_fn = NULL;
 	unsigned int key_larger_block_size = 0;
+#endif
 	uint8_t hashed_key[HMAC_MAX_BLOCK_SIZE] = { 0 };
 	uint32_t auth_precompute = 1;
 
@@ -107,7 +113,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		uint16_t xcbc_mac_digest_len =
 			get_truncated_digest_byte_length(IMB_AUTH_AES_XCBC);
 		if (sess->auth.req_digest_len != xcbc_mac_digest_len) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		sess->template_job.auth_tag_output_len_in_bytes = sess->auth.req_digest_len;
@@ -130,7 +136,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 				get_digest_byte_length(IMB_AUTH_AES_CMAC);
 
 		if (sess->auth.req_digest_len > cmac_digest_len) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		/*
@@ -165,7 +171,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 
 		if (sess->auth.req_digest_len >
 			get_digest_byte_length(IMB_AUTH_AES_GMAC)) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		sess->template_job.auth_tag_output_len_in_bytes = sess->auth.req_digest_len;
@@ -192,7 +198,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 			sess->template_job.key_len_in_bytes = IMB_KEY_256_BYTES;
 			break;
 		default:
-			IPSEC_MB_LOG(ERR, "Invalid authentication key length\n");
+			IPSEC_MB_LOG(ERR, "Invalid authentication key length");
 			return -EINVAL;
 		}
 		sess->template_job.u.GMAC._key = &sess->cipher.gcm_key;
@@ -205,7 +211,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 			sess->template_job.hash_alg = IMB_AUTH_ZUC_EIA3_BITLEN;
 
 			if (sess->auth.req_digest_len != 4) {
-				IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+				IPSEC_MB_LOG(ERR, "Invalid digest size");
 				return -EINVAL;
 			}
 		} else if (xform->auth.key.length == 32) {
@@ -217,11 +223,11 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 #else
 			if (sess->auth.req_digest_len != 4) {
 #endif
-				IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+				IPSEC_MB_LOG(ERR, "Invalid digest size");
 				return -EINVAL;
 			}
 		} else {
-			IPSEC_MB_LOG(ERR, "Invalid authentication key length\n");
+			IPSEC_MB_LOG(ERR, "Invalid authentication key length");
 			return -EINVAL;
 		}
 
@@ -237,7 +243,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 			get_truncated_digest_byte_length(
 						IMB_AUTH_SNOW3G_UIA2_BITLEN);
 		if (sess->auth.req_digest_len != snow3g_uia2_digest_len) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		sess->template_job.auth_tag_output_len_in_bytes = sess->auth.req_digest_len;
@@ -252,7 +258,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		uint16_t kasumi_f9_digest_len =
 			get_truncated_digest_byte_length(IMB_AUTH_KASUMI_UIA1);
 		if (sess->auth.req_digest_len != kasumi_f9_digest_len) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		sess->template_job.auth_tag_output_len_in_bytes = sess->auth.req_digest_len;
@@ -267,18 +273,24 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 	switch (xform->auth.algo) {
 	case RTE_CRYPTO_AUTH_MD5_HMAC:
 		sess->template_job.hash_alg = IMB_AUTH_MD5;
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 		hash_oneblock_fn = mb_mgr->md5_one_block;
+#endif
 		break;
 	case RTE_CRYPTO_AUTH_SHA1_HMAC:
 		sess->template_job.hash_alg = IMB_AUTH_HMAC_SHA_1;
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 		hash_oneblock_fn = mb_mgr->sha1_one_block;
+#endif
 		if (xform->auth.key.length > get_auth_algo_blocksize(
 				IMB_AUTH_HMAC_SHA_1)) {
 			IMB_SHA1(mb_mgr,
 				xform->auth.key.data,
 				xform->auth.key.length,
 				hashed_key);
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 			key_larger_block_size = 1;
+#endif
 		}
 		break;
 	case RTE_CRYPTO_AUTH_SHA1:
@@ -287,14 +299,18 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		break;
 	case RTE_CRYPTO_AUTH_SHA224_HMAC:
 		sess->template_job.hash_alg = IMB_AUTH_HMAC_SHA_224;
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 		hash_oneblock_fn = mb_mgr->sha224_one_block;
+#endif
 		if (xform->auth.key.length > get_auth_algo_blocksize(
 				IMB_AUTH_HMAC_SHA_224)) {
 			IMB_SHA224(mb_mgr,
 				xform->auth.key.data,
 				xform->auth.key.length,
 				hashed_key);
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 			key_larger_block_size = 1;
+#endif
 		}
 		break;
 	case RTE_CRYPTO_AUTH_SHA224:
@@ -303,14 +319,18 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		break;
 	case RTE_CRYPTO_AUTH_SHA256_HMAC:
 		sess->template_job.hash_alg = IMB_AUTH_HMAC_SHA_256;
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 		hash_oneblock_fn = mb_mgr->sha256_one_block;
+#endif
 		if (xform->auth.key.length > get_auth_algo_blocksize(
 				IMB_AUTH_HMAC_SHA_256)) {
 			IMB_SHA256(mb_mgr,
 				xform->auth.key.data,
 				xform->auth.key.length,
 				hashed_key);
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 			key_larger_block_size = 1;
+#endif
 		}
 		break;
 	case RTE_CRYPTO_AUTH_SHA256:
@@ -319,14 +339,18 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		break;
 	case RTE_CRYPTO_AUTH_SHA384_HMAC:
 		sess->template_job.hash_alg = IMB_AUTH_HMAC_SHA_384;
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 		hash_oneblock_fn = mb_mgr->sha384_one_block;
+#endif
 		if (xform->auth.key.length > get_auth_algo_blocksize(
 				IMB_AUTH_HMAC_SHA_384)) {
 			IMB_SHA384(mb_mgr,
 				xform->auth.key.data,
 				xform->auth.key.length,
 				hashed_key);
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 			key_larger_block_size = 1;
+#endif
 		}
 		break;
 	case RTE_CRYPTO_AUTH_SHA384:
@@ -335,20 +359,32 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		break;
 	case RTE_CRYPTO_AUTH_SHA512_HMAC:
 		sess->template_job.hash_alg = IMB_AUTH_HMAC_SHA_512;
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 		hash_oneblock_fn = mb_mgr->sha512_one_block;
+#endif
 		if (xform->auth.key.length > get_auth_algo_blocksize(
 				IMB_AUTH_HMAC_SHA_512)) {
 			IMB_SHA512(mb_mgr,
 				xform->auth.key.data,
 				xform->auth.key.length,
 				hashed_key);
+#if IMB_VERSION(1, 3, 0) >= IMB_VERSION_NUM
 			key_larger_block_size = 1;
+#endif
 		}
 		break;
 	case RTE_CRYPTO_AUTH_SHA512:
 		sess->template_job.hash_alg = IMB_AUTH_SHA_512;
 		auth_precompute = 0;
 		break;
+#if IMB_VERSION(1, 5, 0) <= IMB_VERSION_NUM
+	case RTE_CRYPTO_AUTH_SM3:
+		sess->template_job.hash_alg = IMB_AUTH_SM3;
+		break;
+	case RTE_CRYPTO_AUTH_SM3_HMAC:
+		sess->template_job.hash_alg = IMB_AUTH_HMAC_SM3;
+		break;
+#endif
 	default:
 		IPSEC_MB_LOG(ERR,
 			"Unsupported authentication algorithm selection");
@@ -361,7 +397,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 
 	if (sess->auth.req_digest_len > full_digest_size ||
 			sess->auth.req_digest_len == 0) {
-		IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+		IPSEC_MB_LOG(ERR, "Invalid digest size");
 		return -EINVAL;
 	}
 
@@ -376,6 +412,11 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 		return 0;
 
 	/* Calculate Authentication precomputes */
+#if IMB_VERSION(1, 3, 0) < IMB_VERSION_NUM
+		imb_hmac_ipad_opad(mb_mgr, sess->template_job.hash_alg,
+					xform->auth.key.data, xform->auth.key.length,
+					sess->auth.pads.inner, sess->auth.pads.outer);
+#else
 	if (key_larger_block_size) {
 		calculate_auth_precomputes(hash_oneblock_fn,
 			sess->auth.pads.inner, sess->auth.pads.outer,
@@ -389,6 +430,7 @@ aesni_mb_set_session_auth_parameters(const IMB_MGR *mb_mgr,
 			xform->auth.key.length,
 			get_auth_algo_blocksize(sess->template_job.hash_alg));
 	}
+#endif
 	sess->template_job.u.HMAC._hashed_auth_key_xor_ipad =
 		sess->auth.pads.inner;
 	sess->template_job.u.HMAC._hashed_auth_key_xor_opad =
@@ -409,6 +451,9 @@ aesni_mb_set_session_cipher_parameters(const IMB_MGR *mb_mgr,
 	uint8_t is_zuc = 0;
 	uint8_t is_snow3g = 0;
 	uint8_t is_kasumi = 0;
+#if IMB_VERSION(1, 5, 0) <= IMB_VERSION_NUM
+	uint8_t is_sm4 = 0;
+#endif
 
 	if (xform == NULL) {
 		sess->template_job.cipher_mode = IMB_CIPHER_NULL;
@@ -479,6 +524,22 @@ aesni_mb_set_session_cipher_parameters(const IMB_MGR *mb_mgr,
 		sess->iv.offset = xform->cipher.iv.offset;
 		sess->template_job.iv_len_in_bytes = xform->cipher.iv.length;
 		return 0;
+#if IMB_VERSION(1, 5, 0) <= IMB_VERSION_NUM
+	case RTE_CRYPTO_CIPHER_SM4_CBC:
+		sess->template_job.cipher_mode = IMB_CIPHER_SM4_CBC;
+		is_sm4 = 1;
+		break;
+	case RTE_CRYPTO_CIPHER_SM4_ECB:
+		sess->template_job.cipher_mode = IMB_CIPHER_SM4_ECB;
+		is_sm4 = 1;
+		break;
+#endif
+#if IMB_VERSION(1, 5, 0) < IMB_VERSION_NUM
+	case RTE_CRYPTO_CIPHER_SM4_CTR:
+		sess->template_job.cipher_mode = IMB_CIPHER_SM4_CNTR;
+		is_sm4 = 1;
+		break;
+#endif
 	default:
 		IPSEC_MB_LOG(ERR, "Unsupported cipher mode parameter");
 		return -ENOTSUP;
@@ -613,6 +674,15 @@ aesni_mb_set_session_cipher_parameters(const IMB_MGR *mb_mgr,
 					&sess->cipher.pKeySched_kasumi_cipher);
 		sess->template_job.enc_keys = &sess->cipher.pKeySched_kasumi_cipher;
 		sess->template_job.dec_keys = &sess->cipher.pKeySched_kasumi_cipher;
+#if IMB_VERSION(1, 5, 0) <= IMB_VERSION_NUM
+	} else if (is_sm4) {
+		sess->template_job.key_len_in_bytes = IMB_KEY_128_BYTES;
+		IMB_SM4_KEYEXP(mb_mgr, xform->cipher.key.data,
+				sess->cipher.expanded_sm4_keys.encode,
+				sess->cipher.expanded_sm4_keys.decode);
+		sess->template_job.enc_keys = sess->cipher.expanded_sm4_keys.encode;
+		sess->template_job.dec_keys = sess->cipher.expanded_sm4_keys.decode;
+#endif
 	} else {
 		if (xform->cipher.key.length != 8) {
 			IPSEC_MB_LOG(ERR, "Invalid cipher key length");
@@ -691,7 +761,7 @@ aesni_mb_set_session_aead_parameters(const IMB_MGR *mb_mgr,
 		if (sess->auth.req_digest_len < AES_CCM_DIGEST_MIN_LEN ||
 			sess->auth.req_digest_len > AES_CCM_DIGEST_MAX_LEN ||
 			(sess->auth.req_digest_len & 1) == 1) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		break;
@@ -727,7 +797,7 @@ aesni_mb_set_session_aead_parameters(const IMB_MGR *mb_mgr,
 		/* GCM digest size must be between 1 and 16 */
 		if (sess->auth.req_digest_len == 0 ||
 				sess->auth.req_digest_len > 16) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		break;
@@ -748,7 +818,7 @@ aesni_mb_set_session_aead_parameters(const IMB_MGR *mb_mgr,
 		sess->template_job.enc_keys = sess->cipher.expanded_aes_keys.encode;
 		sess->template_job.dec_keys = sess->cipher.expanded_aes_keys.decode;
 		if (sess->auth.req_digest_len != 16) {
-			IPSEC_MB_LOG(ERR, "Invalid digest size\n");
+			IPSEC_MB_LOG(ERR, "Invalid digest size");
 			return -EINVAL;
 		}
 		break;
@@ -761,7 +831,7 @@ aesni_mb_set_session_aead_parameters(const IMB_MGR *mb_mgr,
 }
 
 /** Configure a aesni multi-buffer session from a crypto xform chain */
-static int
+int
 aesni_mb_session_configure(IMB_MGR *mb_mgr,
 		void *priv_sess,
 		const struct rte_crypto_sym_xform *xform)
@@ -1200,7 +1270,7 @@ handle_sgl_linear(IMB_JOB *job, struct rte_crypto_op *op, uint32_t dst_offset,
 	total_len = sgl_linear_cipher_auth_len(job, &auth_len);
 	linear_buf = rte_zmalloc(NULL, total_len + job->auth_tag_output_len_in_bytes, 0);
 	if (linear_buf == NULL) {
-		IPSEC_MB_LOG(ERR, "Error allocating memory for SGL Linear Buffer\n");
+		IPSEC_MB_LOG(ERR, "Error allocating memory for SGL Linear Buffer");
 		return -1;
 	}
 
@@ -1500,7 +1570,7 @@ aesni_mb_digest_appended_in_src(struct rte_crypto_op *op, IMB_JOB *job,
  *
  * @return
  * - 0 on success, the IMB_JOB will be filled
- * - -1 if invalid session or errors allocationg SGL linear buffer,
+ * - -1 if invalid session or errors allocating SGL linear buffer,
  *   IMB_JOB will not be filled
  */
 static inline int
@@ -2131,7 +2201,7 @@ set_job_null_op(IMB_JOB *job, struct rte_crypto_op *op)
 }
 
 #if IMB_VERSION(1, 2, 0) < IMB_VERSION_NUM
-static uint16_t
+uint16_t
 aesni_mb_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 		uint16_t nb_ops)
 {
@@ -2321,7 +2391,7 @@ flush_mb_mgr(struct ipsec_mb_qp *qp, IMB_MGR *mb_mgr,
 	return processed_ops;
 }
 
-static uint16_t
+uint16_t
 aesni_mb_dequeue_burst(void *queue_pair, struct rte_crypto_op **ops,
 		uint16_t nb_ops)
 {
@@ -2456,7 +2526,7 @@ verify_sync_dgst(struct rte_crypto_sym_vec *vec,
 	return k;
 }
 
-static uint32_t
+uint32_t
 aesni_mb_process_bulk(struct rte_cryptodev *dev __rte_unused,
 	struct rte_cryptodev_sym_session *sess, union rte_crypto_sym_ofs sofs,
 	struct rte_crypto_sym_vec *vec)

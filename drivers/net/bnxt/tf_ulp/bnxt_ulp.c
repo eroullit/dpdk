@@ -642,6 +642,49 @@ ulp_ctx_shared_session_close(struct bnxt *bp,
 }
 
 static int32_t
+ulp_ctx_mh_get_session_name(struct bnxt *bp,
+			    struct tf_open_session_parms *parms)
+{
+	int32_t	rc = 0;
+	unsigned int domain = 0, bus = 0, slot = 0, device = 0;
+	rc = sscanf(parms->ctrl_chan_name,
+		    "%x:%x:%x.%u",
+		    &domain,
+		    &bus,
+		    &slot,
+		    &device);
+	if (rc != 4) {
+		/* PCI Domain not provided (optional in DPDK), thus we
+		 * force domain to 0 and recheck.
+		 */
+		domain = 0;
+		/* Check parsing of bus/slot/device */
+		rc = sscanf(parms->ctrl_chan_name,
+			    "%x:%x.%u",
+			    &bus,
+			    &slot,
+			    &device);
+		if (rc != 3) {
+			BNXT_TF_DBG(DEBUG,
+				    "Failed to scan device ctrl_chan_name\n");
+			return -EINVAL;
+		}
+	}
+
+	/* change domain name for multi-host system */
+	domain = domain + (0xf & bp->multi_host_pf_pci_id);
+	sprintf(parms->ctrl_chan_name,
+		"%x:%x:%x.%u",
+		domain,
+		bus,
+		slot,
+		device);
+	BNXT_TF_DBG(DEBUG,
+		    "Session name for Multi-Host: ctrl_chan_name:%s\n", parms->ctrl_chan_name);
+	return 0;
+}
+
+static int32_t
 ulp_ctx_shared_session_open(struct bnxt *bp,
 			    enum bnxt_ulp_session_type session_type,
 			    struct bnxt_ulp_session_state *session)
@@ -664,6 +707,14 @@ ulp_ctx_shared_session_open(struct bnxt *bp,
 			    ethdev->data->port_id, rc);
 		return rc;
 	}
+
+	/* On multi-host system, adjust ctrl_chan_name to avoid confliction */
+	if (BNXT_MH(bp)) {
+		rc = ulp_ctx_mh_get_session_name(bp, &parms);
+		if (rc)
+			return rc;
+	}
+
 	resources = &parms.resources;
 
 	/*
@@ -833,6 +884,13 @@ ulp_ctx_session_open(struct bnxt *bp,
 		BNXT_TF_DBG(ERR, "Invalid port %d, rc = %d\n",
 			    ethdev->data->port_id, rc);
 		return rc;
+	}
+
+	/* On multi-host system, adjust ctrl_chan_name to avoid confliction */
+	if (BNXT_MH(bp)) {
+		rc = ulp_ctx_mh_get_session_name(bp, &params);
+		if (rc)
+			return rc;
 	}
 
 	rc = bnxt_ulp_cntxt_app_id_get(bp->ulp_ctx, &app_id);
@@ -1289,7 +1347,7 @@ ulp_ctx_attach(struct bnxt *bp,
 	/* Create a TF Client */
 	rc = ulp_ctx_session_open(bp, session);
 	if (rc) {
-		PMD_DRV_LOG(ERR, "Failed to open ctxt session, rc:%d\n", rc);
+		PMD_DRV_LOG_LINE(ERR, "Failed to open ctxt session, rc:%d", rc);
 		tfp->session = NULL;
 		return rc;
 	}
@@ -1501,7 +1559,7 @@ bnxt_ulp_destroy_vfr_default_rules(struct bnxt *bp, bool global)
 	struct rte_eth_dev *vfr_eth_dev;
 	struct bnxt_representor *vfr_bp;
 
-	if (!BNXT_TRUFLOW_EN(bp) || BNXT_ETH_DEV_IS_REPRESENTOR(bp->eth_dev))
+	if (!BNXT_TRUFLOW_EN(bp) || rte_eth_dev_is_repr(bp->eth_dev))
 		return;
 
 	if (!bp->ulp_ctx || !bp->ulp_ctx->cfg_data)
@@ -2258,7 +2316,7 @@ bnxt_ulp_eth_dev_ptr2_cntxt_get(struct rte_eth_dev	*dev)
 {
 	struct bnxt *bp = (struct bnxt *)dev->data->dev_private;
 
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(dev)) {
+	if (rte_eth_dev_is_repr(dev)) {
 		struct bnxt_representor *vfr = dev->data->dev_private;
 
 		bp = vfr->parent_dev->data->dev_private;

@@ -78,16 +78,6 @@ Runtime Config Options
 
     -a 0002:0e:00.0,single_ws=1
 
-- ``CN10K Getwork mode``
-
-  CN10K supports three getwork prefetch modes no prefetch[0], prefetch
-  immediately[1] and delayed prefetch on forward progress event[2].
-  The default getwork mode is 2.
-
-  For example::
-
-    -a 0002:0e:00.0,gw_mode=1
-
 - ``Event Group QoS support``
 
   SSO GGRPs i.e. queue uses DRAM & SRAM buffers to hold in-flight
@@ -198,6 +188,14 @@ Runtime Config Options
 
     -a 0002:0e:00.0,tim_eclk_freq=122880000-1000000000-0
 
+Power Saving on CN10K
+---------------------
+
+ARM cores can additionally use WFE when polling for transactions on SSO bus
+to save power i.e., in the event dequeue call ARM core can enter WFE and exit
+when either work has been scheduled or dequeue timeout has reached.
+This feature can be selected by configuring meson with ``RTE_ARM_USE_WFE`` enabled.
+
 Debugging Options
 -----------------
 
@@ -208,9 +206,9 @@ Debugging Options
    +---+------------+-------------------------------------------------------+
    | # | Component  | EAL log command                                       |
    +===+============+=======================================================+
-   | 1 | SSO        | --log-level='pmd\.event\.cnxk,8'                      |
+   | 1 | SSO        | --log-level='pmd\.common\.cnxk\.event,8'              |
    +---+------------+-------------------------------------------------------+
-   | 2 | TIM        | --log-level='pmd\.event\.cnxk\.timer,8'               |
+   | 2 | TIM        | --log-level='pmd\.common\.cnxk\.timer,8'              |
    +---+------------+-------------------------------------------------------+
 
 Limitations
@@ -227,3 +225,8 @@ ethernet devices connected to event device to override this applications can
 use `force_rx_bp=1` device arguments.
 Using unique mempool per each ethernet device is recommended when they are
 connected to event device.
+
+DMA adapter new mode support
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+DMA driver does not support DMA adapter configured in new mode.

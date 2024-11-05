@@ -54,6 +54,7 @@ DTS uses Poetry as its Python dependency management.
 Python build/development and runtime environments are the same and DTS development environment,
 DTS runtime environment or just plain DTS environment are used interchangeably.
 
+.. _dts_deps:
 
 Setting up DTS environment
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -82,7 +83,7 @@ Setting up DTS environment
    Another benefit is the usage of ``pyproject.toml``, which has become the standard config file
    for python projects, improving project organization.
    To install Poetry, visit their `doc pages <https://python-poetry.org/docs/>`_.
-   The recommended Poetry version is at least 1.5.1.
+   The recommended Poetry version is at least 1.8.2.
 
 #. **Getting a Poetry shell**
 
@@ -91,7 +92,7 @@ Setting up DTS environment
 
    .. code-block:: console
 
-      poetry install --no-root
+      poetry install
       poetry shell
 
 #. **SSH Connection**
@@ -132,6 +133,11 @@ There are two areas that need to be set up on a System Under Test:
      You may specify the optional hugepage configuration in the DTS config file.
      If you do, DTS will take care of configuring hugepages,
      overwriting your current SUT hugepage configuration.
+     Configuration of hugepages via DTS allows only for allocation of 2MB hugepages,
+     as doing so prevents accidental/over allocation of hugepage sizes
+     not recommended during runtime due to contiguous memory space requirements.
+     Thus, if you require hugepage sizes not equal to 2MB,
+     then this configuration must be done outside of the DTS framework.
 
    * System under test configuration
 
@@ -198,7 +204,7 @@ and then run the tests with the newly built binaries.
 Configuring DTS
 ~~~~~~~~~~~~~~~
 
-DTS configuration is split into nodes and executions and build targets within executions,
+DTS configuration is split into nodes and test runs and build targets within test runs,
 and follows a defined schema as described in `Configuration Schema`_.
 By default, DTS will try to use the ``dts/conf.yaml`` :ref:`config file <configuration_schema_example>`,
 which is a template that illustrates what can be configured in DTS.
@@ -215,28 +221,40 @@ DTS is run with ``main.py`` located in the ``dts`` directory after entering Poet
 .. code-block:: console
 
    (dts-py3.10) $ ./main.py --help
-   usage: main.py [-h] [--config-file CONFIG_FILE] [--output-dir OUTPUT_DIR] [-t TIMEOUT] [-v] [-s] [--tarball TARBALL] [--compile-timeout COMPILE_TIMEOUT] [--test-cases TEST_CASES] [--re-run RE_RUN]
+   usage: main.py [-h] [--config-file FILE_PATH] [--output-dir DIR_PATH] [-t SECONDS] [-v] [-s] (--tarball FILE_PATH | --revision ID)
+                  [--compile-timeout SECONDS] [--test-suite TEST_SUITE [TEST_CASES ...]] [--re-run N_TIMES]
 
-   Run DPDK test suites. All options may be specified with the environment variables provided in brackets. Command line arguments have higher priority.
+   Run DPDK test suites. All options may be specified with the environment variables provided in brackets. Command line arguments have higher
+   priority.
 
    options:
-   -h, --help            show this help message and exit
-   --config-file CONFIG_FILE
-                         [DTS_CFG_FILE] configuration file that describes the test cases, SUTs and targets. (default: ./conf.yaml)
-   --output-dir OUTPUT_DIR, --output OUTPUT_DIR
-                         [DTS_OUTPUT_DIR] Output directory where DTS logs and results are saved. (default: output)
-   -t TIMEOUT, --timeout TIMEOUT
-                         [DTS_TIMEOUT] The default timeout for all DTS operations except for compiling DPDK. (default: 15)
-   -v, --verbose         [DTS_VERBOSE] Specify to enable verbose output, logging all messages to the console. (default: False)
-   -s, --skip-setup      [DTS_SKIP_SETUP] Specify to skip all setup steps on SUT and TG nodes. (default: None)
-   --tarball TARBALL, --snapshot TARBALL, --git-ref TARBALL
-                         [DTS_DPDK_TARBALL] Path to DPDK source code tarball or a git commit ID, tag ID or tree ID to test. To test local changes, first commit them, then use the commit ID with this option. (default: dpdk.tar.xz)
-   --compile-timeout COMPILE_TIMEOUT
-                         [DTS_COMPILE_TIMEOUT] The timeout for compiling DPDK. (default: 1200)
-   --test-cases TEST_CASES
-                         [DTS_TESTCASES] Comma-separated list of test cases to execute. Unknown test cases will be silently ignored. (default: )
-   --re-run RE_RUN, --re_run RE_RUN
-                         [DTS_RERUN] Re-run each test case the specified number of times if a test failure occurs (default: 0)
+     -h, --help            show this help message and exit
+     --config-file FILE_PATH
+                           [DTS_CFG_FILE] The configuration file that describes the test cases, SUTs and targets. (default: conf.yaml)
+     --output-dir DIR_PATH, --output DIR_PATH
+                           [DTS_OUTPUT_DIR] Output directory where DTS logs and results are saved. (default: output)
+     -t SECONDS, --timeout SECONDS
+                           [DTS_TIMEOUT] The default timeout for all DTS operations except for compiling DPDK. (default: 15)
+     -v, --verbose         [DTS_VERBOSE] Specify to enable verbose output, logging all messages to the console. (default: False)
+     -s, --skip-setup      [DTS_SKIP_SETUP] Specify to skip all setup steps on SUT and TG nodes. (default: False)
+     --tarball FILE_PATH, --snapshot FILE_PATH
+                           [DTS_DPDK_TARBALL] Path to DPDK source code tarball to test. (default: None)
+     --revision ID, --rev ID, --git-ref ID
+                           [DTS_DPDK_REVISION_ID] Git revision ID to test. Could be commit, tag, tree ID etc. To test local changes, first
+                           commit them, then use their commit ID. (default: None)
+     --compile-timeout SECONDS
+                           [DTS_COMPILE_TIMEOUT] The timeout for compiling DPDK. (default: 1200)
+     --test-suite TEST_SUITE [TEST_CASES ...]
+                           [DTS_TEST_SUITES] A list containing a test suite with test cases. The first parameter is the test suite name, and
+                           the rest are test case names, which are optional. May be specified multiple times. To specify multiple test suites
+                           in the environment variable, join the lists with a comma. Examples: --test-suite suite case case --test-suite
+                           suite case ... | DTS_TEST_SUITES='suite case case, suite case, ...' | --test-suite suite --test-suite suite case
+                           ... | DTS_TEST_SUITES='suite, suite case, ...' (default: [])
+     --re-run N_TIMES, --re_run N_TIMES
+                           [DTS_RERUN] Re-run each test case the specified number of times if a test failure occurs. (default: 0)
+     --random-seed NUMBER  [DTS_RANDOM_SEED] The seed to use with the pseudo-random generator.
+                           If not specified, the configuration value is used instead.
+                           If that's also not specified, a random seed is generated. (default: None)
 
 
 The brackets contain the names of environment variables that set the same thing.
@@ -277,8 +295,15 @@ When adding code to the DTS framework, pay attention to the rest of the code
 and try not to divert much from it.
 The :ref:`DTS developer tools <dts_dev_tools>` will issue warnings
 when some of the basics are not met.
+You should also build the :ref:`API documentation <building_api_docs>`
+to address any issues found during the build.
 
-The code must be properly documented with docstrings.
+The API documentation, which is a helpful reference when developing, may be accessed
+in the code directly or generated with the :ref:`API docs build steps <building_api_docs>`.
+When adding new files or modifying the directory structure,
+the corresponding changes must be made to DTS API doc sources in ``doc/api/dts``.
+
+Speaking of which, the code must be properly documented with docstrings.
 The style must conform to the `Google style
 <https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings>`_.
 See an example of the style `here
@@ -413,6 +438,35 @@ the DTS code check and format script.
 Refer to the script for usage: ``devtools/dts-check-format.sh -h``.
 
 
+.. _building_api_docs:
+
+Building DTS API docs
+---------------------
+
+The documentation is built using the standard DPDK build system.
+See :doc:`../linux_gsg/build_dpdk` for more details on compiling DPDK with meson.
+
+The :ref:`doc build dependencies <doc_dependencies>` may be installed with Poetry:
+
+.. code-block:: console
+
+   poetry install --only docs
+   poetry install --with docs  # an alternative that will also install DTS dependencies
+   poetry shell
+
+After executing the meson command, build the documentation with:
+
+.. code-block:: console
+
+   ninja -C build doc
+
+The output is generated in ``build/doc/api/dts/html``.
+
+.. note::
+
+   Make sure to fix any Sphinx warnings when adding or updating docstrings.
+
+
 Configuration Schema
 --------------------
 
@@ -451,11 +505,11 @@ _`Build target`
                         **Example**: ``ccache``
    ==================== =================================================================
 
-_`hugepages`
-   *mapping* – hugepages described as:
+_`hugepages_2mb`
+   *mapping* – hugepages_2mb described as:
 
    ==================== ================================================================
-   ``amount``           *integer* – The amount of hugepages to configure.
+   ``number_of``        *integer* – The number of 2MB hugepages to configure.
 
                         Hugepage size will be the system default.
    ``force_first_numa`` (*optional*, defaults to ``false``) – If ``true``, it forces the
@@ -503,12 +557,12 @@ _`Test target`
 Properties
 ~~~~~~~~~~
 
-The configuration requires listing all the execution environments and nodes
+The configuration requires listing all the test run environments and nodes
 involved in the testing. These can be defined with the following mappings:
 
-``executions``
+``test runs``
    `sequence <https://docs.python.org/3/library/stdtypes.html#sequence-types-list-tuple-range>`_ listing
-   the execution environments. Each entry is described as per the following
+   the test run environments. Each entry is described as per the following
    `mapping <https://docs.python.org/3/library/stdtypes.html#mapping-types-dict>`_:
 
    +----------------------------+-------------------------------------------------------------------+
@@ -533,6 +587,8 @@ involved in the testing. These can be defined with the following mappings:
    |                            |               | argument to DPDK. **Example**: ``crypto_openssl`` |
    +----------------------------+---------------+---------------------------------------------------+
    | ``traffic_generator_node`` | Node name for the traffic generator node.                         |
+   +----------------------------+-------------------------------------------------------------------+
+   | ``random_seed``            | (*optional*) *int* – Set a seed for pseudo-random generation.     |
    +----------------------------+-------------------------------------------------------------------+
 
 ``nodes``
@@ -568,7 +624,7 @@ involved in the testing. These can be defined with the following mappings:
    |                       |                                                                                       |
    |                       | The number of the memory channels to use.                                             |
    +-----------------------+---------------------------------------------------------------------------------------+
-   | ``hugepages``         | (*optional*) See `hugepages`_. If unset, hugepages won't be configured                |
+   | ``hugepages_2mb``     | (*optional*) See `hugepages_2mb`_. If unset, 2MB hugepages won't be configured        |
    |                       |                                                                                       |
    |                       | in favour of the system configuration.                                                |
    +-----------------------+---------------------------------------------------------------------------------------+
@@ -603,4 +659,4 @@ And they both have two network ports which are physically connected to each othe
 
 .. literalinclude:: ../../../dts/conf.yaml
    :language: yaml
-   :start-at: executions:
+   :start-at: test_runs:

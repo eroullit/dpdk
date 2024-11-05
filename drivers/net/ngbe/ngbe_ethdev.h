@@ -32,6 +32,7 @@
 
 #define NGBE_QUEUE_ITR_INTERVAL_DEFAULT	500 /* 500us */
 
+#define NGBE_MAX_MTU		9414
 /* The overhead from MTU to max frame size. */
 #define NGBE_ETH_OVERHEAD (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN)
 
@@ -130,6 +131,7 @@ struct ngbe_adapter {
 	struct ngbe_vf_info        *vfdata;
 	struct ngbe_uta_info       uta_info;
 	bool                       rx_bulk_alloc_allowed;
+	bool                       rx_vec_allowed;
 	struct rte_timecounter     systime_tc;
 	struct rte_timecounter     rx_tstamp_tc;
 	struct rte_timecounter     tx_tstamp_tc;
@@ -328,7 +330,8 @@ struct rte_ngbe_xstats_name_off {
 	unsigned int offset;
 };
 
-const uint32_t *ngbe_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+const uint32_t *ngbe_dev_supported_ptypes_get(struct rte_eth_dev *dev,
+					      size_t *no_of_elements);
 int ngbe_dev_set_mc_addr_list(struct rte_eth_dev *dev,
 				      struct rte_ether_addr *mc_addr_set,
 				      uint32_t nb_mc_addr);

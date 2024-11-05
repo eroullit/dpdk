@@ -149,7 +149,7 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 		}
 		if (param->timeout == 0)
 			continue;
-		switch (__atomic_load_n(&param->state, __ATOMIC_RELAXED)) {
+		switch (rte_atomic_load_explicit(&param->state, rte_memory_order_relaxed)) {
 		case HWS_AGE_AGED_OUT_NOT_REPORTED:
 		case HWS_AGE_AGED_OUT_REPORTED:
 			/* Already aged-out, no action is needed. */
@@ -171,8 +171,8 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 		hits = rte_be_to_cpu_64(stats[i].hits);
 		if (param->nb_cnts == 1) {
 			if (hits != param->accumulator_last_hits) {
-				__atomic_store_n(&param->sec_since_last_hit, 0,
-						 __ATOMIC_RELAXED);
+				rte_atomic_store_explicit(&param->sec_since_last_hit, 0,
+						 rte_memory_order_relaxed);
 				param->accumulator_last_hits = hits;
 				continue;
 			}
@@ -184,8 +184,8 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 			param->accumulator_cnt = 0;
 			if (param->accumulator_last_hits !=
 						param->accumulator_hits) {
-				__atomic_store_n(&param->sec_since_last_hit,
-						 0, __ATOMIC_RELAXED);
+				rte_atomic_store_explicit(&param->sec_since_last_hit,
+						 0, rte_memory_order_relaxed);
 				param->accumulator_last_hits =
 							param->accumulator_hits;
 				param->accumulator_hits = 0;
@@ -193,9 +193,9 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 			}
 			param->accumulator_hits = 0;
 		}
-		if (__atomic_fetch_add(&param->sec_since_last_hit, time_delta,
-				       __ATOMIC_RELAXED) + time_delta <=
-		   __atomic_load_n(&param->timeout, __ATOMIC_RELAXED))
+		if (rte_atomic_fetch_add_explicit(&param->sec_since_last_hit, time_delta,
+				       rte_memory_order_relaxed) + time_delta <=
+		   rte_atomic_load_explicit(&param->timeout, rte_memory_order_relaxed))
 			continue;
 		/* Prepare the relevant ring for this AGE parameter */
 		if (priv->hws_strict_queue)
@@ -203,10 +203,10 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 		else
 			r = age_info->hw_age.aged_list;
 		/* Changing the state atomically and insert it into the ring. */
-		if (__atomic_compare_exchange_n(&param->state, &expected1,
+		if (rte_atomic_compare_exchange_strong_explicit(&param->state, &expected1,
 						HWS_AGE_AGED_OUT_NOT_REPORTED,
-						false, __ATOMIC_RELAXED,
-						__ATOMIC_RELAXED)) {
+						rte_memory_order_relaxed,
+						rte_memory_order_relaxed)) {
 			int ret = rte_ring_enqueue_burst_elem(r, &age_idx,
 							      sizeof(uint32_t),
 							      1, NULL);
@@ -221,11 +221,10 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 			 */
 			expected2 = HWS_AGE_AGED_OUT_NOT_REPORTED;
 			if (ret == 0 &&
-			    !__atomic_compare_exchange_n(&param->state,
+			    !rte_atomic_compare_exchange_strong_explicit(&param->state,
 							 &expected2, expected1,
-							 false,
-							 __ATOMIC_RELAXED,
-							 __ATOMIC_RELAXED) &&
+							 rte_memory_order_relaxed,
+							 rte_memory_order_relaxed) &&
 			    expected2 == HWS_AGE_FREE)
 				mlx5_hws_age_param_free(priv,
 							param->own_cnt_index,
@@ -235,10 +234,10 @@ mlx5_hws_aging_check(struct mlx5_priv *priv, struct mlx5_hws_cnt_pool *cpool)
 			if (!priv->hws_strict_queue)
 				MLX5_AGE_SET(age_info, MLX5_AGE_EVENT_NEW);
 		} else {
-			__atomic_compare_exchange_n(&param->state, &expected2,
+			rte_atomic_compare_exchange_strong_explicit(&param->state, &expected2,
 						  HWS_AGE_AGED_OUT_NOT_REPORTED,
-						  false, __ATOMIC_RELAXED,
-						  __ATOMIC_RELAXED);
+						  rte_memory_order_relaxed,
+						  rte_memory_order_relaxed);
 		}
 	}
 	/* The event is irrelevant in strict queue mode. */
@@ -340,6 +339,55 @@ mlx5_hws_cnt_pool_deinit(struct mlx5_hws_cnt_pool * const cntp)
 	mlx5_free(cntp);
 }
 
+static bool
+mlx5_hws_cnt_should_enable_cache(const struct mlx5_hws_cnt_pool_cfg *pcfg,
+				 const struct mlx5_hws_cache_param *ccfg)
+{
+	/*
+	 * Enable cache if and only if there are enough counters requested
+	 * to populate all of the caches.
+	 */
+	return pcfg->request_num >= ccfg->q_num * ccfg->size;
+}
+
+static struct mlx5_hws_cnt_pool_caches *
+mlx5_hws_cnt_cache_init(const struct mlx5_hws_cnt_pool_cfg *pcfg,
+			const struct mlx5_hws_cache_param *ccfg)
+{
+	struct mlx5_hws_cnt_pool_caches *cache;
+	char mz_name[RTE_MEMZONE_NAMESIZE];
+	uint32_t qidx;
+
+	/* If counter pool is big enough, setup the counter pool cache. */
+	cache = mlx5_malloc(MLX5_MEM_ANY | MLX5_MEM_ZERO,
+			sizeof(*cache) +
+			sizeof(((struct mlx5_hws_cnt_pool_caches *)0)->qcache[0])
+				* ccfg->q_num, 0, SOCKET_ID_ANY);
+	if (cache == NULL)
+		return NULL;
+	/* Store the necessary cache parameters. */
+	cache->fetch_sz = ccfg->fetch_sz;
+	cache->preload_sz = ccfg->preload_sz;
+	cache->threshold = ccfg->threshold;
+	cache->q_num = ccfg->q_num;
+	for (qidx = 0; qidx < ccfg->q_num; qidx++) {
+		snprintf(mz_name, sizeof(mz_name), "%s_qc/%x", pcfg->name, qidx);
+		cache->qcache[qidx] = rte_ring_create(mz_name, ccfg->size,
+				SOCKET_ID_ANY,
+				RING_F_SP_ENQ | RING_F_SC_DEQ |
+				RING_F_EXACT_SZ);
+		if (cache->qcache[qidx] == NULL)
+			goto error;
+	}
+	return cache;
+
+error:
+	while (qidx--)
+		rte_ring_free(cache->qcache[qidx]);
+	mlx5_free(cache);
+	return NULL;
+}
+
 static struct mlx5_hws_cnt_pool *
 mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 		       const struct mlx5_hws_cnt_pool_cfg *pcfg,
@@ -348,7 +396,6 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 	char mz_name[RTE_MEMZONE_NAMESIZE];
 	struct mlx5_hws_cnt_pool *cntp;
 	uint64_t cnt_num = 0;
-	uint32_t qidx;
 
 	MLX5_ASSERT(pcfg);
 	MLX5_ASSERT(ccfg);
@@ -360,17 +407,6 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 	cntp->cfg = *pcfg;
 	if (cntp->cfg.host_cpool)
 		return cntp;
-	cntp->cache = mlx5_malloc(MLX5_MEM_ANY | MLX5_MEM_ZERO,
-			sizeof(*cntp->cache) +
-			sizeof(((struct mlx5_hws_cnt_pool_caches *)0)->qcache[0])
-				* ccfg->q_num, 0, SOCKET_ID_ANY);
-	if (cntp->cache == NULL)
-		goto error;
-	 /* store the necessary cache parameters. */
-	cntp->cache->fetch_sz = ccfg->fetch_sz;
-	cntp->cache->preload_sz = ccfg->preload_sz;
-	cntp->cache->threshold = ccfg->threshold;
-	cntp->cache->q_num = ccfg->q_num;
 	if (pcfg->request_num > sh->hws_max_nb_counters) {
 		DRV_LOG(ERR, "Counter number %u "
 			"is greater than the maximum supported (%u).",
@@ -407,7 +443,7 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 			(uint32_t)cnt_num, SOCKET_ID_ANY,
 			RING_F_MP_HTS_ENQ | RING_F_SC_DEQ | RING_F_EXACT_SZ);
 	if (cntp->wait_reset_list == NULL) {
-		DRV_LOG(ERR, "failed to create free list ring");
+		DRV_LOG(ERR, "failed to create wait reset list ring");
 		goto error;
 	}
 	snprintf(mz_name, sizeof(mz_name), "%s_U_RING", pcfg->name);
@@ -418,13 +454,10 @@ mlx5_hws_cnt_pool_init(struct mlx5_dev_ctx_shared *sh,
 		DRV_LOG(ERR, "failed to create reuse list ring");
 		goto error;
 	}
-	for (qidx = 0; qidx < ccfg->q_num; qidx++) {
-		snprintf(mz_name, sizeof(mz_name), "%s_qc/%x", pcfg->name, qidx);
-		cntp->cache->qcache[qidx] = rte_ring_create(mz_name, ccfg->size,
-				SOCKET_ID_ANY,
-				RING_F_SP_ENQ | RING_F_SC_DEQ |
-				RING_F_EXACT_SZ);
-		if (cntp->cache->qcache[qidx] == NULL)
+	/* Allocate counter cache only if needed. */
+	if (mlx5_hws_cnt_should_enable_cache(pcfg, ccfg)) {
+		cntp->cache = mlx5_hws_cnt_cache_init(pcfg, ccfg);
+		if (cntp->cache == NULL)
 			goto error;
 	}
 	/* Initialize the time for aging-out calculation. */
@@ -598,16 +631,17 @@ mlx5_hws_cnt_pool_action_create(struct mlx5_priv *priv,
 	return ret;
 }
 
-struct mlx5_hws_cnt_pool *
+int
 mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
-		const struct rte_flow_port_attr *pattr, uint16_t nb_queue)
+		uint32_t nb_counters, uint16_t nb_queue,
+		struct mlx5_hws_cnt_pool *chost)
 {
 	struct mlx5_hws_cnt_pool *cpool = NULL;
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hws_cache_param cparam = {0};
 	struct mlx5_hws_cnt_pool_cfg pcfg = {0};
 	char *mp_name;
-	int ret = 0;
+	int ret = -1;
 	size_t sz;
 
 	mp_name = mlx5_malloc(MLX5_MEM_ZERO, RTE_MEMZONE_NAMESIZE, 0, SOCKET_ID_ANY);
@@ -615,13 +649,9 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 		goto error;
 	snprintf(mp_name, RTE_MEMZONE_NAMESIZE, "MLX5_HWS_CNT_P_%x", dev->data->port_id);
 	pcfg.name = mp_name;
-	pcfg.request_num = pattr->nb_counters;
+	pcfg.request_num = nb_counters;
 	pcfg.alloc_factor = HWS_CNT_ALLOC_FACTOR_DEFAULT;
-	if (pattr->flags & RTE_FLOW_PORT_FLAG_SHARE_INDIRECT) {
-		struct mlx5_priv *host_priv =
-				priv->shared_host->data->dev_private;
-		struct mlx5_hws_cnt_pool *chost = host_priv->hws_cpool;
-
+	if (chost) {
 		pcfg.host_cpool = chost;
 		cpool = mlx5_hws_cnt_pool_init(priv->sh, &pcfg, &cparam);
 		if (cpool == NULL)
@@ -629,13 +659,13 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 		ret = mlx5_hws_cnt_pool_action_create(priv, cpool);
 		if (ret != 0)
 			goto error;
-		return cpool;
+		goto success;
 	}
 	/* init cnt service if not. */
 	if (priv->sh->cnt_svc == NULL) {
 		ret = mlx5_hws_cnt_svc_init(priv->sh);
-		if (ret != 0)
-			return NULL;
+		if (ret)
+			return ret;
 	}
 	cparam.fetch_sz = HWS_CNT_CACHE_FETCH_DEFAULT;
 	cparam.preload_sz = HWS_CNT_CACHE_PRELOAD_DEFAULT;
@@ -668,10 +698,13 @@ mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 	rte_spinlock_lock(&priv->sh->cpool_lock);
 	LIST_INSERT_HEAD(&priv->sh->hws_cpool_list, cpool, next);
 	rte_spinlock_unlock(&priv->sh->cpool_lock);
-	return cpool;
+success:
+	priv->hws_cpool = cpool;
+	return 0;
 error:
 	mlx5_hws_cnt_pool_destroy(priv->sh, cpool);
-	return NULL;
+	priv->hws_cpool = NULL;
+	return ret;
 }
 
 void
@@ -685,7 +718,9 @@ mlx5_hws_cnt_pool_destroy(struct mlx5_dev_ctx_shared *sh,
 	 * Maybe blocked for at most 200ms here.
 	 */
 	rte_spinlock_lock(&sh->cpool_lock);
-	LIST_REMOVE(cpool, next);
+	/* Try to remove cpool before it was added to list caused segfault. */
+	if (!LIST_EMPTY(&sh->hws_cpool_list) && cpool->next.le_prev)
+		LIST_REMOVE(cpool, next);
 	rte_spinlock_unlock(&sh->cpool_lock);
 	if (cpool->cfg.host_cpool == NULL) {
 		if (--sh->cnt_svc->refcnt == 0)
@@ -762,8 +797,8 @@ mlx5_hws_age_action_destroy(struct mlx5_priv *priv, uint32_t idx,
 		return rte_flow_error_set(error, EINVAL,
 					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 					  "invalid AGE parameter index");
-	switch (__atomic_exchange_n(&param->state, HWS_AGE_FREE,
-				    __ATOMIC_RELAXED)) {
+	switch (rte_atomic_exchange_explicit(&param->state, HWS_AGE_FREE,
+				    rte_memory_order_relaxed)) {
 	case HWS_AGE_CANDIDATE:
 	case HWS_AGE_AGED_OUT_REPORTED:
 		mlx5_hws_age_param_free(priv, param->own_cnt_index, ipool, idx);
@@ -828,8 +863,8 @@ mlx5_hws_age_action_create(struct mlx5_priv *priv, uint32_t queue_id,
 				   "cannot allocate AGE parameter");
 		return 0;
 	}
-	MLX5_ASSERT(__atomic_load_n(&param->state,
-				    __ATOMIC_RELAXED) == HWS_AGE_FREE);
+	MLX5_ASSERT(rte_atomic_load_explicit(&param->state,
+				    rte_memory_order_relaxed) == HWS_AGE_FREE);
 	if (shared) {
 		param->nb_cnts = 0;
 		param->accumulator_hits = 0;
@@ -880,9 +915,9 @@ mlx5_hws_age_action_update(struct mlx5_priv *priv, uint32_t idx,
 					  RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 					  "invalid AGE parameter index");
 	if (update_ade->timeout_valid) {
-		uint32_t old_timeout = __atomic_exchange_n(&param->timeout,
+		uint32_t old_timeout = rte_atomic_exchange_explicit(&param->timeout,
 							   update_ade->timeout,
-							   __ATOMIC_RELAXED);
+							   rte_memory_order_relaxed);
 
 		if (old_timeout == 0)
 			sec_since_last_hit_reset = true;
@@ -901,8 +936,8 @@ mlx5_hws_age_action_update(struct mlx5_priv *priv, uint32_t idx,
 		state_update = true;
 	}
 	if (sec_since_last_hit_reset)
-		__atomic_store_n(&param->sec_since_last_hit, 0,
-				 __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&param->sec_since_last_hit, 0,
+				 rte_memory_order_relaxed);
 	if (state_update) {
 		uint16_t expected = HWS_AGE_AGED_OUT_NOT_REPORTED;
 
@@ -911,13 +946,13 @@ mlx5_hws_age_action_update(struct mlx5_priv *priv, uint32_t idx,
 		 *  - AGED_OUT_NOT_REPORTED -> CANDIDATE_INSIDE_RING
 		 *  - AGED_OUT_REPORTED -> CANDIDATE
 		 */
-		if (!__atomic_compare_exchange_n(&param->state, &expected,
+		if (!rte_atomic_compare_exchange_strong_explicit(&param->state, &expected,
 						 HWS_AGE_CANDIDATE_INSIDE_RING,
-						 false, __ATOMIC_RELAXED,
-						 __ATOMIC_RELAXED) &&
+						 rte_memory_order_relaxed,
+						 rte_memory_order_relaxed) &&
 		    expected == HWS_AGE_AGED_OUT_REPORTED)
-			__atomic_store_n(&param->state, HWS_AGE_CANDIDATE,
-					 __ATOMIC_RELAXED);
+			rte_atomic_store_explicit(&param->state, HWS_AGE_CANDIDATE,
+					 rte_memory_order_relaxed);
 	}
 	return 0;
 }
@@ -942,9 +977,9 @@ mlx5_hws_age_context_get(struct mlx5_priv *priv, uint32_t idx)
 	uint16_t expected = HWS_AGE_AGED_OUT_NOT_REPORTED;
 
 	MLX5_ASSERT(param != NULL);
-	if (__atomic_compare_exchange_n(&param->state, &expected,
-					HWS_AGE_AGED_OUT_REPORTED, false,
-					__ATOMIC_RELAXED, __ATOMIC_RELAXED))
+	if (rte_atomic_compare_exchange_strong_explicit(&param->state, &expected,
+					HWS_AGE_AGED_OUT_REPORTED,
+					rte_memory_order_relaxed, rte_memory_order_relaxed))
 		return param->context;
 	switch (expected) {
 	case HWS_AGE_FREE:
@@ -956,8 +991,8 @@ mlx5_hws_age_context_get(struct mlx5_priv *priv, uint32_t idx)
 		mlx5_hws_age_param_free(priv, param->own_cnt_index, ipool, idx);
 		break;
 	case HWS_AGE_CANDIDATE_INSIDE_RING:
-		__atomic_store_n(&param->state, HWS_AGE_CANDIDATE,
-				 __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&param->state, HWS_AGE_CANDIDATE,
+				 rte_memory_order_relaxed);
 		break;
 	case HWS_AGE_CANDIDATE:
 		/*
@@ -1184,8 +1219,9 @@ mlx5_hws_age_info_destroy(struct mlx5_priv *priv)
  */
 int
 mlx5_hws_age_pool_init(struct rte_eth_dev *dev,
-		       const struct rte_flow_port_attr *attr,
-		       uint16_t nb_queues)
+		       uint32_t nb_aging_objects,
+		       uint16_t nb_queues,
+		       bool strict_queue)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_age_info *age_info = GET_PORT_AGE_INFO(priv);
@@ -1200,28 +1236,20 @@ mlx5_hws_age_pool_init(struct rte_eth_dev *dev,
 		.free = mlx5_free,
 		.type = "mlx5_hws_age_pool",
 	};
-	bool strict_queue = false;
 	uint32_t nb_alloc_cnts;
 	uint32_t rsize;
 	uint32_t nb_ages_updated;
 	int ret;
 
-	strict_queue = !!(attr->flags & RTE_FLOW_PORT_FLAG_STRICT_QUEUE);
 	MLX5_ASSERT(priv->hws_cpool);
-	if (attr->flags & RTE_FLOW_PORT_FLAG_SHARE_INDIRECT) {
-		DRV_LOG(ERR, "Aging sn not supported "
-			     "in cross vHCA sharing mode");
-		rte_errno = ENOTSUP;
-		return -ENOTSUP;
-	}
 	nb_alloc_cnts = mlx5_hws_cnt_pool_get_size(priv->hws_cpool);
 	if (strict_queue) {
 		rsize = mlx5_hws_aged_out_q_ring_size_get(nb_alloc_cnts,
 							  nb_queues);
-		nb_ages_updated = rsize * nb_queues + attr->nb_aging_objects;
+		nb_ages_updated = rsize * nb_queues + nb_aging_objects;
 	} else {
 		rsize = mlx5_hws_aged_out_ring_size_get(nb_alloc_cnts);
-		nb_ages_updated = rsize + attr->nb_aging_objects;
+		nb_ages_updated = rsize + nb_aging_objects;
 	}
 	ret = mlx5_hws_age_info_init(dev, nb_queues, strict_queue, rsize);
 	if (ret < 0)

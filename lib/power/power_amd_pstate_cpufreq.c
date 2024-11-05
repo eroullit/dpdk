@@ -45,7 +45,7 @@ enum power_state {
 /**
  * Power info per lcore.
  */
-struct amd_pstate_power_info {
+struct __rte_cache_aligned amd_pstate_power_info {
 	uint32_t lcore_id;                   /**< Logical core id */
 	RTE_ATOMIC(uint32_t) state;          /**< Power in use state */
 	FILE *f;                             /**< FD of scaling_setspeed */
@@ -58,7 +58,7 @@ struct amd_pstate_power_info {
 	uint16_t turbo_enable;               /**< Turbo Boost enable/disable */
 	uint32_t nb_freqs;                   /**< number of available freqs */
 	uint32_t freqs[RTE_MAX_LCORE_FREQS]; /**< Frequency array */
-} __rte_cache_aligned;
+};
 
 static struct amd_pstate_power_info lcore_power_info[RTE_MAX_LCORE];
 
@@ -354,6 +354,12 @@ power_amd_pstate_cpufreq_init(unsigned int lcore_id)
 	struct amd_pstate_power_info *pi;
 	uint32_t exp_state;
 
+	if (!power_amd_pstate_cpufreq_check_supported()) {
+		POWER_LOG(ERR, "%s driver is not supported",
+				POWER_AMD_PSTATE_DRIVER);
+		return -1;
+	}
+
 	if (lcore_id >= RTE_MAX_LCORE) {
 		POWER_LOG(ERR, "Lcore id %u can not exceeds %u",
 				lcore_id, RTE_MAX_LCORE - 1U);
@@ -376,7 +382,11 @@ power_amd_pstate_cpufreq_init(unsigned int lcore_id)
 		return -1;
 	}
 
-	pi->lcore_id = lcore_id;
+	if (power_get_lcore_mapped_cpu_id(lcore_id, &pi->lcore_id) < 0) {
+		POWER_LOG(ERR, "Cannot get CPU ID mapped for lcore %u", lcore_id);
+		return -1;
+	}
+
 	/* Check and set the governor */
 	if (power_set_governor_userspace(pi) < 0) {
 		POWER_LOG(ERR, "Cannot set governor of lcore %u to "

@@ -30,7 +30,6 @@
 #define CNXK_SSO_GGRP_QOS  "qos"
 #define CNXK_SSO_FORCE_BP  "force_rx_bp"
 #define CN9K_SSO_SINGLE_WS "single_ws"
-#define CN10K_SSO_GW_MODE  "gw_mode"
 #define CN10K_SSO_STASH	   "stash"
 
 #define CNXK_SSO_MAX_PROFILES 2
@@ -80,7 +79,7 @@ struct cnxk_sso_stash {
 	uint16_t stash_length;
 };
 
-struct cnxk_sso_evdev {
+struct __rte_cache_aligned cnxk_sso_evdev {
 	struct roc_sso sso;
 	uint8_t max_event_queues;
 	uint8_t max_event_ports;
@@ -124,10 +123,10 @@ struct cnxk_sso_evdev {
 	uint32_t gw_mode;
 	uint16_t stash_cnt;
 	struct cnxk_sso_stash *stash_parse_data;
-} __rte_cache_aligned;
+};
 
 /* Event port a.k.a GWS */
-struct cn9k_sso_hws {
+struct __rte_cache_aligned cn9k_sso_hws {
 	uint64_t base;
 	uint64_t gw_wdata;
 	void *lookup_mem;
@@ -136,15 +135,15 @@ struct cn9k_sso_hws {
 	/* PTP timestamp */
 	struct cnxk_timesync_info **tstamp;
 	/* Add Work Fastpath data */
-	uint64_t xaq_lmt __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) uint64_t xaq_lmt;
 	uint64_t *fc_mem;
 	uintptr_t grp_base;
 	/* Tx Fastpath data */
-	uint64_t lso_tun_fmt __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) uint64_t lso_tun_fmt;
 	uint8_t tx_adptr_data[];
-} __rte_cache_aligned;
+};
 
-struct cn9k_sso_hws_dual {
+struct __rte_cache_aligned cn9k_sso_hws_dual {
 	uint64_t base[2]; /* Ping and Pong */
 	uint64_t gw_wdata;
 	void *lookup_mem;
@@ -154,18 +153,18 @@ struct cn9k_sso_hws_dual {
 	/* PTP timestamp */
 	struct cnxk_timesync_info **tstamp;
 	/* Add Work Fastpath data */
-	uint64_t xaq_lmt __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) uint64_t xaq_lmt;
 	uint64_t *fc_mem;
 	uintptr_t grp_base;
 	/* Tx Fastpath data */
-	uint64_t lso_tun_fmt __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) uint64_t lso_tun_fmt;
 	uint8_t tx_adptr_data[];
-} __rte_cache_aligned;
+};
 
-struct cnxk_sso_hws_cookie {
+struct __rte_cache_aligned cnxk_sso_hws_cookie {
 	const struct rte_eventdev *event_dev;
 	bool configured;
-} __rte_cache_aligned;
+};
 
 static inline int
 parse_kvargs_flag(const char *key, const char *value, void *opaque)
@@ -284,4 +283,7 @@ int cnxk_crypto_adapter_qp_add(const struct rte_eventdev *event_dev,
 			       const struct rte_event_crypto_adapter_queue_conf *conf);
 int cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev, int32_t queue_pair_id);
 
+int cnxk_dma_adapter_vchan_add(const struct rte_eventdev *event_dev,
+			       const int16_t dma_dev_id, uint16_t vchan_id);
+int cnxk_dma_adapter_vchan_del(const int16_t dma_dev_id, uint16_t vchan_id);
 #endif /* __CNXK_EVENTDEV_H__ */

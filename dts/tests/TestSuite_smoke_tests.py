@@ -15,13 +15,15 @@ in the infrastructure (a faulty link between NICs or a misconfiguration).
 import re
 
 from framework.config import PortConfig
-from framework.remote_session import TestPmdShell
+from framework.remote_session.testpmd_shell import TestPmdShell
 from framework.settings import SETTINGS
-from framework.test_suite import TestSuite
+from framework.test_suite import TestSuite, func_test
+from framework.testbed_model.capability import TopologyType, requires
 from framework.utils import REGEX_FOR_PCI_ADDRESS
 
 
-class SmokeTests(TestSuite):
+@requires(topology_type=TopologyType.no_link)
+class TestSmokeTests(TestSuite):
     """DPDK and infrastructure smoke test suite.
 
     The test cases validate the most basic DPDK functionality needed for all other test suites.
@@ -47,6 +49,7 @@ class SmokeTests(TestSuite):
         self.dpdk_build_dir_path = self.sut_node.remote_dpdk_build_dir
         self.nics_in_node = self.sut_node.config.ports
 
+    @func_test
     def test_unit_tests(self) -> None:
         """DPDK meson ``fast-tests`` unit tests.
 
@@ -63,6 +66,7 @@ class SmokeTests(TestSuite):
             privileged=True,
         )
 
+    @func_test
     def test_driver_tests(self) -> None:
         """DPDK meson ``driver-tests`` unit tests.
 
@@ -91,6 +95,7 @@ class SmokeTests(TestSuite):
             privileged=True,
         )
 
+    @func_test
     def test_devices_listed_in_testpmd(self) -> None:
         """Testpmd device discovery.
 
@@ -99,8 +104,8 @@ class SmokeTests(TestSuite):
         Test:
             List all devices found in testpmd and verify the configured devices are among them.
         """
-        testpmd_driver = self.sut_node.create_interactive_shell(TestPmdShell, privileged=True)
-        dev_list = [str(x) for x in testpmd_driver.get_devices()]
+        with TestPmdShell(self.sut_node) as testpmd:
+            dev_list = [str(x) for x in testpmd.get_devices()]
         for nic in self.nics_in_node:
             self.verify(
                 nic.pci in dev_list,
@@ -108,6 +113,7 @@ class SmokeTests(TestSuite):
                 "please check your configuration",
             )
 
+    @func_test
     def test_device_bound_to_driver(self) -> None:
         """Device driver in OS.
 
@@ -130,7 +136,7 @@ class SmokeTests(TestSuite):
             # with the address for the nic we are on in the loop and then captures the
             # name of the driver in a group
             devbind_info_for_nic = re.search(
-                f"{nic.pci}[^\\n]*drv=([\\d\\w]*) [^\\n]*",
+                f"{nic.pci}[^\\n]*drv=([\\d\\w-]*) [^\\n]*",
                 all_nics_in_dpdk_devbind,
             )
             self.verify(

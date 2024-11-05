@@ -23,16 +23,16 @@ RTE_LOG_REGISTER_DEFAULT(pipeline_logtype, INFO);
 #ifdef RTE_PIPELINE_STATS_COLLECT
 
 #define RTE_PIPELINE_STATS_AH_DROP_WRITE(p, mask)			\
-	({ (p)->n_pkts_ah_drop = rte_popcount64(mask); })
+	__extension__ ({ (p)->n_pkts_ah_drop = rte_popcount64(mask); })
 
 #define RTE_PIPELINE_STATS_AH_DROP_READ(p, counter)			\
-	({ (counter) += (p)->n_pkts_ah_drop; (p)->n_pkts_ah_drop = 0; })
+	__extension__ ({ (counter) += (p)->n_pkts_ah_drop; (p)->n_pkts_ah_drop = 0; })
 
 #define RTE_PIPELINE_STATS_TABLE_DROP0(p)				\
-	({ (p)->pkts_drop_mask = (p)->action_mask0[RTE_PIPELINE_ACTION_DROP]; })
+	__extension__ ({ (p)->pkts_drop_mask = (p)->action_mask0[RTE_PIPELINE_ACTION_DROP]; })
 
 #define RTE_PIPELINE_STATS_TABLE_DROP1(p, counter)			\
-({									\
+__extension__ ({							\
 	uint64_t mask = (p)->action_mask0[RTE_PIPELINE_ACTION_DROP];	\
 	mask ^= (p)->pkts_drop_mask;					\
 	(counter) += rte_popcount64(mask);			\
@@ -104,7 +104,7 @@ struct rte_table {
 
 #define RTE_PIPELINE_MAX_NAME_SZ                           124
 
-struct rte_pipeline {
+struct __rte_cache_aligned rte_pipeline {
 	/* Input parameters */
 	char name[RTE_PIPELINE_MAX_NAME_SZ];
 	int socket_id;
@@ -132,7 +132,7 @@ struct rte_pipeline {
 	uint64_t pkts_mask;
 	uint64_t n_pkts_ah_drop;
 	uint64_t pkts_drop_mask;
-} __rte_cache_aligned;
+};
 
 static inline uint32_t
 rte_mask_get_next(uint64_t mask, uint32_t pos)

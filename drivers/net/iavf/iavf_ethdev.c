@@ -4,6 +4,7 @@
 
 #include <ctype.h>
 #include <sys/queue.h>
+#include <stdalign.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdint.h>
@@ -13,6 +14,7 @@
 #include <inttypes.h>
 #include <rte_byteorder.h>
 #include <rte_common.h>
+#include <rte_os_shim.h>
 
 #include <rte_interrupts.h>
 #include <rte_debug.h>
@@ -39,6 +41,7 @@
 #define IAVF_RESET_WATCHDOG_ARG    "watchdog_period"
 #define IAVF_ENABLE_AUTO_RESET_ARG "auto_reset"
 #define IAVF_NO_POLL_ON_LINK_DOWN_ARG "no-poll-on-link-down"
+#define IAVF_MBUF_CHECK_ARG       "mbuf_check"
 uint64_t iavf_timestamp_dynflag;
 int iavf_timestamp_dynfield_offset = -1;
 int rte_pmd_iavf_tx_lldp_dynfield_offset = -1;
@@ -49,13 +52,14 @@ static const char * const iavf_valid_args[] = {
 	IAVF_RESET_WATCHDOG_ARG,
 	IAVF_ENABLE_AUTO_RESET_ARG,
 	IAVF_NO_POLL_ON_LINK_DOWN_ARG,
+	IAVF_MBUF_CHECK_ARG,
 	NULL
 };
 
 static const struct rte_mbuf_dynfield iavf_proto_xtr_metadata_param = {
 	.name = "intel_pmd_dynfield_proto_xtr_metadata",
 	.size = sizeof(uint32_t),
-	.align = __alignof__(uint32_t),
+	.align = alignof(uint32_t),
 	.flags = 0,
 };
 
@@ -98,7 +102,8 @@ static int iavf_dev_close(struct rte_eth_dev *dev);
 static int iavf_dev_reset(struct rte_eth_dev *dev);
 static int iavf_dev_info_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
-static const uint32_t *iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+static const uint32_t *iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev,
+						     size_t *no_of_elements);
 static int iavf_dev_stats_get(struct rte_eth_dev *dev,
 			     struct rte_eth_stats *stats);
 static int iavf_dev_stats_reset(struct rte_eth_dev *dev);
@@ -175,6 +180,7 @@ static const struct rte_iavf_xstats_name_off rte_iavf_stats_strings[] = {
 	{"tx_broadcast_packets", _OFF_OF(eth_stats.tx_broadcast)},
 	{"tx_dropped_packets", _OFF_OF(eth_stats.tx_discards)},
 	{"tx_error_packets", _OFF_OF(eth_stats.tx_errors)},
+	{"tx_mbuf_error_packets", _OFF_OF(mbuf_stats.tx_pkt_errors)},
 
 	{"inline_ipsec_crypto_ipackets", _OFF_OF(ips_stats.icount)},
 	{"inline_ipsec_crypto_ibytes", _OFF_OF(ips_stats.ibytes)},
@@ -631,7 +637,8 @@ iavf_dev_init_vlan(struct rte_eth_dev *dev)
 					RTE_ETH_VLAN_FILTER_MASK |
 					RTE_ETH_VLAN_EXTEND_MASK);
 	if (err) {
-		PMD_DRV_LOG(ERR, "Failed to update vlan offload");
+		PMD_DRV_LOG(INFO,
+			"VLAN offloading is not supported, or offloading was refused by the PF");
 		return err;
 	}
 
@@ -707,9 +714,7 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 		vf->max_rss_qregion = IAVF_MAX_NUM_QUEUES_DFLT;
 	}
 
-	ret = iavf_dev_init_vlan(dev);
-	if (ret)
-		PMD_DRV_LOG(ERR, "configure VLAN failed: %d", ret);
+	iavf_dev_init_vlan(dev);
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_RSS_PF) {
 		if (iavf_init_rss(ad) != 0) {
@@ -1039,7 +1044,7 @@ iavf_dev_start(struct rte_eth_dev *dev)
 		if (iavf_configure_queues(adapter,
 				IAVF_CFG_Q_NUM_PER_BUF, index) != 0) {
 			PMD_DRV_LOG(ERR, "configure queues failed");
-			goto err_queue;
+			goto error;
 		}
 		num_queue_pairs -= IAVF_CFG_Q_NUM_PER_BUF;
 		index += IAVF_CFG_Q_NUM_PER_BUF;
@@ -1047,12 +1052,12 @@ iavf_dev_start(struct rte_eth_dev *dev)
 
 	if (iavf_configure_queues(adapter, num_queue_pairs, index) != 0) {
 		PMD_DRV_LOG(ERR, "configure queues failed");
-		goto err_queue;
+		goto error;
 	}
 
 	if (iavf_config_rx_queues_irqs(dev, intr_handle) != 0) {
 		PMD_DRV_LOG(ERR, "configure irq failed");
-		goto err_queue;
+		goto error;
 	}
 	/* re-enable intr again, because efd assign may change */
 	if (dev->data->dev_conf.intr_conf.rxq != 0) {
@@ -1072,14 +1077,12 @@ iavf_dev_start(struct rte_eth_dev *dev)
 
 	if (iavf_start_queues(dev) != 0) {
 		PMD_DRV_LOG(ERR, "enable queues failed");
-		goto err_mac;
+		goto error;
 	}
 
 	return 0;
 
-err_mac:
-	iavf_add_del_all_mac_addr(adapter, false);
-err_queue:
+error:
 	return -1;
 }
 
@@ -1107,16 +1110,6 @@ iavf_dev_stop(struct rte_eth_dev *dev)
 	rte_intr_efd_disable(intr_handle);
 	/* Rx interrupt vector mapping free */
 	rte_intr_vec_list_free(intr_handle);
-
-	/* adminq will be disabled when vf is resetting. */
-	if (!vf->in_reset_recovery) {
-		/* remove all mac addrs */
-		iavf_add_del_all_mac_addr(adapter, false);
-
-		/* remove all multicast addresses */
-		iavf_add_del_mc_addr_list(adapter, vf->mc_addrs, vf->mc_addrs_num,
-				  false);
-	}
 
 	iavf_stop_queues(dev);
 
@@ -1169,7 +1162,6 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_SCTP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |
-		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_TCP_TSO |
 		RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |
 		RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |
@@ -1177,6 +1169,10 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 		RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |
 		RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	/* X710 does not support outer udp checksum */
+	if (adapter->hw.mac.type != IAVF_MAC_XL710)
+		dev_info->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM;
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_CRC)
 		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_KEEP_CRC;
@@ -1221,7 +1217,8 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 }
 
 static const uint32_t *
-iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
+iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused,
+			      size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
@@ -1232,8 +1229,8 @@ iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
 		RTE_PTYPE_L4_SCTP,
 		RTE_PTYPE_L4_TCP,
 		RTE_PTYPE_L4_UDP,
-		RTE_PTYPE_UNKNOWN
 	};
+	*no_of_elements = RTE_DIM(ptypes);
 	return ptypes;
 }
 
@@ -1841,6 +1838,9 @@ iavf_dev_xstats_reset(struct rte_eth_dev *dev)
 	iavf_dev_stats_reset(dev);
 	memset(&vf->vsi.eth_stats_offset.ips_stats, 0,
 			sizeof(struct iavf_ipsec_crypto_stats));
+	memset(&vf->vsi.eth_stats_offset.mbuf_stats, 0,
+			sizeof(struct iavf_mbuf_stats));
+
 	return 0;
 }
 
@@ -1880,6 +1880,19 @@ iavf_dev_update_ipsec_xstats(struct rte_eth_dev *ethdev,
 	}
 }
 
+static void
+iavf_dev_update_mbuf_stats(struct rte_eth_dev *ethdev,
+		struct iavf_mbuf_stats *mbuf_stats)
+{
+	uint16_t idx;
+	struct iavf_tx_queue *txq;
+
+	for (idx = 0; idx < ethdev->data->nb_tx_queues; idx++) {
+		txq = ethdev->data->tx_queues[idx];
+		mbuf_stats->tx_pkt_errors += txq->mbuf_errors;
+	}
+}
+
 static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
 				 struct rte_eth_xstat *xstats, unsigned int n)
 {
@@ -1907,6 +1920,9 @@ static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
 
 	if (iavf_ipsec_crypto_supported(adapter))
 		iavf_dev_update_ipsec_xstats(dev, &iavf_xtats.ips_stats);
+
+	if (adapter->devargs.mbuf_check)
+		iavf_dev_update_mbuf_stats(dev, &iavf_xtats.mbuf_stats);
 
 	/* loop over xstats array and values from pstats */
 	for (i = 0; i < IAVF_NB_XSTATS; i++) {
@@ -2290,6 +2306,57 @@ iavf_parse_watchdog_period(__rte_unused const char *key, const char *value, void
 	return 0;
 }
 
+static int
+iavf_parse_mbuf_check(__rte_unused const char *key, const char *value, void *args)
+{
+	char *cur;
+	char *tmp;
+	int str_len;
+	int valid_len;
+	int ret = 0;
+	uint64_t *mc_flags = args;
+	char *str2 = strdup(value);
+
+	if (str2 == NULL)
+		return -1;
+
+	str_len = strlen(str2);
+	if (str_len == 0) {
+		ret = -1;
+		goto err_end;
+	}
+
+	/* Try stripping the outer square brackets of the parameter string. */
+	if (str2[0] == '[' && str2[str_len - 1] == ']') {
+		if (str_len < 3) {
+			ret = -1;
+			goto err_end;
+		}
+		valid_len = str_len - 2;
+		memmove(str2, str2 + 1, valid_len);
+		memset(str2 + valid_len, '\0', 2);
+	}
+
+	cur = strtok_r(str2, ",", &tmp);
+	while (cur != NULL) {
+		if (!strcmp(cur, "mbuf"))
+			*mc_flags |= IAVF_MBUF_CHECK_F_TX_MBUF;
+		else if (!strcmp(cur, "size"))
+			*mc_flags |= IAVF_MBUF_CHECK_F_TX_SIZE;
+		else if (!strcmp(cur, "segment"))
+			*mc_flags |= IAVF_MBUF_CHECK_F_TX_SEGMENT;
+		else if (!strcmp(cur, "offload"))
+			*mc_flags |= IAVF_MBUF_CHECK_F_TX_OFFLOAD;
+		else
+			PMD_DRV_LOG(ERR, "Unsupported diagnostic type: %s", cur);
+		cur = strtok_r(NULL, ",", &tmp);
+	}
+
+err_end:
+	free(str2);
+	return ret;
+}
+
 static int iavf_parse_devargs(struct rte_eth_dev *dev)
 {
 	struct iavf_adapter *ad =
@@ -2304,7 +2371,7 @@ static int iavf_parse_devargs(struct rte_eth_dev *dev)
 
 	kvlist = rte_kvargs_parse(devargs->args, iavf_valid_args);
 	if (!kvlist) {
-		PMD_INIT_LOG(ERR, "invalid kvargs key\n");
+		PMD_INIT_LOG(ERR, "invalid kvargs key");
 		return -EINVAL;
 	}
 
@@ -2339,10 +2406,15 @@ static int iavf_parse_devargs(struct rte_eth_dev *dev)
 	if (ad->devargs.quanta_size != 0 &&
 	    (ad->devargs.quanta_size < 256 || ad->devargs.quanta_size > 4096 ||
 	     ad->devargs.quanta_size & 0x40)) {
-		PMD_INIT_LOG(ERR, "invalid quanta size\n");
+		PMD_INIT_LOG(ERR, "invalid quanta size");
 		ret = -EINVAL;
 		goto bail;
 	}
+
+	ret = rte_kvargs_process(kvlist, IAVF_MBUF_CHECK_ARG,
+				 &iavf_parse_mbuf_check, &ad->devargs.mbuf_check);
+	if (ret)
+		goto bail;
 
 	ret = rte_kvargs_process(kvlist, IAVF_ENABLE_AUTO_RESET_ARG,
 				 &parse_bool, &ad->devargs.auto_reset);
@@ -2878,6 +2950,7 @@ iavf_dev_close(struct rte_eth_dev *dev)
 	if (vf->promisc_unicast_enabled || vf->promisc_multicast_enabled)
 		iavf_config_promisc(adapter, false, false);
 
+	iavf_vf_reset(hw);
 	iavf_shutdown_adminq(hw);
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
 		/* disable uio intr before callback unregister */
@@ -2957,7 +3030,6 @@ iavf_dev_reset(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-
 	/*
 	 * Check whether the VF reset has been done and inform application,
 	 * to avoid calling the virtual channel command, which may cause
@@ -2965,12 +3037,12 @@ iavf_dev_reset(struct rte_eth_dev *dev)
 	 */
 	ret = iavf_check_vf_reset_done(hw);
 	if (ret) {
-		PMD_DRV_LOG(ERR, "Wait too long for reset done!\n");
+		PMD_DRV_LOG(ERR, "Wait too long for reset done!");
 		return ret;
 	}
 	iavf_set_no_poll(adapter, false);
 
-	PMD_DRV_LOG(DEBUG, "Start dev_reset ...\n");
+	PMD_DRV_LOG(DEBUG, "Start dev_reset ...");
 	ret = iavf_dev_uninit(dev);
 	if (ret)
 		return ret;
@@ -3015,7 +3087,7 @@ iavf_handle_hw_reset(struct rte_eth_dev *dev)
 		return;
 
 	if (!iavf_is_reset_detected(adapter)) {
-		PMD_DRV_LOG(DEBUG, "reset not start\n");
+		PMD_DRV_LOG(DEBUG, "reset not start");
 		return;
 	}
 
@@ -3042,7 +3114,7 @@ iavf_handle_hw_reset(struct rte_eth_dev *dev)
 	goto exit;
 
 error:
-	PMD_DRV_LOG(DEBUG, "RESET recover with error code=%d\n", ret);
+	PMD_DRV_LOG(DEBUG, "RESET recover with error code=%dn", ret);
 exit:
 	vf->in_reset_recovery = false;
 	iavf_set_no_poll(adapter, false);

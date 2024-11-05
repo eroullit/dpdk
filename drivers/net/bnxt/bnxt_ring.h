@@ -24,7 +24,7 @@
 #define DB_KEY_TX_PUSH						(0x4 << 28)
 #define DB_LONG_TX_PUSH						(0x2 << 24)
 
-#define DEFAULT_CP_RING_SIZE	256
+#define DEFAULT_CP_RING_SIZE	4096
 #define DEFAULT_RX_RING_SIZE	256
 #define DEFAULT_TX_RING_SIZE	256
 
@@ -89,7 +89,8 @@ static inline void bnxt_db_write(struct bnxt_db_info *db, uint32_t idx)
 	if (db->db_64) {
 		uint64_t key_idx = db->db_key64 | db_idx;
 
-		rte_write64(key_idx, doorbell);
+		rte_compiler_barrier();
+		rte_write64_relaxed(key_idx, doorbell);
 	} else {
 		uint32_t key_idx = db->db_key32 | db_idx;
 

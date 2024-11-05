@@ -253,6 +253,7 @@ ulp_ha_mgr_timer_cb(void *arg)
 
 	myclient_cnt = bnxt_ulp_cntxt_num_shared_clients_get(ulp_ctx);
 	if (myclient_cnt == 0) {
+		bnxt_ulp_cntxt_entry_release();
 		BNXT_TF_DBG(ERR,
 			    "PANIC Client Count is zero kill timer\n.");
 		return;
@@ -412,7 +413,7 @@ ulp_ha_mgr_init(struct bnxt_ulp_context *ulp_ctx)
 
 	rc = pthread_mutex_init(&ha_info->ha_lock, NULL);
 	if (rc) {
-		PMD_DRV_LOG(ERR, "Failed to initialize ha mutex\n");
+		PMD_DRV_LOG_LINE(ERR, "Failed to initialize ha mutex");
 		goto cleanup;
 	}
 	rc = ulp_ha_mgr_timer_start(ulp_ctx->cfg_data);

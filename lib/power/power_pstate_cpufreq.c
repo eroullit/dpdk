@@ -49,7 +49,7 @@ enum power_state {
 	POWER_UNKNOWN
 };
 
-struct pstate_power_info {
+struct __rte_cache_aligned pstate_power_info {
 	unsigned int lcore_id;               /**< Logical core id */
 	uint32_t freqs[RTE_MAX_LCORE_FREQS]; /**< Frequency array */
 	uint32_t nb_freqs;                   /**< number of available freqs */
@@ -64,7 +64,7 @@ struct pstate_power_info {
 	uint16_t turbo_available;            /**< Turbo Boost available */
 	uint16_t turbo_enable;               /**< Turbo Boost enable/disable */
 	uint16_t priority_core;              /**< High Performance core */
-} __rte_cache_aligned;
+};
 
 
 static struct pstate_power_info lcore_power_info[RTE_MAX_LCORE];
@@ -542,6 +542,12 @@ power_pstate_cpufreq_init(unsigned int lcore_id)
 	struct pstate_power_info *pi;
 	uint32_t exp_state;
 
+	if (!power_pstate_cpufreq_check_supported()) {
+		POWER_LOG(ERR, "%s driver is not supported",
+				POWER_PSTATE_DRIVER);
+		return -1;
+	}
+
 	if (lcore_id >= RTE_MAX_LCORE) {
 		POWER_LOG(ERR, "Lcore id %u can not exceed %u",
 				lcore_id, RTE_MAX_LCORE - 1U);
@@ -564,7 +570,11 @@ power_pstate_cpufreq_init(unsigned int lcore_id)
 		return -1;
 	}
 
-	pi->lcore_id = lcore_id;
+	if (power_get_lcore_mapped_cpu_id(lcore_id, &pi->lcore_id) < 0) {
+		POWER_LOG(ERR, "Cannot get CPU ID mapped for lcore %u", lcore_id);
+		return -1;
+	}
+
 	/* Check and set the governor */
 	if (power_set_governor_performance(pi) < 0) {
 		POWER_LOG(ERR, "Cannot set governor of lcore %u to "

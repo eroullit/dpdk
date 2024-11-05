@@ -2,6 +2,7 @@
 # Copyright(c) 2010-2014 Intel Corporation
 # Copyright(c) 2022-2023 PANTHEON.tech s.r.o.
 # Copyright(c) 2022-2023 University of New Hampshire
+# Copyright(c) 2024 Arm Limited
 
 """DTS exceptions.
 
@@ -31,6 +32,8 @@ class ErrorSeverity(IntEnum):
     #:
     SSH_ERR = 4
     #:
+    INTERNAL_ERR = 5
+    #:
     DPDK_BUILD_ERR = 10
     #:
     TESTCASE_VERIFY_ERR = 20
@@ -46,26 +49,6 @@ class DTSError(Exception):
 
     #:
     severity: ClassVar[ErrorSeverity] = ErrorSeverity.GENERIC_ERR
-
-
-class SSHTimeoutError(DTSError):
-    """The SSH execution of a command timed out."""
-
-    #:
-    severity: ClassVar[ErrorSeverity] = ErrorSeverity.SSH_ERR
-    _command: str
-
-    def __init__(self, command: str):
-        """Define the meaning of the first argument.
-
-        Args:
-            command: The executed command.
-        """
-        self._command = command
-
-    def __str__(self) -> str:
-        """Add some context to the string representation."""
-        return f"{self._command} execution timed out."
 
 
 class SSHConnectionError(DTSError):
@@ -95,8 +78,42 @@ class SSHConnectionError(DTSError):
         return message
 
 
-class SSHSessionDeadError(DTSError):
-    """The SSH session is no longer alive."""
+class _SSHTimeoutError(DTSError):
+    """The execution of a command via SSH timed out.
+
+    This class is private and meant to be raised as its interactive and non-interactive variants.
+    """
+
+    #:
+    severity: ClassVar[ErrorSeverity] = ErrorSeverity.SSH_ERR
+    _command: str
+
+    def __init__(self, command: str):
+        """Define the meaning of the first argument.
+
+        Args:
+            command: The executed command.
+        """
+        self._command = command
+
+    def __str__(self) -> str:
+        """Add some context to the string representation."""
+        return f"{self._command} execution timed out."
+
+
+class SSHTimeoutError(_SSHTimeoutError):
+    """The execution of a command on a non-interactive SSH session timed out."""
+
+
+class InteractiveSSHTimeoutError(_SSHTimeoutError):
+    """The execution of a command on an interactive SSH session timed out."""
+
+
+class _SSHSessionDeadError(DTSError):
+    """The SSH session is no longer alive.
+
+    This class is private and meant to be raised as its interactive and non-interactive variants.
+    """
 
     #:
     severity: ClassVar[ErrorSeverity] = ErrorSeverity.SSH_ERR
@@ -115,6 +132,14 @@ class SSHSessionDeadError(DTSError):
         return f"SSH session with {self._host} has died."
 
 
+class SSHSessionDeadError(_SSHSessionDeadError):
+    """Non-interactive SSH session has died."""
+
+
+class InteractiveSSHSessionDeadError(_SSHSessionDeadError):
+    """Interactive SSH session as died."""
+
+
 class ConfigurationError(DTSError):
     """An invalid configuration."""
 
@@ -129,21 +154,34 @@ class RemoteCommandExecutionError(DTSError):
     severity: ClassVar[ErrorSeverity] = ErrorSeverity.REMOTE_CMD_EXEC_ERR
     #: The executed command.
     command: str
+    _command_stderr: str
     _command_return_code: int
 
-    def __init__(self, command: str, command_return_code: int):
+    def __init__(self, command: str, command_stderr: str, command_return_code: int):
         """Define the meaning of the first two arguments.
 
         Args:
             command: The executed command.
+            command_stderr: The stderr of the executed command.
             command_return_code: The return code of the executed command.
         """
         self.command = command
+        self._command_stderr = command_stderr
         self._command_return_code = command_return_code
 
     def __str__(self) -> str:
-        """Include both the command and return code in the string representation."""
-        return f"Command {self.command} returned a non-zero exit code: {self._command_return_code}"
+        """Include the command, its return code and stderr in the string representation."""
+        return (
+            f"Command '{self.command}' returned a non-zero exit code: "
+            f"{self._command_return_code}\nStderr: {self._command_stderr}"
+        )
+
+
+class InteractiveCommandExecutionError(DTSError):
+    """An unsuccessful execution of a remote command in an interactive environment."""
+
+    #:
+    severity: ClassVar[ErrorSeverity] = ErrorSeverity.REMOTE_CMD_EXEC_ERR
 
 
 class RemoteDirectoryExistsError(DTSError):
@@ -185,3 +223,10 @@ class BlockingTestSuiteError(DTSError):
     def __str__(self) -> str:
         """Add some context to the string representation."""
         return f"Blocking suite {self._suite_name} failed."
+
+
+class InternalError(DTSError):
+    """An internal error or bug has occurred in DTS."""
+
+    #:
+    severity: ClassVar[ErrorSeverity] = ErrorSeverity.INTERNAL_ERR

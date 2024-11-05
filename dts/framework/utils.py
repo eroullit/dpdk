@@ -2,6 +2,7 @@
 # Copyright(c) 2010-2014 Intel Corporation
 # Copyright(c) 2022-2023 PANTHEON.tech s.r.o.
 # Copyright(c) 2022-2023 University of New Hampshire
+# Copyright(c) 2024 Arm Limited
 
 """Various utility classes and functions.
 
@@ -16,16 +17,22 @@ Attributes:
 import atexit
 import json
 import os
+import random
 import subprocess
-from enum import Enum
+from enum import Enum, Flag
 from pathlib import Path
 from subprocess import SubprocessError
 
-from scapy.packet import Packet  # type: ignore[import]
+from scapy.layers.inet import IP, TCP, UDP, Ether  # type: ignore[import-untyped]
+from scapy.packet import Packet  # type: ignore[import-untyped]
 
-from .exception import ConfigurationError
+from .exception import ConfigurationError, InternalError
 
 REGEX_FOR_PCI_ADDRESS: str = "/[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}.[0-9]{1}/"
+_REGEX_FOR_COLON_OR_HYPHEN_SEP_MAC: str = r"(?:[\da-fA-F]{2}[:-]){5}[\da-fA-F]{2}"
+_REGEX_FOR_DOT_SEP_MAC: str = r"(?:[\da-fA-F]{4}.){2}[\da-fA-F]{4}"
+REGEX_FOR_MAC_ADDRESS: str = rf"{_REGEX_FOR_COLON_OR_HYPHEN_SEP_MAC}|{_REGEX_FOR_DOT_SEP_MAC}"
+REGEX_FOR_BASE64_ENCODING: str = "[-a-zA-Z0-9+\\/]*={0,3}"
 
 
 def expand_range(range_str: str) -> list[int]:
@@ -70,6 +77,31 @@ def get_packet_summaries(packets: list[Packet]) -> str:
     return f"Packet contents: \n{packet_summaries}"
 
 
+def get_commit_id(rev_id: str) -> str:
+    """Given a Git revision ID, return the corresponding commit ID.
+
+    Args:
+        rev_id: The Git revision ID.
+
+    Raises:
+        ConfigurationError: The ``git rev-parse`` command failed, suggesting
+            an invalid or ambiguous revision ID was supplied.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", rev_id],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise ConfigurationError(
+            f"{rev_id} is not a valid git reference.\n"
+            f"Command: {result.args}\n"
+            f"Stdout: {result.stdout}\n"
+            f"Stderr: {result.stderr}"
+        )
+    return result.stdout.strip()
+
+
 class StrEnum(Enum):
     """Enum with members stored as strings."""
 
@@ -82,7 +114,7 @@ class StrEnum(Enum):
         return self.name
 
 
-class MesonArgs(object):
+class MesonArgs:
     """Aggregate the arguments needed to build DPDK."""
 
     _default_library: str
@@ -131,7 +163,7 @@ class _TarCompressionFormat(StrEnum):
     zstd = "zst"
 
 
-class DPDKGitTarball(object):
+class DPDKGitTarball:
     """Compressed tarball of DPDK from the repository.
 
     The class supports the :class:`os.PathLike` protocol,
@@ -170,7 +202,6 @@ class DPDKGitTarball(object):
 
         self._tarball_dir = Path(output_dir, "tarball")
 
-        self._get_commit_id()
         self._create_tarball_dir()
 
         self._tarball_name = (
@@ -179,22 +210,6 @@ class DPDKGitTarball(object):
         self._tarball_path = self._check_tarball_path()
         if not self._tarball_path:
             self._create_tarball()
-
-    def _get_commit_id(self) -> None:
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", self._git_ref],
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            raise ConfigurationError(
-                f"{self._git_ref} is neither a path to an existing DPDK "
-                "archive nor a valid git reference.\n"
-                f"Command: {result.args}\n"
-                f"Stdout: {result.stdout}\n"
-                f"Stderr: {result.stderr}"
-            )
-        self._git_ref = result.stdout.strip()
 
     def _create_tarball_dir(self) -> None:
         os.makedirs(self._tarball_dir, exist_ok=True)
@@ -235,3 +250,90 @@ class DPDKGitTarball(object):
     def __fspath__(self) -> str:
         """The os.PathLike protocol implementation."""
         return str(self._tarball_path)
+
+
+class PacketProtocols(Flag):
+    """Flag specifying which protocols to use for packet generation."""
+
+    #:
+    IP = 1
+    #:
+    TCP = 2 | IP
+    #:
+    UDP = 4 | IP
+    #:
+    ALL = TCP | UDP
+
+
+def generate_random_packets(
+    number_of: int,
+    payload_size: int = 1500,
+    protocols: PacketProtocols = PacketProtocols.ALL,
+    ports_range: range = range(1024, 49152),
+    mtu: int = 1500,
+) -> list[Packet]:
+    """Generate a number of random packets.
+
+    The payload of the packets will consist of random bytes. If `payload_size` is too big, then the
+    maximum payload size allowed for the specific packet type is used. The size is calculated based
+    on the specified `mtu`, therefore it is essential that `mtu` is set correctly to match the MTU
+    of the port that will send out the generated packets.
+
+    If `protocols` has any L4 protocol enabled then all the packets are generated with any of
+    the specified L4 protocols chosen at random. If only :attr:`~PacketProtocols.IP` is set, then
+    only L3 packets are generated.
+
+    If L4 packets will be generated, then the TCP/UDP ports to be used will be chosen at random from
+    `ports_range`.
+
+    Args:
+        number_of: The number of packets to generate.
+        payload_size: The packet payload size to generate, capped based on `mtu`.
+        protocols: The protocols to use for the generated packets.
+        ports_range: The range of L4 port numbers to use. Used only if `protocols` has L4 protocols.
+        mtu: The MTU of the NIC port that will send out the generated packets.
+
+    Raises:
+        InternalError: If the `payload_size` is invalid.
+
+    Returns:
+        A list containing the randomly generated packets.
+    """
+    if payload_size < 0:
+        raise InternalError(f"An invalid payload_size of {payload_size} was given.")
+
+    l4_factories = []
+    if protocols & PacketProtocols.TCP:
+        l4_factories.append(TCP)
+    if protocols & PacketProtocols.UDP:
+        l4_factories.append(UDP)
+
+    def _make_packet() -> Packet:
+        packet = Ether()
+
+        if protocols & PacketProtocols.IP:
+            packet /= IP()
+
+        if len(l4_factories) > 0:
+            src_port, dst_port = random.choices(ports_range, k=2)
+            packet /= random.choice(l4_factories)(sport=src_port, dport=dst_port)
+
+        max_payload_size = mtu - len(packet)
+        usable_payload_size = payload_size if payload_size < max_payload_size else max_payload_size
+        return packet / random.randbytes(usable_payload_size)
+
+    return [_make_packet() for _ in range(number_of)]
+
+
+class MultiInheritanceBaseClass:
+    """A base class for classes utilizing multiple inheritance.
+
+    This class enables it's subclasses to support both single and multiple inheritance by acting as
+    a stopping point in the tree of calls to the constructors of superclasses. This class is able
+    to exist at the end of the Method Resolution Order (MRO) so that subclasses can call
+    :meth:`super.__init__` without repercussion.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Call the init method of :class:`object`."""
+        super().__init__()

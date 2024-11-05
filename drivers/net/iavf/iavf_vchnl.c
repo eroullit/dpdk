@@ -41,7 +41,7 @@ struct iavf_event_element {
 };
 
 struct iavf_event_handler {
-	uint32_t ndev;
+	RTE_ATOMIC(uint32_t) ndev;
 	rte_thread_t tid;
 	int fd[2];
 	pthread_mutex_t lock;
@@ -129,7 +129,7 @@ iavf_dev_event_handler_init(void)
 {
 	struct iavf_event_handler *handler = &event_handler;
 
-	if (__atomic_fetch_add(&handler->ndev, 1, __ATOMIC_RELAXED) + 1 != 1)
+	if (rte_atomic_fetch_add_explicit(&handler->ndev, 1, rte_memory_order_relaxed) + 1 != 1)
 		return 0;
 #if defined(RTE_EXEC_ENV_IS_WINDOWS) && RTE_EXEC_ENV_IS_WINDOWS != 0
 	int err = _pipe(handler->fd, MAX_EVENT_PENDING, O_BINARY);
@@ -137,7 +137,7 @@ iavf_dev_event_handler_init(void)
 	int err = pipe(handler->fd);
 #endif
 	if (err != 0) {
-		__atomic_fetch_sub(&handler->ndev, 1, __ATOMIC_RELAXED);
+		rte_atomic_fetch_sub_explicit(&handler->ndev, 1, rte_memory_order_relaxed);
 		return -1;
 	}
 
@@ -146,7 +146,7 @@ iavf_dev_event_handler_init(void)
 
 	if (rte_thread_create_internal_control(&handler->tid, "iavf-event",
 				iavf_dev_event_handle, NULL)) {
-		__atomic_fetch_sub(&handler->ndev, 1, __ATOMIC_RELAXED);
+		rte_atomic_fetch_sub_explicit(&handler->ndev, 1, rte_memory_order_relaxed);
 		return -1;
 	}
 
@@ -158,7 +158,7 @@ iavf_dev_event_handler_fini(void)
 {
 	struct iavf_event_handler *handler = &event_handler;
 
-	if (__atomic_fetch_sub(&handler->ndev, 1, __ATOMIC_RELAXED) - 1 != 0)
+	if (rte_atomic_fetch_sub_explicit(&handler->ndev, 1, rte_memory_order_relaxed) - 1 != 0)
 		return;
 
 	int unused = pthread_cancel((pthread_t)handler->tid.opaque_id);
@@ -255,8 +255,8 @@ iavf_read_msg_from_pf(struct iavf_adapter *adapter, uint16_t buf_len,
 		case VIRTCHNL_EVENT_LINK_CHANGE:
 			vf->link_up =
 				vpe->event_data.link_event.link_status;
-			if (vf->vf_res->vf_cap_flags &
-				VIRTCHNL_VF_CAP_ADV_LINK_SPEED) {
+			if (vf->vf_res != NULL &&
+			    vf->vf_res->vf_cap_flags & VIRTCHNL_VF_CAP_ADV_LINK_SPEED) {
 				vf->link_speed =
 				    vpe->event_data.link_event_adv.link_speed;
 			} else {
@@ -574,8 +574,8 @@ iavf_handle_virtchnl_msg(struct rte_eth_dev *dev)
 				/* read message and it's expected one */
 				if (msg_opc == vf->pend_cmd) {
 					uint32_t cmd_count =
-					__atomic_fetch_sub(&vf->pend_cmd_count,
-							1, __ATOMIC_RELAXED) - 1;
+					rte_atomic_fetch_sub_explicit(&vf->pend_cmd_count,
+							1, rte_memory_order_relaxed) - 1;
 					if (cmd_count == 0)
 						_notify_cmd(vf, msg_ret);
 				} else {
@@ -710,6 +710,7 @@ iavf_get_vf_resource(struct iavf_adapter *adapter)
 		VIRTCHNL_VF_OFFLOAD_ADV_RSS_PF |
 		VIRTCHNL_VF_OFFLOAD_FSUB_PF |
 		VIRTCHNL_VF_OFFLOAD_REQ_QUEUES |
+		VIRTCHNL_VF_OFFLOAD_USO |
 		VIRTCHNL_VF_OFFLOAD_CRC |
 		VIRTCHNL_VF_OFFLOAD_VLAN_V2 |
 		VIRTCHNL_VF_LARGE_NUM_QPAIRS |

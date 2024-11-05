@@ -77,6 +77,38 @@ are listed in the Tested Platforms section of the Release Notes for each release
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    23.11  |     1.13.7    |      1.3.36     |  1.3.46   |    1.3.14    |    4.4    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    24.03  |     1.13.7    |      1.3.35     |  1.3.45   |    1.3.13    |    4.4    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+
+Dynamic Device Personalization (DDP) package loading
+----------------------------------------------------
+
+The Intel E810 requires a programmable pipeline package
+be downloaded by the driver to support normal operations.
+The E810 has limited functionality built in to allow PXE boot and other use cases,
+but for DPDK use the driver must download a package file during the driver initialization stage.
+
+The default DDP package file name is ``ice.pkg``.
+For a specific NIC, the DDP package supposed to be loaded can have a filename:
+``ice-xxxxxx.pkg``, where 'xxxxxx' is the 64-bit PCIe Device Serial Number of the NIC.
+For example, if the NIC's device serial number is 00-CC-BB-FF-FF-AA-05-68,
+the device-specific DDP package filename is ``ice-00ccbbffffaa0568.pkg`` (in hex and all low case).
+A symbolic link to the DDP package file is also ok.
+The same package file is used by both the kernel driver and the ICE PMD.
+For more information, please review the README file from
+`Intel® Ethernet 800 Series Dynamic Device Personalization (DDP) for Telecommunication (Comms) Package
+<https://www.intel.com/content/www/us/en/download/19660/intel-ethernet-800-series-dynamic-device-personalization-ddp-for-telecommunication-comms-package.html>`_.
+
+ICE PMD supports using a customized DDP search path.
+The driver will read the search path from
+``/sys/module/firmware_class/parameters/path`` as a ``CUSTOMIZED_PATH``.
+During initialization, the driver searches in the following paths in order:
+``CUSTOMIZED_PATH``, ``/lib/firmware/updates/intel/ice/ddp`` and ``/lib/firmware/intel/ice/ddp``.
+The device-specific DDP package has a higher loading priority than default DDP package, ``ice.pkg``.
+
+.. note::
+
+   Windows support: DDP packages are not supported on Windows.
 
 Configuration
 -------------
@@ -105,6 +137,15 @@ Runtime Configuration
   for example::
 
     -a 80:00.0,default-mac-disable=1
+
+- ``DDP Package File``
+
+  Rather than have the driver search for the DDP package to load,
+  or to override what package is used,
+  the ``ddp_pkg_file`` option can be used to provide the path to a specific package file.
+  For example::
+
+    -a 80:00.0,ddp_pkg_file=/path/to/ice-version.pkg
 
 - ``Protocol extraction for per queue``
 
@@ -257,6 +298,20 @@ Runtime Configuration
   As a trade-off, this configuration may cause the packet processing performance
   degradation due to the PCI bandwidth limitation.
 
+- ``Tx diagnostics`` (default ``not enabled``)
+
+  Set the ``devargs`` parameter ``mbuf_check`` to enable Tx diagnostics.
+  For example, ``-a 81:00.0,mbuf_check=<case>`` or ``-a 81:00.0,mbuf_check=[<case1>,<case2>...]``.
+  Thereafter, ``rte_eth_xstats_get()`` can be used to get the error counts,
+  which are collected in ``tx_mbuf_error_packets`` xstats.
+  In testpmd these can be shown via: ``testpmd> show port xstats all``.
+  Supported values for the ``case`` parameter are:
+
+  * ``mbuf``: Check for corrupted mbuf.
+  * ``size``: Check min/max packet length according to HW spec.
+  * ``segment``: Check number of mbuf segments does not exceed HW limits.
+  * ``offload``: Check for use of an unsupported offload flag.
+
 Driver compilation and testing
 ------------------------------
 
@@ -306,6 +361,27 @@ as switch, ACL) for the rest VFs.
 The DCF PMD needs to advertise and acquire DCF capability which allows DCF to
 send AdminQ commands that it would like to execute over to the PF and receive
 responses for the same from PF.
+
+Forward Error Correction (FEC)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Supports get/set FEC mode and get FEC capability.
+
+Time Synchronisation
+~~~~~~~~~~~~~~~~~~~~
+
+The system operator can run a PTP (Precision Time Protocol) client application
+to synchronise the time on the network card
+(and optionally the time on the system) to the PTP master.
+
+ICE PMD supports PTP client applications that use the DPDK IEEE 1588 API
+to communicate with the PTP master clock.
+Note that PTP client application needs to run on PF
+and add the ``--force-max-simd-bitwidth=64`` startup parameter to disable vector mode.
+
+.. code-block:: console
+
+   examples/dpdk-ptpclient -c f -n 3 -a 0000:ec:00.1 --force-max-simd-bitwidth=64 -- -T 1 -p 0x1 -c 1
 
 Generic Flow Support
 ~~~~~~~~~~~~~~~~~~~~
@@ -466,32 +542,3 @@ Usage::
 
 In "brief" mode, all scheduling nodes in the tree are displayed.
 In "detail" mode, each node's configuration parameters are also displayed.
-
-Limitations or Known issues
----------------------------
-
-The Intel E810 requires a programmable pipeline package be downloaded
-by the driver to support normal operations. The E810 has a limited
-functionality built in to allow PXE boot and other use cases, but the
-driver must download a package file during the driver initialization
-stage.
-
-The default DDP package file name is ice.pkg. For a specific NIC, the
-DDP package supposed to be loaded can have a filename: ice-xxxxxx.pkg,
-where 'xxxxxx' is the 64-bit PCIe Device Serial Number of the NIC. For
-example, if the NIC's device serial number is 00-CC-BB-FF-FF-AA-05-68,
-the device-specific DDP package filename is ice-00ccbbffffaa0568.pkg
-(in hex and all low case). During initialization, the driver searches
-in the following paths in order: /lib/firmware/updates/intel/ice/ddp
-and /lib/firmware/intel/ice/ddp. The corresponding device-specific DDP
-package will be downloaded first if the file exists. If not, then the
-driver tries to load the default package. The type of loaded package
-is stored in ``ice_adapter->active_pkg_type``.
-
-A symbolic link to the DDP package file is also ok. The same package
-file is used by both the kernel driver and the DPDK PMD.
-
-   .. Note::
-
-      Windows support: The DDP package is not supported on Windows so,
-      loading of the package is disabled on Windows.

@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <netinet/in.h>
 
+#include <rte_bitops.h>
 #include <rte_mbuf.h>
 #include <rte_malloc.h>
 #include <ethdev_driver.h>
@@ -191,7 +192,7 @@ bond_ethdev_8023ad_flow_verify(struct rte_eth_dev *bond_dev,
 	ret = rte_eth_dev_info_get(member_port, &member_info);
 	if (ret != 0) {
 		RTE_BOND_LOG(ERR,
-			"%s: Error during getting device (port %u) info: %s\n",
+			"%s: Error during getting device (port %u) info: %s",
 			__func__, member_port, strerror(-ret));
 
 		return ret;
@@ -221,7 +222,7 @@ bond_8023ad_slow_pkt_hw_filter_supported(uint16_t port_id) {
 		ret = rte_eth_dev_info_get(bond_dev->data->port_id, &bond_info);
 		if (ret != 0) {
 			RTE_BOND_LOG(ERR,
-				"%s: Error during getting device (port %u) info: %s\n",
+				"%s: Error during getting device (port %u) info: %s",
 				__func__, bond_dev->data->port_id,
 				strerror(-ret));
 
@@ -491,9 +492,9 @@ update_client_stats(uint32_t addr, uint16_t port, uint32_t *TXorRXindicator)
 
 #ifdef RTE_LIBRTE_BOND_DEBUG_ALB
 #define MODE6_DEBUG(info, src_ip, dst_ip, eth_h, arp_op, port, burstnumber) \
-	rte_log(RTE_LOG_DEBUG, bond_logtype,				\
+	RTE_LOG_LINE(DEBUG, BOND,				\
 		"%s port:%d SrcMAC:" RTE_ETHER_ADDR_PRT_FMT " SrcIP:%s " \
-		"DstMAC:" RTE_ETHER_ADDR_PRT_FMT " DstIP:%s %s %d\n", \
+		"DstMAC:" RTE_ETHER_ADDR_PRT_FMT " DstIP:%s %s %d", \
 		info,							\
 		port,							\
 		RTE_ETHER_ADDR_BYTES(&eth_h->src_addr),                  \
@@ -689,10 +690,8 @@ ipv4_hash(struct rte_ipv4_hdr *ipv4_hdr)
 static inline uint32_t
 ipv6_hash(struct rte_ipv6_hdr *ipv6_hdr)
 {
-	unaligned_uint32_t *word_src_addr =
-		(unaligned_uint32_t *)&(ipv6_hdr->src_addr[0]);
-	unaligned_uint32_t *word_dst_addr =
-		(unaligned_uint32_t *)&(ipv6_hdr->dst_addr[0]);
+	unaligned_uint32_t *word_src_addr = (unaligned_uint32_t *)&ipv6_hdr->src_addr;
+	unaligned_uint32_t *word_dst_addr = (unaligned_uint32_t *)&ipv6_hdr->dst_addr;
 
 	return (word_src_addr[0] ^ word_dst_addr[0]) ^
 			(word_src_addr[1] ^ word_dst_addr[1]) ^
@@ -2289,7 +2288,7 @@ bond_ethdev_info(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 			ret = rte_eth_dev_info_get(member.port_id, &member_info);
 			if (ret != 0) {
 				RTE_BOND_LOG(ERR,
-					"%s: Error during getting device (port %u) info: %s\n",
+					"%s: Error during getting device (port %u) info: %s",
 					__func__,
 					member.port_id,
 					strerror(-ret));
@@ -3984,7 +3983,7 @@ bond_ethdev_configure(struct rte_eth_dev *dev)
 		 * Two '1' in binary of 'link_speeds': bit0 and a unique
 		 * speed bit.
 		 */
-		if (__builtin_popcountl(link_speeds) != 2) {
+		if (rte_popcount64(link_speeds) != 2) {
 			RTE_BOND_LOG(ERR, "please set a unique speed.");
 			return -EINVAL;
 		}

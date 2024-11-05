@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <assert.h>
 #include <rte_eal.h>
+#include <rte_kvargs.h>
 #include <rte_mempool.h>
 #include <rte_mbuf.h>
 #include <rte_io.h>
@@ -66,20 +67,17 @@
 #define OTX_EP_MAX_IOQS_PER_VF 8
 #define OTX_CUST_DATA_LEN 0
 
-#define otx_ep_info(fmt, args...)				\
-	rte_log(RTE_LOG_INFO, otx_net_ep_logtype,		\
-		"%s():%u " fmt "\n",				\
-		__func__, __LINE__, ##args)
+#define otx_ep_info(...) \
+	RTE_LOG_LINE_PREFIX(INFO, OTX_NET_EP, "%s():%u ", \
+		__func__ RTE_LOG_COMMA __LINE__, __VA_ARGS__)
 
-#define otx_ep_err(fmt, args...)				\
-	rte_log(RTE_LOG_ERR, otx_net_ep_logtype,		\
-		"%s():%u " fmt "\n",				\
-		__func__, __LINE__, ##args)
+#define otx_ep_err(...) \
+	RTE_LOG_LINE_PREFIX(ERR, OTX_NET_EP, "%s():%u ", \
+		__func__ RTE_LOG_COMMA __LINE__, __VA_ARGS__)
 
-#define otx_ep_dbg(fmt, args...)				\
-	rte_log(RTE_LOG_DEBUG, otx_net_ep_logtype,		\
-		"%s():%u " fmt "\n",				\
-		__func__, __LINE__, ##args)
+#define otx_ep_dbg(...) \
+	RTE_LOG_LINE_PREFIX(DEBUG, OTX_NET_EP, "%s():%u ", \
+		__func__ RTE_LOG_COMMA __LINE__, __VA_ARGS__)
 
 /* IO Access */
 #define oct_ep_read64(addr) rte_read64_relaxed((void *)(addr))
@@ -119,7 +117,7 @@ union otx_ep_instr_irh {
 	{\
 	typeof(value) val = (value); \
 	typeof(reg_off) off = (reg_off); \
-	otx_ep_dbg("octeon_write_csr64: reg: 0x%08lx val: 0x%016llx\n", \
+	otx_ep_dbg("octeon_write_csr64: reg: 0x%08lx val: 0x%016llx", \
 		   (unsigned long)off, (unsigned long long)val); \
 	rte_write64(val, ((base_addr) + off)); \
 	}
@@ -217,13 +215,13 @@ struct otx_ep_iq_config {
  */
 struct otx_ep_instr_queue {
 	/* Location in memory updated by SDP ISM */
-	uint32_t *inst_cnt_ism;
+	RTE_ATOMIC(uint32_t) *inst_cnt_ism;
 	struct rte_mbuf **mbuf_list;
 	/* Pointer to the Virtual Base addr of the input ring. */
 	uint8_t *base_addr;
 
 	/* track inst count locally to consolidate HW counter updates */
-	uint32_t inst_cnt_ism_prev;
+	uint32_t inst_cnt_prev;
 
 	/* Input ring index, where the driver should write the next packet */
 	uint32_t host_write_index;
@@ -260,6 +258,9 @@ struct otx_ep_instr_queue {
 
 	/* Number of  descriptors in this ring. */
 	uint32_t nb_desc;
+
+	/* Use ISM memory */
+	uint8_t ism_ena;
 
 	/* Size of the descriptor. */
 	uint8_t desc_size;
@@ -365,6 +366,9 @@ struct otx_ep_droq {
 	/* receive buffer list contains mbuf ptr list */
 	struct rte_mbuf **recv_buf_list;
 
+	/* Packet re-arm data. */
+	uint64_t rearm_data;
+
 	/* Packets pending to be processed */
 	uint64_t pkts_pending;
 
@@ -402,9 +406,12 @@ struct otx_ep_droq {
 	 */
 	void *pkts_sent_reg;
 
+	/* Use ISM memory */
+	uint8_t ism_ena;
+
 	/* Pointer to host memory copy of output packet count, set by ISM */
-	uint32_t *pkts_sent_ism;
-	uint32_t pkts_sent_ism_prev;
+	RTE_ATOMIC(uint32_t) *pkts_sent_ism;
+	uint32_t pkts_sent_prev;
 
 	/* Statistics for this DROQ. */
 	struct otx_ep_droq_stats stats;
@@ -562,6 +569,9 @@ struct otx_ep_device {
 
 	/* Generation */
 	uint32_t chip_gen;
+
+	/* Use ISM memory */
+	uint8_t ism_ena;
 };
 
 int otx_ep_setup_iqs(struct otx_ep_device *otx_ep, uint32_t iq_no,
@@ -598,4 +608,6 @@ int otx_ep_delete_oqs(struct otx_ep_device *otx_ep, uint32_t oq_no);
 #define PCI_VENDOR_ID_CAVIUM			0x177D
 
 extern int otx_net_ep_logtype;
+#define RTE_LOGTYPE_OTX_NET_EP otx_net_ep_logtype
+
 #endif  /* _OTX_EP_COMMON_H_ */

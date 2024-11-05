@@ -35,11 +35,35 @@ npc_parse_mark_item(struct npc_parse_state *pst)
 	return 0;
 }
 
+int
+npc_parse_port_representor_id(struct npc_parse_state *pst)
+{
+	if (pst->pattern->type != ROC_NPC_ITEM_TYPE_REPRESENTED_PORT)
+		return 0;
+
+	pst->pattern++;
+
+	return 0;
+}
+
+int
+npc_parse_represented_port_id(struct npc_parse_state *pst)
+{
+	if (pst->pattern->type != ROC_NPC_ITEM_TYPE_REPRESENTED_PORT)
+		return 0;
+
+	if (pst->flow->nix_intf != NIX_INTF_RX)
+		return -EINVAL;
+
+	pst->pattern++;
+
+	return 0;
+}
+
 static int
 npc_flow_raw_item_prepare(const struct roc_npc_flow_item_raw *raw_spec,
 			  const struct roc_npc_flow_item_raw *raw_mask,
-			  struct npc_parse_item_info *info, uint8_t *spec_buf,
-			  uint8_t *mask_buf)
+			  struct npc_parse_item_info *info, uint8_t *spec_buf, uint8_t *mask_buf)
 {
 
 	memset(spec_buf, 0, NPC_MAX_RAW_ITEM_LEN);
@@ -525,6 +549,11 @@ npc_parse_lb(struct npc_parse_state *pst)
 		info.len = pattern->size;
 		lt = NPC_LT_LB_STAG_QINQ;
 		lflags = NPC_F_STAG_CTAG;
+	} else if (pst->pattern->type == ROC_NPC_ITEM_TYPE_PPPOES) {
+		info.hw_mask = NULL;
+		info.len = pattern->size;
+		info.hw_hdr_len = 2;
+		lt = NPC_LT_LB_PPPOE;
 	} else if (pst->pattern->type == ROC_NPC_ITEM_TYPE_RAW) {
 		raw_spec = pst->pattern->spec;
 		if (raw_spec->relative)
@@ -1092,6 +1121,7 @@ npc_parse_lf(struct npc_parse_state *pst)
 {
 	const struct roc_npc_item_info *pattern, *last_pattern;
 	char hw_mask[NPC_MAX_EXTRACT_HW_LEN];
+	const struct roc_npc_flow_item_eth *eth_item;
 	struct npc_parse_item_info info;
 	int lid, lt, lflags;
 	int nr_vlans = 0;
@@ -1108,10 +1138,12 @@ npc_parse_lf(struct npc_parse_state *pst)
 	lt = NPC_LT_LF_TU_ETHER;
 	lflags = 0;
 
+	eth_item = pst->pattern->spec;
+
 	/* No match support for vlan tags */
 	info.def_mask = NULL;
 	info.hw_mask = NULL;
-	info.len = pst->pattern->size;
+	info.len = sizeof(eth_item->hdr);
 	info.spec = NULL;
 	info.mask = NULL;
 	info.hw_hdr_len = 0;
@@ -1142,11 +1174,14 @@ npc_parse_lf(struct npc_parse_state *pst)
 	}
 
 	info.hw_mask = &hw_mask;
-	info.len = pst->pattern->size;
+	info.len = sizeof(eth_item->hdr);
 	info.hw_hdr_len = 0;
 	npc_get_hw_supp_mask(pst, &info, lid, lt);
 	info.spec = NULL;
 	info.mask = NULL;
+
+	if (eth_item && eth_item->has_vlan)
+		pst->set_vlan_ltype_mask = true;
 
 	rc = npc_parse_item_basic(pst->pattern, &info);
 	if (rc != 0)

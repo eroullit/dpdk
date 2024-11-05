@@ -109,6 +109,19 @@ pmd_drv_log_basename(const char *s)
 
 #endif /* RTE_LIBRTE_MLX5_DEBUG */
 
+/**
+ * Returns true if debug mode is enabled for fast path operations.
+ */
+static inline bool
+mlx5_fp_debug_enabled(void)
+{
+#ifdef RTE_LIBRTE_MLX5_DEBUG
+	return true;
+#else
+	return false;
+#endif
+}
+
 /* Allocate a buffer on the stack and fill it with a printf format string. */
 #define MKSTR(name, ...) \
 	int mkstr_size_##name = snprintf(NULL, 0, "" __VA_ARGS__); \
@@ -195,7 +208,7 @@ check_cqe_error(const uint8_t op_code)
 	/* Prevent speculative reading of other fields in CQE until
 	 * CQE is valid.
 	 */
-	rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
+	rte_atomic_thread_fence(rte_memory_order_acquire);
 
 	if (unlikely(op_code == MLX5_CQE_RESP_ERR ||
 		     op_code == MLX5_CQE_REQ_ERR))

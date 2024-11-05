@@ -191,7 +191,8 @@ static int ixgbe_fw_version_get(struct rte_eth_dev *dev, char *fw_version,
 				 size_t fw_size);
 static int ixgbe_dev_info_get(struct rte_eth_dev *dev,
 			      struct rte_eth_dev_info *dev_info);
-static const uint32_t *ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+static const uint32_t *ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev,
+						      size_t *no_of_elements);
 static int ixgbevf_dev_info_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
 static int ixgbe_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
@@ -448,6 +449,11 @@ static const struct rte_pci_id pci_id_ixgbe_map[] = {
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_KX4) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_KR) },
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_X550EM_X_XFI) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_10G_T) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_2_5G_T) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_BACKPLANE) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_SFP) },
+	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_E610_SGMII) },
 #ifdef RTE_LIBRTE_IXGBE_BYPASS
 	{ RTE_PCI_DEVICE(IXGBE_INTEL_VENDOR_ID, IXGBE_DEV_ID_82599_BYPASS) },
 #endif
@@ -1129,7 +1135,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	}
 
 	/* NOTE: review for potential ordering optimization */
-	__atomic_clear(&ad->link_thread_running, __ATOMIC_SEQ_CST);
+	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
 	ixgbe_parse_devargs(eth_dev->data->dev_private,
 			    pci_dev->device.devargs);
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
@@ -1154,10 +1160,7 @@ eth_ixgbe_dev_init(struct rte_eth_dev *eth_dev, void *init_params __rte_unused)
 	}
 
 	if (hw->mac.ops.fw_recovery_mode && hw->mac.ops.fw_recovery_mode(hw)) {
-		PMD_INIT_LOG(ERR, "\nERROR: "
-			"Firmware recovery mode detected. Limiting functionality.\n"
-			"Refer to the Intel(R) Ethernet Adapters and Devices "
-			"User Guide for details on firmware recovery mode.");
+		PMD_INIT_LOG(ERR, "ERROR: Firmware recovery mode detected. Limiting functionality.");
 		return -EIO;
 	}
 
@@ -1637,7 +1640,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	/* NOTE: review for potential ordering optimization */
-	__atomic_clear(&ad->link_thread_running, __ATOMIC_SEQ_CST);
+	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
 	ixgbevf_parse_devargs(eth_dev->data->dev_private,
 			      pci_dev->device.devargs);
 
@@ -1662,7 +1665,7 @@ eth_ixgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	}
 
 	/* init_mailbox_params */
-	hw->mbx.ops.init_params(hw);
+	hw->mbx.ops[0].init_params(hw);
 
 	/* Reset the hw statistics */
 	ixgbevf_dev_stats_reset(eth_dev);
@@ -1774,15 +1777,15 @@ eth_ixgbe_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 	if (pci_dev->device.devargs) {
 		retval = rte_eth_devargs_parse(pci_dev->device.devargs->args,
-				&eth_da);
-		if (retval)
+				&eth_da, 1);
+		if (retval < 0)
 			return retval;
 	} else
 		memset(&eth_da, 0, sizeof(eth_da));
 
 	if (eth_da.nb_representor_ports > 0 &&
 	    eth_da.type != RTE_ETH_REPRESENTOR_VF) {
-		PMD_DRV_LOG(ERR, "unsupported representor type: %s\n",
+		PMD_DRV_LOG(ERR, "unsupported representor type: %s",
 			    pci_dev->device.devargs->args);
 		return -ENOTSUP;
 	}
@@ -1841,7 +1844,7 @@ static int eth_ixgbe_pci_remove(struct rte_pci_device *pci_dev)
 	if (!ethdev)
 		return 0;
 
-	if (ethdev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR)
+	if (rte_eth_dev_is_repr(ethdev))
 		return rte_eth_dev_pci_generic_remove(pci_dev,
 					ixgbe_vf_representor_uninit);
 	else
@@ -3052,7 +3055,7 @@ ixgbe_dev_close(struct rte_eth_dev *dev)
 
 	ixgbe_dev_free_queues(dev);
 
-	ixgbe_disable_pcie_master(hw);
+	ixgbe_disable_pcie_primary(hw);
 
 	/* reprogram the RAR[0] in case user changed it. */
 	ixgbe_set_rar(hw, 0, hw->mac.addr, 0, IXGBE_RAH_AV);
@@ -3382,7 +3385,8 @@ ixgbe_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	stats->opackets = hw_stats->gptc;
 	stats->obytes = hw_stats->gotc;
 
-	for (i = 0; i < IXGBE_QUEUE_STAT_COUNTERS; i++) {
+	for (i = 0; i < RTE_MIN_T(IXGBE_QUEUE_STAT_COUNTERS,
+			RTE_ETHDEV_QUEUE_STAT_CNTRS, typeof(i)); i++) {
 		stats->q_ipackets[i] = hw_stats->qprc[i];
 		stats->q_opackets[i] = hw_stats->qptc[i];
 		stats->q_ibytes[i] = hw_stats->qbrc[i];
@@ -3987,7 +3991,7 @@ ixgbe_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 }
 
 static const uint32_t *
-ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
+ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		/* For non-vec functions,
@@ -4008,19 +4012,22 @@ ixgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_INNER_L3_IPV6_EXT,
 		RTE_PTYPE_INNER_L4_TCP,
 		RTE_PTYPE_INNER_L4_UDP,
-		RTE_PTYPE_UNKNOWN
 	};
 
 	if (dev->rx_pkt_burst == ixgbe_recv_pkts ||
 	    dev->rx_pkt_burst == ixgbe_recv_pkts_lro_single_alloc ||
 	    dev->rx_pkt_burst == ixgbe_recv_pkts_lro_bulk_alloc ||
-	    dev->rx_pkt_burst == ixgbe_recv_pkts_bulk_alloc)
+	    dev->rx_pkt_burst == ixgbe_recv_pkts_bulk_alloc) {
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
+	}
 
 #if defined(RTE_ARCH_X86) || defined(__ARM_NEON)
 	if (dev->rx_pkt_burst == ixgbe_recv_pkts_vec ||
-	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec)
+	    dev->rx_pkt_burst == ixgbe_recv_scattered_pkts_vec) {
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
+	}
 #endif
 	return NULL;
 }
@@ -4095,7 +4102,7 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	int ret_val = 0;
 
 	/* If we were hit with a reset drop the link */
-	if (!mbx->ops.check_for_rst(hw, 0) || !mbx->timeout)
+	if (!mbx->ops[0].check_for_rst(hw, 0) || !mbx->timeout)
 		mac->get_link_status = true;
 
 	if (!mac->get_link_status)
@@ -4161,12 +4168,12 @@ ixgbevf_check_link(struct ixgbe_hw *hw, ixgbe_link_speed *speed,
 	/* if the read failed it could just be a mailbox collision, best wait
 	 * until we are called again and don't report an error
 	 */
-	if (mbx->ops.read(hw, &in_msg, 1, 0))
+	if (mbx->ops[0].read(hw, &in_msg, 1, 0))
 		goto out;
 
 	if (!(in_msg & IXGBE_VT_MSGTYPE_CTS)) {
-		/* msg is not CTS and is NACK we must have lost CTS status */
-		if (in_msg & IXGBE_VT_MSGTYPE_NACK)
+		/* msg is not CTS and is FAILURE we must have lost CTS status */
+		if (in_msg & IXGBE_VT_MSGTYPE_FAILURE)
 			mac->get_link_status = false;
 		goto out;
 	}
@@ -4199,7 +4206,7 @@ ixgbe_dev_wait_setup_link_complete(struct rte_eth_dev *dev, uint32_t timeout_ms)
 	uint32_t timeout = timeout_ms ? timeout_ms : WARNING_TIMEOUT;
 
 	/* NOTE: review for potential ordering optimization */
-	while (__atomic_load_n(&ad->link_thread_running, __ATOMIC_SEQ_CST)) {
+	while (rte_atomic_load_explicit(&ad->link_thread_running, rte_memory_order_seq_cst)) {
 		msec_delay(1);
 		timeout--;
 
@@ -4236,7 +4243,7 @@ ixgbe_dev_setup_link_thread_handler(void *param)
 
 	intr->flags &= ~IXGBE_FLAG_NEED_LINK_CONFIG;
 	/* NOTE: review for potential ordering optimization */
-	__atomic_clear(&ad->link_thread_running, __ATOMIC_SEQ_CST);
+	rte_atomic_store_explicit(&ad->link_thread_running, 0, rte_memory_order_seq_cst);
 	return 0;
 }
 
@@ -4289,6 +4296,9 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	int wait = 1;
 	u32 esdp_reg;
 
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -1;
+
 	memset(&link, 0, sizeof(link));
 	link.link_status = RTE_ETH_LINK_DOWN;
 	link.link_speed = RTE_ETH_SPEED_NUM_NONE;
@@ -4304,11 +4314,6 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 	/* check if it needs to wait to complete, if lsc interrupt is enabled */
 	if (wait_to_complete == 0 || dev->data->dev_conf.intr_conf.lsc != 0)
 		wait = 0;
-
-/* BSD has no interrupt mechanism, so force NIC status synchronization. */
-#ifdef RTE_EXEC_ENV_FREEBSD
-	wait = 1;
-#endif
 
 	if (vf)
 		diag = ixgbevf_check_link(hw, &link_speed, &link_up, wait);
@@ -4332,7 +4337,8 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 		if (ixgbe_get_media_type(hw) == ixgbe_media_type_fiber) {
 			ixgbe_dev_wait_setup_link_complete(dev, 0);
 			/* NOTE: review for potential ordering optimization */
-			if (!__atomic_test_and_set(&ad->link_thread_running, __ATOMIC_SEQ_CST)) {
+			if (!rte_atomic_exchange_explicit(&ad->link_thread_running, 1,
+					rte_memory_order_seq_cst)) {
 				/* To avoid race condition between threads, set
 				 * the IXGBE_FLAG_NEED_LINK_CONFIG flag only
 				 * when there is no link thread running.
@@ -4344,7 +4350,8 @@ ixgbe_dev_link_update_share(struct rte_eth_dev *dev,
 					PMD_DRV_LOG(ERR,
 						"Create link thread failed!");
 					/* NOTE: review for potential ordering optimization */
-					__atomic_clear(&ad->link_thread_running, __ATOMIC_SEQ_CST);
+					rte_atomic_store_explicit(&ad->link_thread_running, 0,
+							rte_memory_order_seq_cst);
 				}
 			} else {
 				PMD_DRV_LOG(ERR,
@@ -4663,14 +4670,20 @@ ixgbe_dev_interrupt_action(struct rte_eth_dev *dev)
 			timeout = IXGBE_LINK_DOWN_CHECK_TIMEOUT;
 
 		ixgbe_dev_link_status_print(dev);
-		if (rte_eal_alarm_set(timeout * 1000,
-				      ixgbe_dev_interrupt_delayed_handler, (void *)dev) < 0)
-			PMD_DRV_LOG(ERR, "Error setting alarm");
-		else {
-			/* remember original mask */
-			intr->mask_original = intr->mask;
-			/* only disable lsc interrupt */
-			intr->mask &= ~IXGBE_EIMS_LSC;
+
+		/* Don't program delayed handler if LSC interrupt is disabled.
+		 * It means one is already programmed.
+		 */
+		if (intr->mask & IXGBE_EIMS_LSC) {
+			if (rte_eal_alarm_set(timeout * 1000,
+					      ixgbe_dev_interrupt_delayed_handler, (void *)dev) < 0)
+				PMD_DRV_LOG(ERR, "Error setting alarm");
+			else {
+				/* remember original mask */
+				intr->mask_original = intr->mask;
+				/* only disable lsc interrupt */
+				intr->mask &= ~IXGBE_EIMS_LSC;
+			}
 		}
 	}
 

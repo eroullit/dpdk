@@ -5,6 +5,7 @@
 #include "test.h"
 
 #include <string.h>
+#include <stdalign.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2345,16 +2346,13 @@ test_pktmbuf_ext_shinfo_init_helper(struct rte_mempool *pktmbuf_pool)
 		GOTO_FAIL("%s: External buffer is not attached to mbuf\n",
 				__func__);
 
-	/* allocate one more mbuf */
+	/* allocate one more mbuf, it is attached to the same external buffer */
 	clone = rte_pktmbuf_clone(m, pktmbuf_pool);
 	if (clone == NULL)
 		GOTO_FAIL("%s: mbuf clone allocation failed!\n", __func__);
 	if (rte_pktmbuf_pkt_len(clone) != 0)
 		GOTO_FAIL("%s: Bad packet length\n", __func__);
 
-	/* attach the same external buffer to the cloned mbuf */
-	rte_pktmbuf_attach_extbuf(clone, ext_buf_addr, buf_iova, buf_len,
-			ret_shinfo);
 	if (clone->ol_flags != RTE_MBUF_F_EXTERNAL)
 		GOTO_FAIL("%s: External buffer is not attached to mbuf\n",
 				__func__);
@@ -2534,19 +2532,19 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 	const struct rte_mbuf_dynfield dynfield = {
 		.name = "test-dynfield",
 		.size = sizeof(uint8_t),
-		.align = __alignof__(uint8_t),
+		.align = alignof(uint8_t),
 		.flags = 0,
 	};
 	const struct rte_mbuf_dynfield dynfield2 = {
 		.name = "test-dynfield2",
 		.size = sizeof(uint16_t),
-		.align = __alignof__(uint16_t),
+		.align = alignof(uint16_t),
 		.flags = 0,
 	};
 	const struct rte_mbuf_dynfield dynfield3 = {
 		.name = "test-dynfield3",
 		.size = sizeof(uint8_t),
-		.align = __alignof__(uint8_t),
+		.align = alignof(uint8_t),
 		.flags = 0,
 	};
 	const struct rte_mbuf_dynfield dynfield_fail_big = {
@@ -2564,7 +2562,7 @@ test_mbuf_dyn(struct rte_mempool *pktmbuf_pool)
 	const struct rte_mbuf_dynfield dynfield_fail_flag = {
 		.name = "test-dynfield",
 		.size = sizeof(uint8_t),
-		.align = __alignof__(uint8_t),
+		.align = alignof(uint8_t),
 		.flags = 1,
 	};
 	const struct rte_mbuf_dynflag dynflag_fail_flag = {

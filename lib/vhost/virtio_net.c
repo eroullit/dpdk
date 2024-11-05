@@ -53,7 +53,7 @@ is_valid_virt_queue_idx(uint32_t idx, int is_tx, uint32_t nr_vring)
 }
 
 static inline void
-vhost_queue_stats_update(struct virtio_net *dev, struct vhost_virtqueue *vq,
+vhost_queue_stats_update(const struct virtio_net *dev, struct vhost_virtqueue *vq,
 		struct rte_mbuf **pkts, uint16_t count)
 	__rte_shared_locks_required(&vq->access_lock)
 {
@@ -64,37 +64,25 @@ vhost_queue_stats_update(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		return;
 
 	for (i = 0; i < count; i++) {
-		struct rte_ether_addr *ea;
-		struct rte_mbuf *pkt = pkts[i];
+		const struct rte_ether_addr *ea;
+		const struct rte_mbuf *pkt = pkts[i];
 		uint32_t pkt_len = rte_pktmbuf_pkt_len(pkt);
 
 		stats->packets++;
 		stats->bytes += pkt_len;
 
-		if (pkt_len == 64) {
-			stats->size_bins[1]++;
-		} else if (pkt_len > 64 && pkt_len < 1024) {
-			uint32_t bin;
+		if (pkt_len >= 1024)
+			stats->size_bins[6 + (pkt_len > 1518)]++;
+		else if (pkt_len <= 64)
+			stats->size_bins[pkt_len >> 6]++;
+		else
+			stats->size_bins[32UL - rte_clz32(pkt_len) - 5]++;
 
-			/* count zeros, and offset into correct bin */
-			bin = (sizeof(pkt_len) * 8) - rte_clz32(pkt_len) - 5;
-			stats->size_bins[bin]++;
-		} else {
-			if (pkt_len < 64)
-				stats->size_bins[0]++;
-			else if (pkt_len < 1519)
-				stats->size_bins[6]++;
-			else
-				stats->size_bins[7]++;
-		}
-
-		ea = rte_pktmbuf_mtod(pkt, struct rte_ether_addr *);
-		if (rte_is_multicast_ether_addr(ea)) {
-			if (rte_is_broadcast_ether_addr(ea))
-				stats->broadcast++;
-			else
-				stats->multicast++;
-		}
+		ea = rte_pktmbuf_mtod(pkt, const struct rte_ether_addr *);
+		RTE_BUILD_BUG_ON(offsetof(struct virtqueue_stats, broadcast) !=
+				offsetof(struct virtqueue_stats, multicast) + sizeof(uint64_t));
+		if (unlikely(rte_is_multicast_ether_addr(ea)))
+			(&stats->multicast)[rte_is_broadcast_ether_addr(ea)]++;
 	}
 }
 
@@ -1445,6 +1433,7 @@ virtio_dev_rx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		}
 
 		vq->last_avail_idx += num_buffers;
+		vhost_virtqueue_reconnect_log_split(vq);
 	}
 
 	do_data_copy_enqueue(dev, vq);
@@ -1696,6 +1685,17 @@ virtio_dev_rx_packed(struct virtio_net *dev,
 	return pkt_idx;
 }
 
+static void
+virtio_dev_vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq)
+{
+	rte_rwlock_write_lock(&vq->access_lock);
+	vhost_user_iotlb_rd_lock(vq);
+	if (!vq->access_ok)
+		vring_translate(dev, vq);
+	vhost_user_iotlb_rd_unlock(vq);
+	rte_rwlock_write_unlock(&vq->access_lock);
+}
+
 static __rte_always_inline uint32_t
 virtio_dev_rx(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	struct rte_mbuf **pkts, uint32_t count)
@@ -1710,9 +1710,13 @@ virtio_dev_rx(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(!vq->access_ok))
-		if (unlikely(vring_translate(dev, vq) < 0))
-			goto out;
+	if (unlikely(!vq->access_ok)) {
+		vhost_user_iotlb_rd_unlock(vq);
+		rte_rwlock_read_unlock(&vq->access_lock);
+
+		virtio_dev_vring_translate(dev, vq);
+		goto out_no_unlock;
+	}
 
 	count = RTE_MIN((uint32_t)MAX_PKT_BURST, count);
 	if (count == 0)
@@ -1731,6 +1735,7 @@ out:
 out_access_unlock:
 	rte_rwlock_read_unlock(&vq->access_lock);
 
+out_no_unlock:
 	return nb_tx;
 }
 
@@ -1841,6 +1846,7 @@ virtio_dev_rx_async_submit_split(struct virtio_net *dev, struct vhost_virtqueue 
 		pkts_info[slot_idx].mbuf = pkts[pkt_idx];
 
 		vq->last_avail_idx += num_buffers;
+		vhost_virtqueue_reconnect_log_split(vq);
 	}
 
 	if (unlikely(pkt_idx == 0))
@@ -1869,6 +1875,7 @@ virtio_dev_rx_async_submit_split(struct virtio_net *dev, struct vhost_virtqueue 
 		/* recover shadow used ring and available ring */
 		vq->shadow_used_idx -= num_descs;
 		vq->last_avail_idx -= num_descs;
+		vhost_virtqueue_reconnect_log_split(vq);
 	}
 
 	/* keep used descriptors */
@@ -1919,7 +1926,7 @@ vhost_enqueue_async_packed(struct virtio_net *dev,
 	else
 		max_tries = 1;
 
-	while (size > 0) {
+	do {
 		/*
 		 * if we tried all available ring items, and still
 		 * can't get enough buf, it means something abnormal
@@ -1946,7 +1953,7 @@ vhost_enqueue_async_packed(struct virtio_net *dev,
 		avail_idx += desc_count;
 		if (avail_idx >= vq->size)
 			avail_idx -= vq->size;
-	}
+	} while (size > 0);
 
 	if (unlikely(mbuf_to_desc(dev, vq, pkt, buf_vec, nr_vec, *nr_buffers, true) < 0))
 		return -1;
@@ -2084,6 +2091,7 @@ dma_error_handler_packed(struct vhost_virtqueue *vq, uint16_t slot_idx,
 		vq->last_avail_idx = vq->last_avail_idx + vq->size - descs_err;
 		vq->avail_wrap_counter ^= 1;
 	}
+	vhost_virtqueue_reconnect_log_packed(vq);
 
 	if (async->buffer_idx_packed >= buffers_err)
 		async->buffer_idx_packed -= buffers_err;
@@ -2528,9 +2536,13 @@ virtio_dev_rx_async_submit(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(!vq->access_ok))
-		if (unlikely(vring_translate(dev, vq) < 0))
-			goto out;
+	if (unlikely(!vq->access_ok)) {
+		vhost_user_iotlb_rd_unlock(vq);
+		rte_rwlock_read_unlock(&vq->access_lock);
+
+		virtio_dev_vring_translate(dev, vq);
+		goto out_no_unlock;
+	}
 
 	count = RTE_MIN((uint32_t)MAX_PKT_BURST, count);
 	if (count == 0)
@@ -2551,6 +2563,7 @@ out:
 out_access_unlock:
 	rte_rwlock_write_unlock(&vq->access_lock);
 
+out_no_unlock:
 	return nb_tx;
 }
 
@@ -2975,6 +2988,7 @@ desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		if (mbuf_avail == 0) {
 			cur = rte_pktmbuf_alloc(mbuf_pool);
 			if (unlikely(cur == NULL)) {
+				vq->stats.mbuf_alloc_failed++;
 				VHOST_DATA_LOG(dev->ifname, ERR,
 					"failed to allocate memory for mbuf.");
 				goto error;
@@ -3083,7 +3097,6 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 {
 	uint16_t i;
 	uint16_t avail_entries;
-	uint16_t dropped = 0;
 	static bool allocerr_warned;
 
 	/*
@@ -3103,8 +3116,10 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	count = RTE_MIN(count, avail_entries);
 	VHOST_DATA_LOG(dev->ifname, DEBUG, "about to dequeue %u buffers", count);
 
-	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts, count))
+	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts, count)) {
+		vq->stats.mbuf_alloc_failed += count;
 		return 0;
+	}
 
 	for (i = 0; i < count; i++) {
 		struct buf_vector buf_vec[BUF_VECTOR_MAX];
@@ -3122,11 +3137,8 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 		update_shadow_used_ring_split(vq, head_idx, 0);
 
-		if (unlikely(buf_len <= dev->vhost_hlen)) {
-			dropped += 1;
-			i++;
+		if (unlikely(buf_len <= dev->vhost_hlen))
 			break;
-		}
 
 		buf_len -= dev->vhost_hlen;
 
@@ -3143,8 +3155,6 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 					buf_len, mbuf_pool->name);
 				allocerr_warned = true;
 			}
-			dropped += 1;
-			i++;
 			break;
 		}
 
@@ -3155,27 +3165,22 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 				VHOST_DATA_LOG(dev->ifname, ERR, "failed to copy desc to mbuf.");
 				allocerr_warned = true;
 			}
-			dropped += 1;
-			i++;
 			break;
 		}
-
 	}
 
-	if (dropped)
-		rte_pktmbuf_free_bulk(&pkts[i - 1], count - i + 1);
+	if (unlikely(count != i))
+		rte_pktmbuf_free_bulk(&pkts[i], count - i);
 
-	vq->last_avail_idx += i;
-
-	do_data_copy_dequeue(vq);
-	if (unlikely(i < count))
-		vq->shadow_used_idx = i;
 	if (likely(vq->shadow_used_idx)) {
+		vq->last_avail_idx += vq->shadow_used_idx;
+		vhost_virtqueue_reconnect_log_split(vq);
+		do_data_copy_dequeue(vq);
 		flush_shadow_used_ring_split(dev, vq);
 		vhost_vring_call_split(dev, vq);
 	}
 
-	return (i - dropped);
+	return i;
 }
 
 __rte_noinline
@@ -3472,6 +3477,35 @@ virtio_dev_tx_single_packed(struct virtio_net *dev,
 	return ret;
 }
 
+static __rte_always_inline uint16_t
+get_nb_avail_entries_packed(const struct vhost_virtqueue *__rte_restrict vq,
+			    uint16_t max_nb_avail_entries)
+{
+	const struct vring_packed_desc *descs = vq->desc_packed;
+	bool avail_wrap = vq->avail_wrap_counter;
+	uint16_t avail_idx = vq->last_avail_idx;
+	uint16_t nb_avail_entries = 0;
+	uint16_t flags;
+
+	while (nb_avail_entries < max_nb_avail_entries) {
+		flags = descs[avail_idx].flags;
+
+		if ((avail_wrap != !!(flags & VRING_DESC_F_AVAIL)) ||
+		    (avail_wrap == !!(flags & VRING_DESC_F_USED)))
+			return nb_avail_entries;
+
+		if (!(flags & VRING_DESC_F_NEXT))
+			++nb_avail_entries;
+
+		if (unlikely(++avail_idx >= vq->size)) {
+			avail_idx -= vq->size;
+			avail_wrap = !avail_wrap;
+		}
+	}
+
+	return nb_avail_entries;
+}
+
 __rte_always_inline
 static uint16_t
 virtio_dev_tx_packed(struct virtio_net *dev,
@@ -3485,8 +3519,14 @@ virtio_dev_tx_packed(struct virtio_net *dev,
 {
 	uint32_t pkt_idx = 0;
 
-	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts, count))
+	count = get_nb_avail_entries_packed(vq, count);
+	if (count == 0)
 		return 0;
+
+	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts, count)) {
+		vq->stats.mbuf_alloc_failed += count;
+		return 0;
+	}
 
 	do {
 		rte_prefetch0(&vq->desc_packed[vq->last_avail_idx]);
@@ -3581,11 +3621,13 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 
 	vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(!vq->access_ok))
-		if (unlikely(vring_translate(dev, vq) < 0)) {
-			count = 0;
-			goto out;
-		}
+	if (unlikely(!vq->access_ok)) {
+		vhost_user_iotlb_rd_unlock(vq);
+		rte_rwlock_read_unlock(&vq->access_lock);
+
+		virtio_dev_vring_translate(dev, vq);
+		goto out_no_unlock;
+	}
 
 	/*
 	 * Construct a RARP broadcast packet, and inject it to the "pkts"
@@ -3646,6 +3688,7 @@ out_access_unlock:
 	if (unlikely(rarp_mbuf != NULL))
 		count += 1;
 
+out_no_unlock:
 	return count;
 }
 
@@ -3733,8 +3776,10 @@ virtio_dev_tx_async_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	count = RTE_MIN(count, avail_entries);
 	VHOST_DATA_LOG(dev->ifname, DEBUG, "about to dequeue %u buffers", count);
 
-	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts_prealloc, count))
+	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts_prealloc, count)) {
+		vq->stats.mbuf_alloc_failed += count;
 		goto out;
+	}
 
 	for (pkt_idx = 0; pkt_idx < count; pkt_idx++) {
 		uint16_t head_idx = 0;
@@ -3802,6 +3847,7 @@ virtio_dev_tx_async_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		async->desc_idx_split++;
 
 		vq->last_avail_idx++;
+		vhost_virtqueue_reconnect_log_split(vq);
 	}
 
 	if (unlikely(dropped))
@@ -3820,6 +3866,7 @@ virtio_dev_tx_async_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		pkt_idx = n_xfer;
 		/* recover available ring */
 		vq->last_avail_idx -= pkt_err;
+		vhost_virtqueue_reconnect_log_split(vq);
 
 		/**
 		 * recover async channel copy related structures and free pktmbufs
@@ -4023,8 +4070,10 @@ virtio_dev_tx_async_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 
 	async_iter_reset(async);
 
-	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts_prealloc, count))
+	if (rte_pktmbuf_alloc_bulk(mbuf_pool, pkts_prealloc, count)) {
+		vq->stats.mbuf_alloc_failed += count;
 		goto out;
+	}
 
 	do {
 		struct rte_mbuf *pkt = pkts_prealloc[pkt_idx];
@@ -4099,6 +4148,7 @@ virtio_dev_tx_async_packed(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			vq->last_avail_idx += vq->size - descs_err;
 			vq->avail_wrap_counter ^= 1;
 		}
+		vhost_virtqueue_reconnect_log_packed(vq);
 	}
 
 	async->pkts_idx += pkt_idx;
@@ -4196,11 +4246,14 @@ rte_vhost_async_try_dequeue_burst(int vid, uint16_t queue_id,
 
 	vhost_user_iotlb_rd_lock(vq);
 
-	if (unlikely(vq->access_ok == 0))
-		if (unlikely(vring_translate(dev, vq) < 0)) {
-			count = 0;
-			goto out;
-		}
+	if (unlikely(vq->access_ok == 0)) {
+		vhost_user_iotlb_rd_unlock(vq);
+		rte_rwlock_read_unlock(&vq->access_lock);
+
+		virtio_dev_vring_translate(dev, vq);
+		count = 0;
+		goto out_no_unlock;
+	}
 
 	/*
 	 * Construct a RARP broadcast packet, and inject it to the "pkts"
@@ -4266,5 +4319,6 @@ out_access_unlock:
 	if (unlikely(rarp_mbuf != NULL))
 		count += 1;
 
+out_no_unlock:
 	return count;
 }

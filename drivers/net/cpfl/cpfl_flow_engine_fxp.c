@@ -10,6 +10,8 @@
 #include <unistd.h>
 #include <stdarg.h>
 #include <math.h>
+
+#include <rte_bitops.h>
 #include <rte_debug.h>
 #include <rte_ether.h>
 #include <rte_log.h>
@@ -20,6 +22,7 @@
 #include <rte_flow.h>
 #include <rte_bitmap.h>
 #include <ethdev_driver.h>
+
 #include "cpfl_rules.h"
 #include "cpfl_logs.h"
 #include "cpfl_ethdev.h"
@@ -95,7 +98,7 @@ cpfl_fxp_create(struct rte_eth_dev *dev,
 
 	ret = cpfl_rule_process(itf, ad->ctlqp[cpq_id], ad->ctlqp[cpq_id + 1],
 				rim->rules, rim->rule_num, true);
-	if (ret < 0) {
+	if (ret != 0) {
 		rte_flow_error_set(error, EINVAL, RTE_FLOW_ERROR_TYPE_HANDLE, NULL,
 				   "cpfl filter create flow fail");
 		rte_free(rim);
@@ -292,6 +295,17 @@ cpfl_fxp_parse_action(struct cpfl_itf *itf,
 
 			is_vsi = (action_type == RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR ||
 				  dst_itf->type == CPFL_ITF_TYPE_REPRESENTOR);
+			/* Added checks to throw an error for the invalid action types. */
+			if (action_type == RTE_FLOW_ACTION_TYPE_PORT_REPRESENTOR &&
+			    dst_itf->type == CPFL_ITF_TYPE_REPRESENTOR) {
+				PMD_DRV_LOG(ERR, "Cannot use port_representor action for the represented_port");
+				goto err;
+			}
+			if (action_type == RTE_FLOW_ACTION_TYPE_REPRESENTED_PORT &&
+			    dst_itf->type == CPFL_ITF_TYPE_VPORT) {
+				PMD_DRV_LOG(ERR, "Cannot use represented_port action for the local vport");
+				goto err;
+			}
 			if (is_vsi)
 				dev_id = cpfl_get_vsi_id(dst_itf);
 			else
@@ -597,7 +611,7 @@ cpfl_fxp_mod_idx_alloc(struct cpfl_adapter_ext *ad)
 	if (!rte_bitmap_scan(ad->mod_bm, &pos, &slab))
 		return CPFL_MAX_MOD_CONTENT_INDEX;
 
-	pos += __builtin_ffsll(slab) - 1;
+	pos += rte_bsf64(slab);
 	rte_bitmap_clear(ad->mod_bm, pos);
 
 	return pos;

@@ -728,7 +728,7 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 	total_nb_rx_desc += nb_rx_desc;
 	if (total_nb_rx_desc > MAX_NB_RX_DESC) {
-		DPAA2_PMD_WARN("\nTotal nb_rx_desc exceeds %d limit. Please use Normal buffers",
+		DPAA2_PMD_WARN("Total nb_rx_desc exceeds %d limit. Please use Normal buffers",
 			       MAX_NB_RX_DESC);
 		DPAA2_PMD_WARN("To use Normal buffers, run 'export DPNI_NORMAL_BUF=1' before running dynamic_dpl.sh script");
 	}
@@ -786,17 +786,20 @@ dpaa2_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	if ((dpaa2_svr_family & 0xffff0000) != SVR_LS2080A) {
 		options |= DPNI_QUEUE_OPT_FLC;
 		cfg.flc.stash_control = true;
-		cfg.flc.value &= 0xFFFFFFFFFFFFFFC0;
-		/* 00 00 00 - last 6 bit represent annotation, context stashing,
-		 * data stashing setting 01 01 00 (0x14)
-		 * (in following order ->DS AS CS)
-		 * to enable 1 line data, 1 line annotation.
-		 * For LX2, this setting should be 01 00 00 (0x10)
-		 */
-		if ((dpaa2_svr_family & 0xffff0000) == SVR_LX2160A)
-			cfg.flc.value |= 0x10;
-		else
-			cfg.flc.value |= 0x14;
+		dpaa2_flc_stashing_clear_all(&cfg.flc.value);
+		if (getenv("DPAA2_DATA_STASHING_OFF")) {
+			dpaa2_flc_stashing_set(DPAA2_FLC_DATA_STASHING, 0,
+				&cfg.flc.value);
+			dpaa2_q->data_stashing_off = 1;
+		} else {
+			dpaa2_flc_stashing_set(DPAA2_FLC_DATA_STASHING, 1,
+				&cfg.flc.value);
+			dpaa2_q->data_stashing_off = 0;
+		}
+		if ((dpaa2_svr_family & 0xffff0000) != SVR_LX2160A) {
+			dpaa2_flc_stashing_set(DPAA2_FLC_ANNO_STASHING, 1,
+				&cfg.flc.value);
+		}
 	}
 	ret = dpni_set_queue(dpni, CMD_PRI_LOW, priv->token, DPNI_QUEUE_RX,
 			     dpaa2_q->tc_index, flow_id, options, &cfg);
@@ -1063,7 +1066,7 @@ dpaa2_dev_rx_queue_count(void *rx_queue)
 		ret = dpaa2_affine_qbman_swp();
 		if (ret) {
 			DPAA2_PMD_ERR(
-				"Failed to allocate IO portal, tid: %d\n",
+				"Failed to allocate IO portal, tid: %d",
 				rte_gettid());
 			return -EINVAL;
 		}
@@ -1081,7 +1084,7 @@ dpaa2_dev_rx_queue_count(void *rx_queue)
 }
 
 static const uint32_t *
-dpaa2_supported_ptypes_get(struct rte_eth_dev *dev)
+dpaa2_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		/*todo -= add more types */
@@ -1094,13 +1097,14 @@ dpaa2_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_L4_UDP,
 		RTE_PTYPE_L4_SCTP,
 		RTE_PTYPE_L4_ICMP,
-		RTE_PTYPE_UNKNOWN
 	};
 
 	if (dev->rx_pkt_burst == dpaa2_dev_prefetch_rx ||
 		dev->rx_pkt_burst == dpaa2_dev_rx ||
-		dev->rx_pkt_burst == dpaa2_dev_loopback_rx)
+		dev->rx_pkt_burst == dpaa2_dev_loopback_rx) {
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
+	}
 	return NULL;
 }
 
@@ -1933,7 +1937,7 @@ dpaa2_dev_link_update(struct rte_eth_dev *dev,
 	if (ret == -1)
 		DPAA2_PMD_DEBUG("No change in status");
 	else
-		DPAA2_PMD_INFO("Port %d Link is %s\n", dev->data->port_id,
+		DPAA2_PMD_INFO("Port %d Link is %s", dev->data->port_id,
 			       link.link_status ? "Up" : "Down");
 
 	return ret;
@@ -2307,7 +2311,7 @@ int dpaa2_eth_eventq_attach(const struct rte_eth_dev *dev,
 				   dpaa2_ethq->tc_index, flow_id,
 				   OPR_OPT_CREATE, &ocfg, 0);
 		if (ret) {
-			DPAA2_PMD_ERR("Error setting opr: ret: %d\n", ret);
+			DPAA2_PMD_ERR("Error setting opr: ret: %d", ret);
 			return ret;
 		}
 
@@ -2423,7 +2427,7 @@ rte_pmd_dpaa2_thread_init(void)
 		ret = dpaa2_affine_qbman_swp();
 		if (ret) {
 			DPAA2_PMD_ERR(
-				"Failed to allocate IO portal, tid: %d\n",
+				"Failed to allocate IO portal, tid: %d",
 				rte_gettid());
 			return;
 		}
@@ -2693,7 +2697,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 	priv->max_vlan_filters = attr.vlan_filter_entries;
 	priv->flags = 0;
 #if defined(RTE_LIBRTE_IEEE1588)
-	printf("DPDK IEEE1588 is enabled\n");
+	DPAA2_PMD_INFO("DPDK IEEE1588 is enabled");
 	priv->flags |= DPAA2_TX_CONF_ENABLE;
 #endif
 	/* Used with ``fslmc:dpni.1,drv_tx_conf=1`` */
@@ -2838,7 +2842,7 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		WRIOP_SS_INITIALIZER(priv);
 		ret = dpaa2_eth_load_wriop_soft_parser(priv, DPNI_SS_INGRESS);
 		if (ret < 0) {
-			DPAA2_PMD_ERR(" Error(%d) in loading softparser\n",
+			DPAA2_PMD_ERR(" Error(%d) in loading softparser",
 				      ret);
 			return ret;
 		}
@@ -2846,12 +2850,12 @@ dpaa2_dev_init(struct rte_eth_dev *eth_dev)
 		ret = dpaa2_eth_enable_wriop_soft_parser(priv,
 							 DPNI_SS_INGRESS);
 		if (ret < 0) {
-			DPAA2_PMD_ERR(" Error(%d) in enabling softparser\n",
+			DPAA2_PMD_ERR(" Error(%d) in enabling softparser",
 				      ret);
 			return ret;
 		}
 	}
-	RTE_LOG(INFO, PMD, "%s: netdev created, connected to %s\n",
+	DPAA2_PMD_INFO("%s: netdev created, connected to %s",
 		eth_dev->data->name, dpaa2_dev->ep_name);
 
 	return 0;
@@ -2929,7 +2933,7 @@ rte_dpaa2_probe(struct rte_dpaa2_driver *dpaa2_drv,
 				DPAA2_MAX_SGS * sizeof(struct qbman_sge),
 				rte_socket_id());
 			if (dpaa2_tx_sg_pool == NULL) {
-				DPAA2_PMD_ERR("SG pool creation failed\n");
+				DPAA2_PMD_ERR("SG pool creation failed");
 				return -ENOMEM;
 			}
 		}

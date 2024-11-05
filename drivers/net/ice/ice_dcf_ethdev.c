@@ -1646,7 +1646,7 @@ ice_dcf_init_repr_info(struct ice_dcf_adapter *dcf_adapter)
 				   dcf_adapter->real_hw.num_vfs,
 				   sizeof(dcf_adapter->repr_infos[0]), 0);
 	if (!dcf_adapter->repr_infos) {
-		PMD_DRV_LOG(ERR, "Failed to alloc memory for VF representors\n");
+		PMD_DRV_LOG(ERR, "Failed to alloc memory for VF representors");
 		return -ENOMEM;
 	}
 
@@ -1743,7 +1743,7 @@ bool
 ice_dcf_adminq_need_retry(struct ice_adapter *ad)
 {
 	return ad->hw.dcf_enabled &&
-	       !__atomic_load_n(&ad->dcf_state_on, __ATOMIC_RELAXED);
+	       !rte_atomic_load_explicit(&ad->dcf_state_on, rte_memory_order_relaxed);
 }
 
 /* Add UDP tunneling port */
@@ -1864,7 +1864,8 @@ ice_dcf_dev_reset(struct rte_eth_dev *dev)
 }
 
 static const uint32_t *
-ice_dcf_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
+ice_dcf_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused,
+				 size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
@@ -1875,8 +1876,8 @@ ice_dcf_dev_supported_ptypes_get(struct rte_eth_dev *dev __rte_unused)
 		RTE_PTYPE_L4_SCTP,
 		RTE_PTYPE_L4_TCP,
 		RTE_PTYPE_L4_UDP,
-		RTE_PTYPE_UNKNOWN
 	};
+	*no_of_elements = RTE_DIM(ptypes);
 	return ptypes;
 }
 
@@ -1943,12 +1944,12 @@ ice_dcf_dev_init(struct rte_eth_dev *eth_dev)
 	adapter->real_hw.vc_event_msg_cb = ice_dcf_handle_pf_event_msg;
 	if (ice_dcf_init_hw(eth_dev, &adapter->real_hw) != 0) {
 		PMD_INIT_LOG(ERR, "Failed to init DCF hardware");
-		__atomic_store_n(&parent_adapter->dcf_state_on, false,
-				 __ATOMIC_RELAXED);
+		rte_atomic_store_explicit(&parent_adapter->dcf_state_on, false,
+				 rte_memory_order_relaxed);
 		return -1;
 	}
 
-	__atomic_store_n(&parent_adapter->dcf_state_on, true, __ATOMIC_RELAXED);
+	rte_atomic_store_explicit(&parent_adapter->dcf_state_on, true, rte_memory_order_relaxed);
 
 	if (ice_dcf_init_parent_adapter(eth_dev) != 0) {
 		PMD_INIT_LOG(ERR, "Failed to init DCF parent adapter");
@@ -2041,8 +2042,8 @@ eth_ice_dcf_pci_probe(__rte_unused struct rte_pci_driver *pci_drv,
 	if (!ice_devargs_check(pci_dev->device.devargs, ICE_DCF_DEVARG_CAP))
 		return 1;
 
-	ret = rte_eth_devargs_parse(pci_dev->device.devargs->args, &eth_da);
-	if (ret)
+	ret = rte_eth_devargs_parse(pci_dev->device.devargs->args, &eth_da, 1);
+	if (ret < 0)
 		return ret;
 
 	ret = rte_eth_dev_pci_generic_probe(pci_dev,
@@ -2087,7 +2088,7 @@ eth_ice_dcf_pci_probe(__rte_unused struct rte_pci_driver *pci_drv,
 		}
 
 		if (dcf_adapter->real_hw.vf_vsi_map[vf_id] == dcf_vsi_id) {
-			PMD_DRV_LOG(ERR, "VF ID %u is DCF's ID.\n", vf_id);
+			PMD_DRV_LOG(ERR, "VF ID %u is DCF's ID.", vf_id);
 			ret = -EINVAL;
 			break;
 		}
@@ -2130,7 +2131,7 @@ eth_ice_dcf_pci_remove(struct rte_pci_device *pci_dev)
 	if (!eth_dev)
 		return 0;
 
-	if (eth_dev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR)
+	if (rte_eth_dev_is_repr(eth_dev))
 		return rte_eth_dev_pci_generic_remove(pci_dev,
 						      ice_dcf_vf_repr_uninit);
 	else

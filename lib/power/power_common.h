@@ -16,10 +16,10 @@ extern int power_logtype;
 	RTE_LOG_LINE(level, POWER, "" __VA_ARGS__)
 
 #ifdef RTE_LIBRTE_POWER_DEBUG
-#define POWER_DEBUG_LOG(fmt, args...) \
-	RTE_LOG_LINE(ERR, POWER, "%s: " fmt, __func__, ## args)
+#define POWER_DEBUG_LOG(...) \
+	RTE_LOG_LINE_PREFIX(ERR, POWER, "%s: ", __func__, __VA_ARGS__)
 #else
-#define POWER_DEBUG_LOG(fmt, args...)
+#define POWER_DEBUG_LOG(...)
 #endif
 
 /* check if scaling driver matches one we want */
@@ -31,5 +31,6 @@ int open_core_sysfs_file(FILE **f, const char *mode, const char *format, ...)
 int read_core_sysfs_u32(FILE *f, uint32_t *val);
 int read_core_sysfs_s(FILE *f, char *buf, unsigned int len);
 int write_core_sysfs_s(FILE *f, const char *str);
+int power_get_lcore_mapped_cpu_id(uint32_t lcore_id, uint32_t *cpu_id);
 
 #endif /* _POWER_COMMON_H_ */

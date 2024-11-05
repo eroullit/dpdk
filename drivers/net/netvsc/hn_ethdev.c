@@ -313,6 +313,15 @@ static int hn_rss_reta_update(struct rte_eth_dev *dev,
 
 		if (reta_conf[idx].mask & mask)
 			hv->rss_ind[i] = reta_conf[idx].reta[shift];
+
+		/*
+		 * Ensure we don't allow config that directs traffic to an Rx
+		 * queue that we aren't going to poll
+		 */
+		if (hv->rss_ind[i] >=  dev->data->nb_rx_queues) {
+			PMD_DRV_LOG(ERR, "RSS distributing traffic to invalid Rx queue");
+			return -EINVAL;
+		}
 	}
 
 	err = hn_rndis_conf_rss(hv, NDIS_RSS_FLAG_DISABLE);
@@ -1127,8 +1136,10 @@ hn_reinit(struct rte_eth_dev *dev, uint16_t mtu)
 	int i, ret = 0;
 
 	/* Point primary queues at new primary channel */
-	rxqs[0]->chan = hv->channels[0];
-	txqs[0]->chan = hv->channels[0];
+	if (rxqs[0]) {
+		rxqs[0]->chan = hv->channels[0];
+		txqs[0]->chan = hv->channels[0];
+	}
 
 	ret = hn_attach(hv, mtu);
 	if (ret)
@@ -1140,10 +1151,12 @@ hn_reinit(struct rte_eth_dev *dev, uint16_t mtu)
 		return ret;
 
 	/* Point any additional queues at new subchannels */
-	for (i = 1; i < dev->data->nb_rx_queues; i++)
-		rxqs[i]->chan = hv->channels[i];
-	for (i = 1; i < dev->data->nb_tx_queues; i++)
-		txqs[i]->chan = hv->channels[i];
+	if (rxqs[0]) {
+		for (i = 1; i < dev->data->nb_rx_queues; i++)
+			rxqs[i]->chan = hv->channels[i];
+		for (i = 1; i < dev->data->nb_tx_queues; i++)
+			txqs[i]->chan = hv->channels[i];
+	}
 
 	return ret;
 }

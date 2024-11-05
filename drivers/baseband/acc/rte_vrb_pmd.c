@@ -22,10 +22,11 @@
 #include "vrb_pmd.h"
 
 #ifdef RTE_LIBRTE_BBDEV_DEBUG
-RTE_LOG_REGISTER_DEFAULT(vrb_logtype, DEBUG);
+RTE_LOG_REGISTER_SUFFIX(vrb_logtype, vrb, DEBUG);
 #else
-RTE_LOG_REGISTER_DEFAULT(vrb_logtype, NOTICE);
+RTE_LOG_REGISTER_SUFFIX(vrb_logtype, vrb, NOTICE);
 #endif
+#define RTE_LOGTYPE_VRB vrb_logtype
 
 /* Calculate the offset of the enqueue register. */
 static inline uint32_t
@@ -281,7 +282,7 @@ fetch_acc_config(struct rte_bbdev *dev)
 		/* Check the depth of the AQs. */
 		reg_len0 = acc_reg_read(d, d->reg_addr->depth_log0_offset);
 		reg_len1 = acc_reg_read(d, d->reg_addr->depth_log1_offset);
-		for (acc = 0; acc < NUM_ACC; acc++) {
+		for (acc = 0; acc < VRB1_NUM_ACCS; acc++) {
 			qtopFromAcc(&q_top, acc, acc_conf);
 			if (q_top->first_qgroup_index < ACC_NUM_QGRPS_PER_WORD)
 				q_top->aq_depth_log2 =
@@ -290,7 +291,7 @@ fetch_acc_config(struct rte_bbdev *dev)
 				q_top->aq_depth_log2 = (reg_len1 >> ((q_top->first_qgroup_index -
 						ACC_NUM_QGRPS_PER_WORD) * 4)) & 0xF;
 		}
-	} else {
+	} else if (d->device_variant == VRB2_VARIANT) {
 		reg0 = acc_reg_read(d, d->reg_addr->qman_group_func);
 		reg1 = acc_reg_read(d, d->reg_addr->qman_group_func + 4);
 		reg2 = acc_reg_read(d, d->reg_addr->qman_group_func + 8);
@@ -308,7 +309,7 @@ fetch_acc_config(struct rte_bbdev *dev)
 					idx = (reg2 >> ((qg % ACC_NUM_QGRPS_PER_WORD) * 4)) & 0x7;
 				else
 					idx = (reg3 >> ((qg % ACC_NUM_QGRPS_PER_WORD) * 4)) & 0x7;
-				if (idx < VRB_NUM_ACCS) {
+				if (idx < VRB2_NUM_ACCS) {
 					acc = qman_func_id[idx];
 					updateQtop(acc, qg, acc_conf, d);
 				}
@@ -321,7 +322,7 @@ fetch_acc_config(struct rte_bbdev *dev)
 		reg_len2 = acc_reg_read(d, d->reg_addr->depth_log0_offset + 8);
 		reg_len3 = acc_reg_read(d, d->reg_addr->depth_log0_offset + 12);
 
-		for (acc = 0; acc < NUM_ACC; acc++) {
+		for (acc = 0; acc < VRB2_NUM_ACCS; acc++) {
 			qtopFromAcc(&q_top, acc, acc_conf);
 			if (q_top->first_qgroup_index / ACC_NUM_QGRPS_PER_WORD == 0)
 				q_top->aq_depth_log2 = (reg_len0 >> ((q_top->first_qgroup_index %
@@ -348,7 +349,7 @@ fetch_acc_config(struct rte_bbdev *dev)
 	}
 
 	rte_bbdev_log_debug(
-			"%s Config LLR SIGN IN/OUT %s %s QG %u %u %u %u %u %u AQ %u %u %u %u %u %u Len %u %u %u %u %u %u\n",
+			"%s Config LLR SIGN IN/OUT %s %s QG %u %u %u %u %u %u AQ %u %u %u %u %u %u Len %u %u %u %u %u %u",
 			(d->pf_device) ? "PF" : "VF",
 			(acc_conf->input_pos_llr_1_bit) ? "POS" : "NEG",
 			(acc_conf->output_pos_llr_1_bit) ? "POS" : "NEG",
@@ -411,7 +412,7 @@ vrb_check_ir(struct acc_device *acc_dev)
 			rte_bbdev_log(WARNING, "InfoRing: ITR:%d Info:0x%x",
 					int_nb, ring_data->detailed_info);
 			/* Initialize Info Ring entry and move forward. */
-			ring_data->val = 0;
+			ring_data->valid = 0;
 		}
 		info_ring_head++;
 		ring_data = acc_dev->info_ring + (info_ring_head & ACC_INFO_RING_MASK);
@@ -464,7 +465,7 @@ vrb_dev_interrupt_handler(void *cb_arg)
 			}
 		} else {
 			rte_bbdev_log_debug(
-					"VRB VF Interrupt received, Info Ring data: 0x%x\n",
+					"VRB VF Interrupt received, Info Ring data: 0x%x",
 					ring_data->val);
 			switch (int_nb) {
 			case ACC_VF_INT_DMA_DL_DESC_IRQ:
@@ -543,7 +544,8 @@ vrb_setup_queues(struct rte_bbdev *dev, uint16_t num_queues, int socket_id)
 {
 	uint32_t phys_low, phys_high, value;
 	struct acc_device *d = dev->data->dev_private;
-	int ret;
+	uint16_t queues_per_op, i;
+	int ret, max_queues = 0;
 
 	if (d->pf_device && !d->acc_conf.pf_mode_en) {
 		rte_bbdev_log(NOTICE,
@@ -564,26 +566,36 @@ vrb_setup_queues(struct rte_bbdev *dev, uint16_t num_queues, int socket_id)
 		return -ENODEV;
 	}
 
-	alloc_sw_rings_min_mem(dev, d, num_queues, socket_id);
+	if (d->device_variant == VRB1_VARIANT) {
+		alloc_sw_rings_min_mem(dev, d, num_queues, socket_id);
 
-	/* If minimal memory space approach failed, then allocate
-	 * the 2 * 64MB block for the sw rings.
-	 */
-	if (d->sw_rings == NULL)
-		alloc_2x64mb_sw_rings_mem(dev, d, socket_id);
+		/* If minimal memory space approach failed, then allocate
+		 * the 2 * 64MB block for the sw rings.
+		 */
+		if (d->sw_rings == NULL)
+			alloc_2x64mb_sw_rings_mem(dev, d, socket_id);
 
-	if (d->sw_rings == NULL) {
-		rte_bbdev_log(NOTICE,
-				"Failure allocating sw_rings memory");
-		return -ENOMEM;
+		if (d->sw_rings == NULL) {
+			rte_bbdev_log(NOTICE, "Failure allocating sw_rings memory");
+			return -ENOMEM;
+		}
+	} else if (d->device_variant == VRB2_VARIANT) {
+		queues_per_op = RTE_MIN(VRB2_MAX_Q_PER_OP, num_queues);
+		for (i = 0; i <= RTE_BBDEV_OP_MLDTS; i++) {
+			alloc_sw_rings_min_mem(dev, d, queues_per_op, socket_id);
+			if (d->sw_rings == NULL) {
+				rte_bbdev_log(NOTICE, "Failure allocating sw_rings memory %d", i);
+				return -ENOMEM;
+			}
+			/* Moves the pointer to the relevant array. */
+			d->sw_rings_array[i] = d->sw_rings;
+			d->sw_rings_iova_array[i] = d->sw_rings_iova;
+			d->sw_rings = NULL;
+			d->sw_rings_base = NULL;
+			d->sw_rings_iova = 0;
+			d->queue_index[i] = 0;
+		}
 	}
-
-	/* Configure device with the base address for DMA descriptor rings.
-	 * Same descriptor rings used for UL and DL DMA Engines.
-	 * Note : Assuming only VF0 bundle is used for PF mode.
-	 */
-	phys_high = (uint32_t)(d->sw_rings_iova >> 32);
-	phys_low  = (uint32_t)(d->sw_rings_iova & ~(ACC_SIZE_64MBYTE-1));
 
 	/* Read the populated cfg from device registers. */
 	fetch_acc_config(dev);
@@ -599,20 +611,60 @@ vrb_setup_queues(struct rte_bbdev *dev, uint16_t num_queues, int socket_id)
 	if (d->pf_device)
 		acc_reg_write(d, VRB1_PfDmaAxiControl, 1);
 
-	acc_reg_write(d, d->reg_addr->dma_ring_ul5g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->dma_ring_ul5g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->dma_ring_dl5g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->dma_ring_dl5g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->dma_ring_ul4g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->dma_ring_ul4g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->dma_ring_dl4g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->dma_ring_dl4g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->dma_ring_fft_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->dma_ring_fft_lo, phys_low);
-	if (d->device_variant == VRB2_VARIANT) {
-		acc_reg_write(d, d->reg_addr->dma_ring_mld_hi, phys_high);
-		acc_reg_write(d, d->reg_addr->dma_ring_mld_lo, phys_low);
+	if (d->device_variant == VRB1_VARIANT) {
+		/* Configure device with the base address for DMA descriptor rings.
+		 * Same descriptor rings used for UL and DL DMA Engines.
+		 * Note : Assuming only VF0 bundle is used for PF mode.
+		 */
+		phys_high = (uint32_t)(d->sw_rings_iova >> 32);
+		phys_low  = (uint32_t)(d->sw_rings_iova & ~(ACC_SIZE_64MBYTE-1));
+		acc_reg_write(d, d->reg_addr->dma_ring_ul5g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->dma_ring_ul5g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->dma_ring_dl5g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->dma_ring_dl5g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->dma_ring_ul4g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->dma_ring_ul4g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->dma_ring_dl4g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->dma_ring_dl4g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->dma_ring_fft_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->dma_ring_fft_lo, phys_low);
+	} else if (d->device_variant == VRB2_VARIANT) {
+		/* Configure device with the base address for DMA descriptor rings.
+		 * Different ring buffer used for each operation type.
+		 * Note : Assuming only VF0 bundle is used for PF mode.
+		 */
+		acc_reg_write(d, d->reg_addr->dma_ring_ul5g_hi,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_LDPC_DEC] >> 32));
+		acc_reg_write(d, d->reg_addr->dma_ring_ul5g_lo,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_LDPC_DEC]
+				& ~(ACC_SIZE_64MBYTE - 1)));
+		acc_reg_write(d, d->reg_addr->dma_ring_dl5g_hi,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_LDPC_ENC] >> 32));
+		acc_reg_write(d, d->reg_addr->dma_ring_dl5g_lo,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_LDPC_ENC]
+				& ~(ACC_SIZE_64MBYTE - 1)));
+		acc_reg_write(d, d->reg_addr->dma_ring_ul4g_hi,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_TURBO_DEC] >> 32));
+		acc_reg_write(d, d->reg_addr->dma_ring_ul4g_lo,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_TURBO_DEC]
+				& ~(ACC_SIZE_64MBYTE - 1)));
+		acc_reg_write(d, d->reg_addr->dma_ring_dl4g_hi,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_TURBO_ENC] >> 32));
+		acc_reg_write(d, d->reg_addr->dma_ring_dl4g_lo,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_TURBO_ENC]
+				& ~(ACC_SIZE_64MBYTE - 1)));
+		acc_reg_write(d, d->reg_addr->dma_ring_fft_hi,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_FFT] >> 32));
+		acc_reg_write(d, d->reg_addr->dma_ring_fft_lo,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_FFT]
+				& ~(ACC_SIZE_64MBYTE - 1)));
+		acc_reg_write(d, d->reg_addr->dma_ring_mld_hi,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_MLDTS] >> 32));
+		acc_reg_write(d, d->reg_addr->dma_ring_mld_lo,
+				(uint32_t)(d->sw_rings_iova_array[RTE_BBDEV_OP_MLDTS]
+				& ~(ACC_SIZE_64MBYTE - 1)));
 	}
+
 	/*
 	 * Configure Ring Size to the max queue ring size
 	 * (used for wrapping purpose).
@@ -620,10 +672,15 @@ vrb_setup_queues(struct rte_bbdev *dev, uint16_t num_queues, int socket_id)
 	value = log2_basic(d->sw_ring_size / ACC_RING_SIZE_GRANULARITY);
 	acc_reg_write(d, d->reg_addr->ring_size, value);
 
+	if (d->device_variant == VRB1_VARIANT)
+		max_queues = VRB1_NUM_QGRPS * VRB1_NUM_AQS;
+	else if (d->device_variant == VRB2_VARIANT)
+		max_queues = VRB2_NUM_QGRPS * VRB2_NUM_AQS;
+
 	/* Configure tail pointer for use when SDONE enabled. */
 	if (d->tail_ptrs == NULL)
 		d->tail_ptrs = rte_zmalloc_socket(dev->device->driver->name,
-				VRB_MAX_QGRPS * VRB_MAX_AQS * sizeof(uint32_t),
+				max_queues * sizeof(uint32_t),
 				RTE_CACHE_LINE_SIZE, socket_id);
 	if (d->tail_ptrs == NULL) {
 		rte_bbdev_log(ERR, "Failed to allocate tail ptr for %s:%u",
@@ -636,19 +693,21 @@ vrb_setup_queues(struct rte_bbdev *dev, uint16_t num_queues, int socket_id)
 
 	phys_high = (uint32_t)(d->tail_ptr_iova >> 32);
 	phys_low  = (uint32_t)(d->tail_ptr_iova);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_ul5g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_ul5g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_dl5g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_dl5g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_ul4g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_ul4g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_dl4g_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_dl4g_lo, phys_low);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_fft_hi, phys_high);
-	acc_reg_write(d, d->reg_addr->tail_ptrs_fft_lo, phys_low);
-	if (d->device_variant == VRB2_VARIANT) {
-		acc_reg_write(d, d->reg_addr->tail_ptrs_mld_hi, phys_high);
-		acc_reg_write(d, d->reg_addr->tail_ptrs_mld_lo, phys_low);
+	{
+		acc_reg_write(d, d->reg_addr->tail_ptrs_ul5g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_ul5g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_dl5g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_dl5g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_ul4g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_ul4g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_dl4g_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_dl4g_lo, phys_low);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_fft_hi, phys_high);
+		acc_reg_write(d, d->reg_addr->tail_ptrs_fft_lo, phys_low);
+		if (d->device_variant == VRB2_VARIANT) {
+			acc_reg_write(d, d->reg_addr->tail_ptrs_mld_hi, phys_high);
+			acc_reg_write(d, d->reg_addr->tail_ptrs_mld_lo, phys_low);
+		}
 	}
 
 	ret = allocate_info_ring(dev);
@@ -684,8 +743,16 @@ free_tail_ptrs:
 	rte_free(d->tail_ptrs);
 	d->tail_ptrs = NULL;
 free_sw_rings:
-	rte_free(d->sw_rings_base);
-	d->sw_rings = NULL;
+	if (d->device_variant == VRB1_VARIANT) {
+		rte_free(d->sw_rings_base);
+		d->sw_rings_base = NULL;
+		d->sw_rings = NULL;
+	} else if (d->device_variant == VRB2_VARIANT) {
+		for (i = 0; i <= RTE_BBDEV_OP_MLDTS; i++) {
+			rte_free(d->sw_rings_array[i]);
+			d->sw_rings_array[i] = 0;
+		}
+	}
 
 	return ret;
 }
@@ -698,7 +765,7 @@ vrb_intr_enable(struct rte_bbdev *dev)
 
 	if (d->device_variant == VRB1_VARIANT) {
 		/* On VRB1: cannot enable MSI/IR to avoid potential back-pressure corner case. */
-		rte_bbdev_log(ERR, "VRB1 (%s) doesn't support any MSI/MSI-X interrupt\n",
+		rte_bbdev_log(ERR, "VRB1 (%s) doesn't support any MSI/MSI-X interrupt",
 				dev->data->name);
 		return -ENOTSUP;
 	}
@@ -722,6 +789,7 @@ vrb_intr_enable(struct rte_bbdev *dev)
 					"Couldn't enable interrupts for device: %s",
 					dev->data->name);
 			rte_free(d->info_ring);
+			d->info_ring = NULL;
 			return ret;
 		}
 		ret = rte_intr_callback_register(dev->intr_handle,
@@ -731,6 +799,7 @@ vrb_intr_enable(struct rte_bbdev *dev)
 					"Couldn't register interrupt callback for device: %s",
 					dev->data->name);
 			rte_free(d->info_ring);
+			d->info_ring = NULL;
 			return ret;
 		}
 
@@ -785,6 +854,7 @@ vrb_intr_enable(struct rte_bbdev *dev)
 					"Couldn't enable interrupts for device: %s",
 					dev->data->name);
 			rte_free(d->info_ring);
+			d->info_ring = NULL;
 			return ret;
 		}
 		ret = rte_intr_callback_register(dev->intr_handle,
@@ -794,13 +864,14 @@ vrb_intr_enable(struct rte_bbdev *dev)
 					"Couldn't register interrupt callback for device: %s",
 					dev->data->name);
 			rte_free(d->info_ring);
+			d->info_ring = NULL;
 			return ret;
 		}
 
 		return 0;
 	}
 
-	rte_bbdev_log(ERR, "Device (%s) supports only VFIO MSI/MSI-X interrupts\n",
+	rte_bbdev_log(ERR, "Device (%s) supports only VFIO MSI/MSI-X interrupts",
 			dev->data->name);
 	return -ENOTSUP;
 }
@@ -809,9 +880,11 @@ vrb_intr_enable(struct rte_bbdev *dev)
 static int
 vrb_dev_close(struct rte_bbdev *dev)
 {
+	int i;
 	struct acc_device *d = dev->data->dev_private;
+
 	vrb_check_ir(d);
-	if (d->sw_rings_base != NULL) {
+	if (d->device_variant == VRB1_VARIANT) {
 		rte_free(d->tail_ptrs);
 		rte_free(d->info_ring);
 		rte_free(d->sw_rings_base);
@@ -819,7 +892,19 @@ vrb_dev_close(struct rte_bbdev *dev)
 		d->tail_ptrs = NULL;
 		d->info_ring = NULL;
 		d->sw_rings_base = NULL;
+		d->sw_rings = NULL;
 		d->harq_layout = NULL;
+	} else if (d->device_variant == VRB2_VARIANT) {
+		rte_free(d->tail_ptrs);
+		rte_free(d->info_ring);
+		rte_free(d->harq_layout);
+		d->tail_ptrs = NULL;
+		d->info_ring = NULL;
+		d->harq_layout = NULL;
+		for (i = 0; i <= RTE_BBDEV_OP_MLDTS; i++) {
+			rte_free(d->sw_rings_array[i]);
+			d->sw_rings_array[i] = NULL;
+		}
 	}
 	/* Ensure all in flight HW transactions are completed. */
 	usleep(ACC_LONG_WAIT);
@@ -876,6 +961,9 @@ vrb_queue_setup(struct rte_bbdev *dev, uint16_t queue_id,
 	struct acc_queue *q;
 	int32_t q_idx;
 	int ret;
+	union acc_dma_desc *desc = NULL;
+	unsigned int desc_idx, b_idx;
+	int fcw_len;
 
 	if (d == NULL) {
 		rte_bbdev_log(ERR, "Undefined device");
@@ -890,20 +978,45 @@ vrb_queue_setup(struct rte_bbdev *dev, uint16_t queue_id,
 	}
 
 	q->d = d;
-	q->ring_addr = RTE_PTR_ADD(d->sw_rings, (d->sw_ring_size * queue_id));
-	q->ring_addr_iova = d->sw_rings_iova + (d->sw_ring_size * queue_id);
+	if (d->device_variant == VRB1_VARIANT) {
+		q->ring_addr = RTE_PTR_ADD(d->sw_rings, (d->sw_ring_size * queue_id));
+		q->ring_addr_iova = d->sw_rings_iova + (d->sw_ring_size * queue_id);
+	} else if (d->device_variant == VRB2_VARIANT) {
+		q->ring_addr = RTE_PTR_ADD(d->sw_rings_array[conf->op_type],
+				(d->sw_ring_size * d->queue_index[conf->op_type]));
+		q->ring_addr_iova = d->sw_rings_iova_array[conf->op_type] +
+				(d->sw_ring_size * d->queue_index[conf->op_type]);
+		d->queue_index[conf->op_type]++;
+	}
 
 	/* Prepare the Ring with default descriptor format. */
-	union acc_dma_desc *desc = NULL;
-	unsigned int desc_idx, b_idx;
-	int fcw_len = (conf->op_type == RTE_BBDEV_OP_LDPC_ENC ?
-			ACC_FCW_LE_BLEN : (conf->op_type == RTE_BBDEV_OP_TURBO_DEC ?
-			ACC_FCW_TD_BLEN : (conf->op_type == RTE_BBDEV_OP_LDPC_DEC ?
-			ACC_FCW_LD_BLEN : (conf->op_type == RTE_BBDEV_OP_FFT ?
-			ACC_FCW_FFT_BLEN : ACC_FCW_MLDTS_BLEN))));
-
-	if ((q->d->device_variant == VRB2_VARIANT) && (conf->op_type == RTE_BBDEV_OP_FFT))
-		fcw_len = ACC_FCW_FFT_BLEN_3;
+	switch (conf->op_type) {
+	case RTE_BBDEV_OP_LDPC_ENC:
+		fcw_len = ACC_FCW_LE_BLEN;
+		break;
+	case RTE_BBDEV_OP_LDPC_DEC:
+		fcw_len = ACC_FCW_LD_BLEN;
+		break;
+	case RTE_BBDEV_OP_TURBO_DEC:
+		fcw_len = ACC_FCW_TD_BLEN;
+		break;
+	case RTE_BBDEV_OP_TURBO_ENC:
+		fcw_len = ACC_FCW_TE_BLEN;
+		break;
+	case RTE_BBDEV_OP_FFT:
+		fcw_len = ACC_FCW_FFT_BLEN;
+		if (q->d->device_variant == VRB2_VARIANT)
+			fcw_len = ACC_FCW_FFT_BLEN_VRB2;
+		break;
+	case RTE_BBDEV_OP_MLDTS:
+		fcw_len = ACC_FCW_MLDTS_BLEN;
+		break;
+	default:
+		/* NOT REACHED. */
+		fcw_len = 0;
+		rte_bbdev_log(ERR, "Unexpected error in %s using type %d", __func__, conf->op_type);
+		break;
+	}
 
 	for (desc_idx = 0; desc_idx < d->sw_ring_max_depth; desc_idx++) {
 		desc = q->ring_addr + desc_idx;
@@ -1023,7 +1136,7 @@ vrb_queue_setup(struct rte_bbdev *dev, uint16_t queue_id,
 			d->queue_offset(d->pf_device, q->vf_id, q->qgrp_id, q->aq_id));
 
 	rte_bbdev_log_debug(
-			"Setup dev%u q%u: qgrp_id=%u, vf_id=%u, aq_id=%u, aq_depth=%u, mmio_reg_enqueue=%p base %p\n",
+			"Setup dev%u q%u: qgrp_id=%u, vf_id=%u, aq_id=%u, aq_depth=%u, mmio_reg_enqueue=%p base %p",
 			dev->data->dev_id, queue_id, q->qgrp_id, q->vf_id,
 			q->aq_id, q->aq_depth, q->mmio_reg_enqueue,
 			d->mmio_base);
@@ -1047,58 +1160,16 @@ free_q:
 	return ret;
 }
 
-static inline void
-vrb_print_op(struct rte_bbdev_dec_op *op, enum rte_bbdev_op_type op_type,
-		uint16_t index)
-{
-	if (op == NULL)
-		return;
-	if (op_type == RTE_BBDEV_OP_LDPC_DEC)
-		rte_bbdev_log(INFO,
-			"  Op 5GUL %d %d %d %d %d %d %d %d %d %d %d %d",
-			index,
-			op->ldpc_dec.basegraph, op->ldpc_dec.z_c,
-			op->ldpc_dec.n_cb, op->ldpc_dec.q_m,
-			op->ldpc_dec.n_filler, op->ldpc_dec.cb_params.e,
-			op->ldpc_dec.op_flags, op->ldpc_dec.rv_index,
-			op->ldpc_dec.iter_max, op->ldpc_dec.iter_count,
-			op->ldpc_dec.harq_combined_input.length
-			);
-	else if (op_type == RTE_BBDEV_OP_LDPC_ENC) {
-		struct rte_bbdev_enc_op *op_dl = (struct rte_bbdev_enc_op *) op;
-		rte_bbdev_log(INFO,
-			"  Op 5GDL %d %d %d %d %d %d %d %d %d",
-			index,
-			op_dl->ldpc_enc.basegraph, op_dl->ldpc_enc.z_c,
-			op_dl->ldpc_enc.n_cb, op_dl->ldpc_enc.q_m,
-			op_dl->ldpc_enc.n_filler, op_dl->ldpc_enc.cb_params.e,
-			op_dl->ldpc_enc.op_flags, op_dl->ldpc_enc.rv_index
-			);
-	} else if (op_type == RTE_BBDEV_OP_MLDTS) {
-		struct rte_bbdev_mldts_op *op_mldts = (struct rte_bbdev_mldts_op *) op;
-		rte_bbdev_log(INFO, "  Op MLD %d RBs %d NL %d Rp %d %d %x\n",
-				index,
-				op_mldts->mldts.num_rbs, op_mldts->mldts.num_layers,
-				op_mldts->mldts.r_rep,
-				op_mldts->mldts.c_rep, op_mldts->mldts.op_flags);
-	}
-}
-
 /* Stop queue and clear counters. */
 static int
 vrb_queue_stop(struct rte_bbdev *dev, uint16_t queue_id)
 {
 	struct acc_queue *q;
-	struct rte_bbdev_dec_op *op;
-	uint16_t i;
+
 	q = dev->data->queues[queue_id].queue_private;
 	rte_bbdev_log(INFO, "Queue Stop %d H/T/D %d %d %x OpType %d",
 			queue_id, q->sw_ring_head, q->sw_ring_tail,
 			q->sw_ring_depth, q->op_type);
-	for (i = 0; i < q->sw_ring_depth; ++i) {
-		op = (q->ring_addr + i)->req.op_addr;
-		vrb_print_op(op, q->op_type, i);
-	}
 	/* ignore all operations in flight and clear counters */
 	q->sw_ring_tail = q->sw_ring_head;
 	q->aq_enqueued = 0;
@@ -1109,6 +1180,7 @@ vrb_queue_stop(struct rte_bbdev *dev, uint16_t queue_id)
 	dev->data->queues[queue_id].queue_stats.dequeue_err_count = 0;
 	dev->data->queues[queue_id].queue_stats.enqueue_warn_count = 0;
 	dev->data->queues[queue_id].queue_stats.dequeue_warn_count = 0;
+	dev->data->queues[queue_id].queue_stats.enqueue_depth_avail = 0;
 	return 0;
 }
 
@@ -1150,7 +1222,6 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 					RTE_BBDEV_TURBO_HALF_ITERATION_EVEN |
 					RTE_BBDEV_TURBO_CONTINUE_CRC_MATCH |
 					RTE_BBDEV_TURBO_EARLY_TERMINATION |
-					RTE_BBDEV_TURBO_DEC_INTERRUPTS |
 					RTE_BBDEV_TURBO_NEG_LLR_1_BIT_IN |
 					RTE_BBDEV_TURBO_MAP_DEC |
 					RTE_BBDEV_TURBO_DEC_TB_CRC_24B_KEEP |
@@ -1171,7 +1242,6 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 					RTE_BBDEV_TURBO_CRC_24B_ATTACH |
 					RTE_BBDEV_TURBO_RV_INDEX_BYPASS |
 					RTE_BBDEV_TURBO_RATE_MATCH |
-					RTE_BBDEV_TURBO_ENC_INTERRUPTS |
 					RTE_BBDEV_TURBO_ENC_SCATTER_GATHER,
 				.num_buffers_src =
 						RTE_BBDEV_TURBO_MAX_CODE_BLOCKS,
@@ -1185,8 +1255,7 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 				.capability_flags =
 					RTE_BBDEV_LDPC_RATE_MATCH |
 					RTE_BBDEV_LDPC_CRC_24B_ATTACH |
-					RTE_BBDEV_LDPC_INTERLEAVER_BYPASS |
-					RTE_BBDEV_LDPC_ENC_INTERRUPTS,
+					RTE_BBDEV_LDPC_INTERLEAVER_BYPASS,
 				.num_buffers_src =
 						RTE_BBDEV_LDPC_MAX_CODE_BLOCKS,
 				.num_buffers_dst =
@@ -1207,8 +1276,7 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 				RTE_BBDEV_LDPC_DEINTERLEAVER_BYPASS |
 				RTE_BBDEV_LDPC_DEC_SCATTER_GATHER |
 				RTE_BBDEV_LDPC_HARQ_6BIT_COMPRESSION |
-				RTE_BBDEV_LDPC_LLR_COMPRESSION |
-				RTE_BBDEV_LDPC_DEC_INTERRUPTS,
+				RTE_BBDEV_LDPC_LLR_COMPRESSION,
 			.llr_size = 8,
 			.llr_decimals = 1,
 			.num_buffers_src =
@@ -1312,11 +1380,10 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 				RTE_BBDEV_LDPC_HARQ_4BIT_COMPRESSION |
 				RTE_BBDEV_LDPC_LLR_COMPRESSION |
 				RTE_BBDEV_LDPC_SOFT_OUT_ENABLE |
-				RTE_BBDEV_LDPC_SOFT_OUT_RM_BYPASS |
 				RTE_BBDEV_LDPC_SOFT_OUT_DEINTERLEAVER_BYPASS |
 				RTE_BBDEV_LDPC_DEC_INTERRUPTS,
 			.llr_size = 8,
-			.llr_decimals = 2,
+			.llr_decimals = 1,
 			.num_buffers_src =
 					RTE_BBDEV_LDPC_MAX_CODE_BLOCKS,
 			.num_buffers_hard_out =
@@ -1335,7 +1402,11 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 						RTE_BBDEV_FFT_FP16_INPUT |
 						RTE_BBDEV_FFT_FP16_OUTPUT |
 						RTE_BBDEV_FFT_POWER_MEAS |
-						RTE_BBDEV_FFT_WINDOWING_BYPASS,
+						RTE_BBDEV_FFT_WINDOWING_BYPASS |
+						RTE_BBDEV_FFT_TIMING_OFFSET_PER_CS |
+						RTE_BBDEV_FFT_TIMING_ERROR |
+						RTE_BBDEV_FFT_DEWINDOWING |
+						RTE_BBDEV_FFT_FREQ_RESAMPLING,
 				.num_buffers_src = 1,
 				.num_buffers_dst = 1,
 				.fft_windows_num = ACC_MAX_FFT_WIN,
@@ -1388,8 +1459,14 @@ vrb_dev_info_get(struct rte_bbdev *dev, struct rte_bbdev_driver_info *dev_info)
 	dev_info->queue_priority[RTE_BBDEV_OP_FFT] = d->acc_conf.q_fft.num_qgroups;
 	dev_info->queue_priority[RTE_BBDEV_OP_MLDTS] = d->acc_conf.q_mld.num_qgroups;
 	dev_info->max_num_queues = 0;
-	for (i = RTE_BBDEV_OP_NONE; i <= RTE_BBDEV_OP_MLDTS; i++)
+	for (i = RTE_BBDEV_OP_NONE; i <= RTE_BBDEV_OP_MLDTS; i++) {
+		if (unlikely(dev_info->num_queues[i] > VRB2_MAX_Q_PER_OP)) {
+			rte_bbdev_log(ERR, "Unexpected number of queues %d exposed for op %d",
+					dev_info->num_queues[i], i);
+			dev_info->num_queues[i] = VRB2_MAX_Q_PER_OP;
+		}
 		dev_info->max_num_queues += dev_info->num_queues[i];
+	}
 	dev_info->queue_size_lim = ACC_MAX_QUEUE_DEPTH;
 	dev_info->hardware_accelerated = true;
 	dev_info->max_dl_queue_priority =
@@ -1434,6 +1511,62 @@ vrb_queue_intr_disable(struct rte_bbdev *dev, uint16_t queue_id)
 	return 0;
 }
 
+static int
+vrb_queue_ops_dump(struct rte_bbdev *dev, uint16_t queue_id, FILE *f)
+{
+	struct acc_queue *q = dev->data->queues[queue_id].queue_private;
+	struct rte_bbdev_dec_op *op;
+	uint16_t i, int_nb;
+	volatile union acc_info_ring_data *ring_data;
+	uint16_t info_ring_head = q->d->info_ring_head;
+	static char str[1024];
+
+	if (f == NULL) {
+		rte_bbdev_log(ERR, "Invalid File input");
+		return -EINVAL;
+	}
+
+	/** Print generic information on queue status. */
+	fprintf(f, "Dump of operations %s on Queue %d by %s\n",
+			rte_bbdev_op_type_str(q->op_type), queue_id, dev->device->driver->name);
+	fprintf(f, "    AQ Enqueued %d Dequeued %d Depth %d - Available Enq %d Deq %d\n",
+			q->aq_enqueued, q->aq_dequeued, q->aq_depth,
+			acc_ring_avail_enq(q), acc_ring_avail_deq(q));
+
+	/** Print information captured in the info ring. */
+	if (q->d->info_ring != NULL) {
+		fprintf(f, "Info Ring Buffer - Head %d\n", q->d->info_ring_head);
+		ring_data = q->d->info_ring + (q->d->info_ring_head & ACC_INFO_RING_MASK);
+		while (ring_data->valid) {
+			int_nb = int_from_ring(*ring_data, q->d->device_variant);
+			if ((int_nb < ACC_PF_INT_DMA_DL_DESC_IRQ) || (
+					int_nb > ACC_PF_INT_DMA_MLD_DESC_IRQ)) {
+				fprintf(f, "  InfoRing: ITR:%d Info:0x%x",
+						int_nb, ring_data->detailed_info);
+				/* Initialize Info Ring entry and move forward. */
+				ring_data->valid = 0;
+			}
+			info_ring_head++;
+			ring_data = q->d->info_ring + (info_ring_head & ACC_INFO_RING_MASK);
+		}
+	}
+
+	fprintf(f, "Ring Content - Head %d Tail %d Depth %d\n",
+			q->sw_ring_head, q->sw_ring_tail, q->sw_ring_depth);
+	/** Print information about each operation in the software ring. */
+	for (i = 0; i < q->sw_ring_depth; ++i) {
+		op = (q->ring_addr + i)->req.op_addr;
+		if (op != NULL)
+			fprintf(f, "  %d\tn %d %s", i, (q->ring_addr + i)->req.numCBs,
+					rte_bbdev_ops_param_string(op, q->op_type,
+							str, sizeof(str)));
+	}
+
+	fprintf(f, "== End of File ==\n");
+
+	return 0;
+}
+
 static const struct rte_bbdev_ops vrb_bbdev_ops = {
 	.setup_queues = vrb_setup_queues,
 	.intr_enable = vrb_intr_enable,
@@ -1443,7 +1576,8 @@ static const struct rte_bbdev_ops vrb_bbdev_ops = {
 	.queue_release = vrb_queue_release,
 	.queue_stop = vrb_queue_stop,
 	.queue_intr_enable = vrb_queue_intr_enable,
-	.queue_intr_disable = vrb_queue_intr_disable
+	.queue_intr_disable = vrb_queue_intr_disable,
+	.queue_ops_dump = vrb_queue_ops_dump
 };
 
 /* PCI PF address map. */
@@ -1550,7 +1684,7 @@ vrb_fcw_ld_fill(struct rte_bbdev_dec_op *op, struct acc_fcw_ld *fcw,
 	fcw->Zc = op->ldpc_dec.z_c;
 	fcw->ncb = op->ldpc_dec.n_cb;
 	fcw->k0 = get_k0(fcw->ncb, fcw->Zc, op->ldpc_dec.basegraph,
-			op->ldpc_dec.rv_index);
+			op->ldpc_dec.rv_index, op->ldpc_dec.k0);
 	if (op->ldpc_dec.code_block_mode == RTE_BBDEV_CODE_BLOCK)
 		fcw->rm_e = op->ldpc_dec.cb_params.e;
 	else
@@ -1626,18 +1760,18 @@ vrb_fcw_ld_fill(struct rte_bbdev_dec_op *op, struct acc_fcw_ld *fcw,
 		fcw->so_en = check_bit(op->ldpc_dec.op_flags, RTE_BBDEV_LDPC_SOFT_OUT_ENABLE);
 		fcw->so_bypass_intlv = check_bit(op->ldpc_dec.op_flags,
 				RTE_BBDEV_LDPC_SOFT_OUT_DEINTERLEAVER_BYPASS);
-		fcw->so_bypass_rm = check_bit(op->ldpc_dec.op_flags,
-				RTE_BBDEV_LDPC_SOFT_OUT_RM_BYPASS);
-		fcw->minsum_offset = 1;
-		fcw->dec_llrclip   = 2;
+		fcw->so_bypass_rm = 0;
+		fcw->minsum_offset = 0;
+		fcw->dec_llrclip   = 0;
 	}
 
 	/*
-	 * These are all implicitly set
+	 * These are all implicitly set:
 	 * fcw->synd_post = 0;
 	 * fcw->dec_convllr = 0;
 	 * fcw->hcout_convllr = 0;
 	 * fcw->hcout_size1 = 0;
+	 * fcw->so_it = 0;
 	 * fcw->hcout_offset = 0;
 	 * fcw->negstop_th = 0;
 	 * fcw->negstop_it = 0;
@@ -1648,8 +1782,7 @@ vrb_fcw_ld_fill(struct rte_bbdev_dec_op *op, struct acc_fcw_ld *fcw,
 	if (fcw->hcout_en > 0) {
 		parity_offset = (op->ldpc_dec.basegraph == 1 ? 20 : 8)
 				* op->ldpc_dec.z_c - op->ldpc_dec.n_filler;
-		k0_p = (fcw->k0 > parity_offset) ?
-				fcw->k0 - op->ldpc_dec.n_filler : fcw->k0;
+		k0_p = (fcw->k0 > parity_offset) ? fcw->k0 - op->ldpc_dec.n_filler : fcw->k0;
 		ncb_p = fcw->ncb - op->ldpc_dec.n_filler;
 		l = k0_p + fcw->rm_e;
 		harq_out_length = (uint16_t) fcw->hcin_size0;
@@ -1665,6 +1798,9 @@ vrb_fcw_ld_fill(struct rte_bbdev_dec_op *op, struct acc_fcw_ld *fcw,
 		fcw->hcout_size1 = 0;
 		fcw->hcout_offset = 0;
 	}
+
+	/* Force saturation to 6 bits LLR. */
+	fcw->saturate_input = 1;
 
 	fcw->tb_crc_select = 0;
 	if (check_bit(op->ldpc_dec.op_flags, RTE_BBDEV_LDPC_CRC_TYPE_24A_CHECK))
@@ -1891,16 +2027,15 @@ vrb_dma_desc_ld_fill(struct rte_bbdev_dec_op *op,
 		next_triplet++;
 	}
 
-	if (check_bit(op->ldpc_dec.op_flags,
-				RTE_BBDEV_LDPC_HQ_COMBINE_OUT_ENABLE)) {
+	if (check_bit(op->ldpc_dec.op_flags, RTE_BBDEV_LDPC_HQ_COMBINE_OUT_ENABLE)) {
 		if (op->ldpc_dec.harq_combined_output.data == 0) {
 			rte_bbdev_log(ERR, "HARQ output is not defined");
 			return -1;
 		}
 
-		/* Pruned size of the HARQ */
+		/* Pruned size of the HARQ. */
 		h_p_size = fcw->hcout_size0 + fcw->hcout_size1;
-		/* Non-Pruned size of the HARQ */
+		/* Non-Pruned size of the HARQ. */
 		h_np_size = fcw->hcout_offset > 0 ?
 				fcw->hcout_offset + fcw->hcout_size1 :
 				h_p_size;
@@ -2274,7 +2409,7 @@ vrb2_fcw_letb_fill(const struct rte_bbdev_enc_op *op, struct acc_fcw_le *fcw)
 	fcw->Zc = op->ldpc_enc.z_c;
 	fcw->ncb = op->ldpc_enc.n_cb;
 	fcw->k0 = get_k0(fcw->ncb, fcw->Zc, op->ldpc_enc.basegraph,
-			op->ldpc_enc.rv_index);
+			op->ldpc_enc.rv_index, 0);
 	fcw->rm_e = op->ldpc_enc.tb_params.ea;
 	fcw->rm_e_b = op->ldpc_enc.tb_params.eb;
 	fcw->crc_select = check_bit(op->ldpc_enc.op_flags,
@@ -2474,7 +2609,6 @@ vrb_enqueue_ldpc_dec_one_op_cb(struct acc_queue *q, struct rte_bbdev_dec_op *op,
 			seg_total_left = rte_pktmbuf_data_len(input) - in_offset;
 		else
 			seg_total_left = fcw->rm_e;
-
 		ret = vrb_dma_desc_ld_fill(op, &desc->req, &input, h_output,
 				&in_offset, &h_out_offset,
 				&h_out_length, &mbuf_total_left,
@@ -2486,13 +2620,14 @@ vrb_enqueue_ldpc_dec_one_op_cb(struct acc_queue *q, struct rte_bbdev_dec_op *op,
 	/* Hard output. */
 	mbuf_append(h_output_head, h_output, h_out_length);
 	if (op->ldpc_dec.harq_combined_output.length > 0) {
-		/* Push the HARQ output into host memory. */
+		/* Push the HARQ output into host memory overwriting existing data. */
 		struct rte_mbuf *hq_output_head, *hq_output;
+		op->ldpc_dec.harq_combined_output.data->data_len = 0;
 		hq_output_head = op->ldpc_dec.harq_combined_output.data;
 		hq_output = op->ldpc_dec.harq_combined_output.data;
 		hq_len = op->ldpc_dec.harq_combined_output.length;
 		if (unlikely(!mbuf_append(hq_output_head, hq_output, hq_len))) {
-			rte_bbdev_log(ERR, "HARQ output mbuf issue %d %d\n",
+			rte_bbdev_log(ERR, "HARQ output mbuf issue %d %d",
 					hq_output->buf_len,
 					hq_len);
 			return -1;
@@ -2535,7 +2670,6 @@ vrb_enqueue_ldpc_dec_one_op_tb(struct acc_queue *q, struct rte_bbdev_dec_op *op,
 	desc_first = desc;
 	fcw_offset = (desc_idx << 8) + ACC_DESC_FCW_OFFSET;
 	harq_layout = q->d->harq_layout;
-
 	vrb_fcw_ld_fill(op, &desc->req.fcw_ld, harq_layout, q->d->device_variant);
 
 	input = op->ldpc_dec.input.data;
@@ -2738,9 +2872,7 @@ vrb_enqueue_enc_cb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, i, &q_data->queue_stats);
 
-	/* Update stats */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 	return i;
 }
 
@@ -2778,9 +2910,7 @@ vrb_enqueue_ldpc_enc_cb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, desc_idx, &q_data->queue_stats);
 
-	/* Update stats. */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 
 	return i;
 }
@@ -2817,9 +2947,7 @@ vrb_enqueue_enc_tb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, enqueued_cbs, &q_data->queue_stats);
 
-	/* Update stats */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 
 	return i;
 }
@@ -2864,9 +2992,7 @@ vrb_enqueue_ldpc_enc_tb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, enqueued_descs, &q_data->queue_stats);
 
-	/* Update stats. */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 
 	return i;
 }
@@ -2926,9 +3052,7 @@ vrb_enqueue_dec_cb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, i, &q_data->queue_stats);
 
-	/* Update stats. */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 
 	return i;
 }
@@ -2961,9 +3085,7 @@ vrb_enqueue_ldpc_dec_tb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, enqueued_cbs, &q_data->queue_stats);
 
-	/* Update stats. */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 	return i;
 }
 
@@ -2985,7 +3107,7 @@ vrb_enqueue_ldpc_dec_cb(struct rte_bbdev_queue_data *q_data,
 			break;
 		}
 		avail -= 1;
-		rte_bbdev_log(INFO, "Op %d %d %d %d %d %d %d %d %d %d %d %d\n",
+		rte_bbdev_log(INFO, "Op %d %d %d %d %d %d %d %d %d %d %d %d",
 			i, ops[i]->ldpc_dec.op_flags, ops[i]->ldpc_dec.rv_index,
 			ops[i]->ldpc_dec.iter_max, ops[i]->ldpc_dec.iter_count,
 			ops[i]->ldpc_dec.basegraph, ops[i]->ldpc_dec.z_c,
@@ -3004,9 +3126,7 @@ vrb_enqueue_ldpc_dec_cb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, i, &q_data->queue_stats);
 
-	/* Update stats. */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 	return i;
 }
 
@@ -3041,9 +3161,7 @@ vrb_enqueue_dec_tb(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, enqueued_cbs, &q_data->queue_stats);
 
-	/* Update stats */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 
 	return i;
 }
@@ -3076,6 +3194,33 @@ vrb_enqueue_ldpc_dec(struct rte_bbdev_queue_data *q_data,
 		return vrb_enqueue_ldpc_dec_cb(q_data, ops, num);
 }
 
+/* Update the operation status when dequeuing for any operation type. */
+static inline void
+vrb_update_dequeued_operation(union acc_dma_desc *desc, union acc_dma_rsp_desc rsp, int *op_status,
+	uint32_t *aq_dequeued, bool clear_rsp, bool clear_opstatus)
+{
+	rte_bbdev_log_debug("Resp. desc %p: %x", desc, rsp.val);
+
+	/* Set status based on DMA response. */
+	if (clear_opstatus)
+		*op_status = 0;
+	*op_status |= ((rsp.input_err) ? (1 << RTE_BBDEV_DATA_ERROR) : 0);
+	*op_status |= ((rsp.dma_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
+	*op_status |= ((rsp.fcw_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
+	*op_status |= ((rsp.engine_hung) ? (1 << RTE_BBDEV_ENGINE_ERROR) : 0);
+
+	if (desc->req.last_desc_in_batch) {
+		(*aq_dequeued)++;
+		desc->req.last_desc_in_batch = 0;
+	}
+
+	if (clear_rsp) {
+		/* Clear response explicitly. */
+		desc->rsp.val = ACC_DMA_DESC_TYPE;
+		desc->rsp.add_info_0 = 0; /* Reserved bits. */
+		desc->rsp.add_info_1 = 0; /* Reserved bits. */
+	}
+}
 
 /* Dequeue one encode operations from device in CB mode. */
 static inline int
@@ -3092,7 +3237,8 @@ vrb_dequeue_enc_one_op_cb(struct acc_queue *q, struct rte_bbdev_enc_op **ref_op,
 
 	desc_idx = acc_desc_idx_tail(q, *dequeued_descs);
 	desc = q->ring_addr + desc_idx;
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	if (*dequeued_ops + desc->req.numCBs > max_requested_ops)
 		return -1;
@@ -3102,25 +3248,11 @@ vrb_dequeue_enc_one_op_cb(struct acc_queue *q, struct rte_bbdev_enc_op **ref_op,
 		return -1;
 
 	rsp.val = atom_desc.rsp.val;
-	rte_bbdev_log_debug("Resp. desc %p: %x", desc, rsp.val);
 
 	/* Dequeue. */
 	op = desc->req.op_addr;
 
-	/* Clearing status, it will be set based on response. */
-	op->status = 0;
-	op->status |= ((rsp.input_err) ? (1 << RTE_BBDEV_DATA_ERROR) : 0);
-	op->status |= ((rsp.dma_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-	op->status |= ((rsp.fcw_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-	op->status |= ((rsp.engine_hung) ? (1 << RTE_BBDEV_ENGINE_ERROR) : 0);
-
-	if (desc->req.last_desc_in_batch) {
-		(*aq_dequeued)++;
-		desc->req.last_desc_in_batch = 0;
-	}
-	desc->rsp.val = ACC_DMA_DESC_TYPE;
-	desc->rsp.add_info_0 = 0; /* Reserved bits. */
-	desc->rsp.add_info_1 = 0; /* Reserved bits. */
+	vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, true, true);
 
 	ref_op[0] = op;
 	context_ptrs = q->companion_ring_addr + desc_idx;
@@ -3144,32 +3276,19 @@ vrb2_dequeue_ldpc_enc_one_op_tb(struct acc_queue *q, struct rte_bbdev_enc_op **r
 	struct rte_bbdev_enc_op *op;
 
 	desc = acc_desc_tail(q, *dequeued_descs);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	/* Check fdone bit. */
 	if (!(atom_desc.rsp.val & ACC_FDONE))
 		return -1;
 
 	rsp.val = atom_desc.rsp.val;
-	rte_bbdev_log_debug("Resp. desc %p: %x", desc, rsp.val);
 
 	/* Dequeue. */
 	op = desc->req.op_addr;
 
-	/* Clearing status, it will be set based on response. */
-	op->status = 0;
-	op->status |= rsp.input_err << RTE_BBDEV_DATA_ERROR;
-	op->status |= rsp.dma_err << RTE_BBDEV_DRV_ERROR;
-	op->status |= rsp.fcw_err << RTE_BBDEV_DRV_ERROR;
-	op->status |= rsp.engine_hung << RTE_BBDEV_ENGINE_ERROR;
-
-	if (desc->req.last_desc_in_batch) {
-		(*aq_dequeued)++;
-		desc->req.last_desc_in_batch = 0;
-	}
-	desc->rsp.val = ACC_DMA_DESC_TYPE;
-	desc->rsp.add_info_0 = 0; /* Reserved bits. */
-	desc->rsp.add_info_1 = 0; /* Reserved bits. */
+	vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, true, true);
 
 	/* One op was successfully dequeued */
 	ref_op[0] = op;
@@ -3178,7 +3297,7 @@ vrb2_dequeue_ldpc_enc_one_op_tb(struct acc_queue *q, struct rte_bbdev_enc_op **r
 	return 1;
 }
 
-/* Dequeue one LDPC encode operations from device in TB mode.
+/* Dequeue one encode operations from device in TB mode.
  * That operation may cover multiple descriptors.
  */
 static inline int
@@ -3193,7 +3312,8 @@ vrb_dequeue_enc_one_op_tb(struct acc_queue *q, struct rte_bbdev_enc_op **ref_op,
 	uint16_t current_dequeued_descs = 0, descs_in_tb;
 
 	desc = acc_desc_tail(q, *dequeued_descs);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	if (*dequeued_ops + 1 > max_requested_ops)
 		return -1;
@@ -3209,7 +3329,8 @@ vrb_dequeue_enc_one_op_tb(struct acc_queue *q, struct rte_bbdev_enc_op **ref_op,
 	/* Check if last CB in TB is ready to dequeue (and thus
 	 * the whole TB) - checking sdone bit. If not return.
 	 */
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)last_desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)last_desc,
+			rte_memory_order_relaxed);
 	if (!(atom_desc.rsp.val & ACC_SDONE))
 		return -1;
 
@@ -3221,22 +3342,12 @@ vrb_dequeue_enc_one_op_tb(struct acc_queue *q, struct rte_bbdev_enc_op **ref_op,
 
 	while (i < descs_in_tb) {
 		desc = acc_desc_tail(q, *dequeued_descs);
-		atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+		atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+				rte_memory_order_relaxed);
 		rsp.val = atom_desc.rsp.val;
-		rte_bbdev_log_debug("Resp. desc %p: %x", desc, rsp.val);
 
-		op->status |= ((rsp.input_err) ? (1 << RTE_BBDEV_DATA_ERROR) : 0);
-		op->status |= ((rsp.dma_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-		op->status |= ((rsp.fcw_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-		op->status |= ((rsp.engine_hung) ? (1 << RTE_BBDEV_ENGINE_ERROR) : 0);
+		vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, true, false);
 
-		if (desc->req.last_desc_in_batch) {
-			(*aq_dequeued)++;
-			desc->req.last_desc_in_batch = 0;
-		}
-		desc->rsp.val = ACC_DMA_DESC_TYPE;
-		desc->rsp.add_info_0 = 0;
-		desc->rsp.add_info_1 = 0;
 		(*dequeued_descs)++;
 		current_dequeued_descs++;
 		i++;
@@ -3258,24 +3369,19 @@ vrb_dequeue_dec_one_op_cb(struct rte_bbdev_queue_data *q_data,
 	struct rte_bbdev_dec_op *op;
 
 	desc = acc_desc_tail(q, dequeued_cbs);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	/* Check fdone bit. */
 	if (!(atom_desc.rsp.val & ACC_FDONE))
 		return -1;
 
 	rsp.val = atom_desc.rsp.val;
-	rte_bbdev_log_debug("Resp. desc %p: %x\n", desc, rsp.val);
 
 	/* Dequeue. */
 	op = desc->req.op_addr;
 
-	/* Clearing status, it will be set based on response. */
-	op->status = 0;
-	op->status |= ((rsp.input_err) ? (1 << RTE_BBDEV_DATA_ERROR) : 0);
-	op->status |= ((rsp.dma_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-	op->status |= ((rsp.fcw_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-	op->status |= rsp.engine_hung << RTE_BBDEV_ENGINE_ERROR;
+	vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, false, true);
 
 	if (op->status != 0) {
 		/* These errors are not expected. */
@@ -3287,11 +3393,7 @@ vrb_dequeue_dec_one_op_cb(struct rte_bbdev_queue_data *q_data,
 	if (!op->status)
 		op->status |= rsp.crc_status << RTE_BBDEV_CRC_ERROR;
 	op->turbo_dec.iter_count = (uint8_t) rsp.iter_cnt;
-	/* Check if this is the last desc in batch (Atomic Queue). */
-	if (desc->req.last_desc_in_batch) {
-		(*aq_dequeued)++;
-		desc->req.last_desc_in_batch = 0;
-	}
+
 	desc->rsp.val = ACC_DMA_DESC_TYPE;
 	desc->rsp.add_info_0 = 0;
 	desc->rsp.add_info_1 = 0;
@@ -3312,25 +3414,23 @@ vrb_dequeue_ldpc_dec_one_op_cb(struct rte_bbdev_queue_data *q_data,
 	struct rte_bbdev_dec_op *op;
 
 	desc = acc_desc_tail(q, dequeued_cbs);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	/* Check fdone bit. */
 	if (!(atom_desc.rsp.val & ACC_FDONE))
 		return -1;
 
 	rsp.val = atom_desc.rsp.val;
-	rte_bbdev_log_debug("Resp. desc %p: %x %x %x\n", desc, rsp.val, desc->rsp.add_info_0,
+	rte_bbdev_log_debug("Resp. desc %p: %x %x %x", desc, rsp.val, desc->rsp.add_info_0,
 			desc->rsp.add_info_1);
 
 	/* Dequeue. */
 	op = desc->req.op_addr;
 
-	/* Clearing status, it will be set based on response. */
-	op->status = 0;
-	op->status |= rsp.input_err << RTE_BBDEV_DATA_ERROR;
-	op->status |= rsp.dma_err << RTE_BBDEV_DRV_ERROR;
-	op->status |= rsp.fcw_err << RTE_BBDEV_DRV_ERROR;
-	op->status |= rsp.engine_hung << RTE_BBDEV_ENGINE_ERROR;
+	vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, false, true);
+
+	/* Additional op status update for LDPC Decoder. */
 	if (op->status != 0)
 		q_data->queue_stats.dequeue_err_count++;
 
@@ -3348,12 +3448,6 @@ vrb_dequeue_ldpc_dec_one_op_cb(struct rte_bbdev_queue_data *q_data,
 
 	if (op->status & (1 << RTE_BBDEV_DRV_ERROR))
 		vrb_check_ir(q->d);
-
-	/* Check if this is the last desc in batch (Atomic Queue). */
-	if (desc->req.last_desc_in_batch) {
-		(*aq_dequeued)++;
-		desc->req.last_desc_in_batch = 0;
-	}
 
 	desc->rsp.val = ACC_DMA_DESC_TYPE;
 	desc->rsp.add_info_0 = 0;
@@ -3377,7 +3471,8 @@ vrb_dequeue_dec_one_op_tb(struct acc_queue *q, struct rte_bbdev_dec_op **ref_op,
 	uint32_t tb_crc_check = 0;
 
 	desc = acc_desc_tail(q, dequeued_cbs);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	/* Check fdone bit. */
 	if (!(atom_desc.rsp.val & ACC_FDONE))
@@ -3393,7 +3488,8 @@ vrb_dequeue_dec_one_op_tb(struct acc_queue *q, struct rte_bbdev_dec_op **ref_op,
 	/* Check if last CB in TB is ready to dequeue (and thus the whole TB) - checking sdone bit.
 	 * If not return.
 	 */
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)last_desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)last_desc,
+			rte_memory_order_relaxed);
 	if (!(atom_desc.rsp.val & ACC_SDONE))
 		return -1;
 
@@ -3403,16 +3499,14 @@ vrb_dequeue_dec_one_op_tb(struct acc_queue *q, struct rte_bbdev_dec_op **ref_op,
 	/* Read remaining CBs if exists. */
 	while (cb_idx < cbs_in_tb) {
 		desc = acc_desc_tail(q, dequeued_cbs);
-		atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+		atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+				rte_memory_order_relaxed);
 		rsp.val = atom_desc.rsp.val;
 		rte_bbdev_log_debug("Resp. desc %p: %x %x %x", desc,
 				rsp.val, desc->rsp.add_info_0,
 				desc->rsp.add_info_1);
 
-		op->status |= ((rsp.input_err) ? (1 << RTE_BBDEV_DATA_ERROR) : 0);
-		op->status |= ((rsp.dma_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-		op->status |= ((rsp.fcw_err) ? (1 << RTE_BBDEV_DRV_ERROR) : 0);
-		op->status |= ((rsp.engine_hung) ? (1 << RTE_BBDEV_ENGINE_ERROR) : 0);
+		vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, false, false);
 
 		if (check_bit(op->ldpc_dec.op_flags, RTE_BBDEV_LDPC_CRC_TYPE_24A_CHECK))
 			tb_crc_check ^= desc->rsp.add_info_1;
@@ -3427,11 +3521,6 @@ vrb_dequeue_dec_one_op_tb(struct acc_queue *q, struct rte_bbdev_dec_op **ref_op,
 			op->turbo_dec.iter_count = RTE_MAX((uint8_t) rsp.iter_cnt,
 					op->turbo_dec.iter_count);
 
-		/* Check if this is the last desc in batch (Atomic Queue). */
-		if (desc->req.last_desc_in_batch) {
-			(*aq_dequeued)++;
-			desc->req.last_desc_in_batch = 0;
-		}
 		desc->rsp.val = ACC_DMA_DESC_TYPE;
 		desc->rsp.add_info_0 = 0;
 		desc->rsp.add_info_1 = 0;
@@ -3440,7 +3529,7 @@ vrb_dequeue_dec_one_op_tb(struct acc_queue *q, struct rte_bbdev_dec_op **ref_op,
 	}
 
 	if (check_bit(op->ldpc_dec.op_flags, RTE_BBDEV_LDPC_CRC_TYPE_24A_CHECK)) {
-		rte_bbdev_log_debug("TB-CRC Check %x\n", tb_crc_check);
+		rte_bbdev_log_debug("TB-CRC Check %x", tb_crc_check);
 		if (tb_crc_check > 0)
 			op->status |= 1 << RTE_BBDEV_CRC_ERROR;
 	}
@@ -3482,8 +3571,7 @@ vrb_dequeue_enc(struct rte_bbdev_queue_data *q_data,
 	q->aq_dequeued += aq_dequeued;
 	q->sw_ring_tail += dequeued_descs;
 
-	/* Update enqueue stats. */
-	q_data->queue_stats.dequeued_count += dequeued_ops;
+	acc_update_qstat_dequeue(q_data, dequeued_ops);
 
 	return dequeued_ops;
 }
@@ -3525,8 +3613,7 @@ vrb_dequeue_ldpc_enc(struct rte_bbdev_queue_data *q_data,
 	q->aq_dequeued += aq_dequeued;
 	q->sw_ring_tail += dequeued_descs;
 
-	/* Update enqueue stats. */
-	q_data->queue_stats.dequeued_count += dequeued_ops;
+	acc_update_qstat_dequeue(q_data, dequeued_ops);
 
 	return dequeued_ops;
 }
@@ -3564,8 +3651,7 @@ vrb_dequeue_dec(struct rte_bbdev_queue_data *q_data,
 	q->aq_dequeued += aq_dequeued;
 	q->sw_ring_tail += dequeued_cbs;
 
-	/* Update enqueue stats */
-	q_data->queue_stats.dequeued_count += i;
+	acc_update_qstat_dequeue(q_data, i);
 
 	return i;
 }
@@ -3604,8 +3690,7 @@ vrb_dequeue_ldpc_dec(struct rte_bbdev_queue_data *q_data,
 	q->aq_dequeued += aq_dequeued;
 	q->sw_ring_tail += dequeued_cbs;
 
-	/* Update enqueue stats. */
-	q_data->queue_stats.dequeued_count += i;
+	acc_update_qstat_dequeue(q_data, i);
 
 	return i;
 }
@@ -3647,6 +3732,8 @@ vrb1_fcw_fft_fill(struct rte_bbdev_fft_op *op, struct acc_fcw_fft *fcw)
 static inline void
 vrb2_fcw_fft_fill(struct rte_bbdev_fft_op *op, struct acc_fcw_fft_3 *fcw)
 {
+	uint8_t cs;
+
 	fcw->in_frame_size = op->fft.input_sequence_size;
 	fcw->leading_pad_size = op->fft.input_leading_padding;
 	fcw->out_frame_size = op->fft.output_sequence_size;
@@ -3682,6 +3769,16 @@ vrb2_fcw_fft_fill(struct rte_bbdev_fft_op *op, struct acc_fcw_fft_3 *fcw)
 		fcw->bypass = 3;
 	else
 		fcw->bypass = 0;
+
+	fcw->enable_dewin = check_bit(op->fft.op_flags, RTE_BBDEV_FFT_DEWINDOWING);
+	fcw->freq_resample_mode = op->fft.freq_resample_mode;
+	fcw->depad_output_size = fcw->freq_resample_mode == 0 ?
+			op->fft.output_sequence_size : op->fft.output_depadded_size;
+	for (cs = 0; cs < RTE_BBDEV_MAX_CS; cs++) {
+		fcw->cs_theta_0[cs] = op->fft.cs_theta_0[cs];
+		fcw->cs_theta_d[cs] = op->fft.cs_theta_d[cs];
+		fcw->cs_time_offset[cs] = op->fft.time_offset[cs];
+	}
 }
 
 static inline int
@@ -3704,8 +3801,14 @@ vrb_dma_desc_fft_fill(struct rte_bbdev_fft_op *op,
 	/* FCW already done */
 	acc_header_init(desc);
 
-	RTE_SET_USED(win_input);
-	RTE_SET_USED(win_offset);
+	if (win_en && win_input) {
+		desc->data_ptrs[bd_idx].address = rte_pktmbuf_iova_offset(win_input, *win_offset);
+		desc->data_ptrs[bd_idx].blen = op->fft.output_depadded_size * 2;
+		desc->data_ptrs[bd_idx].blkid = ACC_DMA_BLKID_DEWIN_IN;
+		desc->data_ptrs[bd_idx].last = 0;
+		desc->data_ptrs[bd_idx].dma_ext = 0;
+		bd_idx++;
+	}
 
 	desc->data_ptrs[bd_idx].address = rte_pktmbuf_iova_offset(input, *in_offset);
 	desc->data_ptrs[bd_idx].blen = op->fft.input_sequence_size * ACC_IQ_SIZE;
@@ -3811,9 +3914,7 @@ vrb_enqueue_fft(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, i, &q_data->queue_stats);
 
-	/* Update stats */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 	return i;
 }
 
@@ -3829,7 +3930,8 @@ vrb_dequeue_fft_one_op(struct rte_bbdev_queue_data *q_data,
 	struct rte_bbdev_fft_op *op;
 
 	desc = acc_desc_tail(q, dequeued_cbs);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	/* Check fdone bit */
 	if (!(atom_desc.rsp.val & ACC_FDONE))
@@ -3843,25 +3945,14 @@ vrb_dequeue_fft_one_op(struct rte_bbdev_queue_data *q_data,
 	/* Dequeue. */
 	op = desc->req.op_addr;
 
-	/* Clearing status, it will be set based on response. */
-	op->status = 0;
-	op->status |= rsp.input_err << RTE_BBDEV_DATA_ERROR;
-	op->status |= rsp.dma_err << RTE_BBDEV_DRV_ERROR;
-	op->status |= rsp.fcw_err << RTE_BBDEV_DRV_ERROR;
-	op->status |= rsp.engine_hung << RTE_BBDEV_ENGINE_ERROR;
+	vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, true, true);
+
 	if (op->status != 0)
 		q_data->queue_stats.dequeue_err_count++;
 
 	if (op->status & (1 << RTE_BBDEV_DRV_ERROR))
 		vrb_check_ir(q->d);
 
-	/* Check if this is the last desc in batch (Atomic Queue). */
-	if (desc->req.last_desc_in_batch) {
-		(*aq_dequeued)++;
-		desc->req.last_desc_in_batch = 0;
-	}
-	desc->rsp.val = ACC_DMA_DESC_TYPE;
-	desc->rsp.add_info_0 = 0;
 	*ref_op = op;
 	/* One CB (op) was successfully dequeued. */
 	return 1;
@@ -3890,8 +3981,7 @@ vrb_dequeue_fft(struct rte_bbdev_queue_data *q_data,
 
 	q->aq_dequeued += aq_dequeued;
 	q->sw_ring_tail += dequeued_cbs;
-	/* Update enqueue stats. */
-	q_data->queue_stats.dequeued_count += i;
+	acc_update_qstat_dequeue(q_data, i);
 	return i;
 }
 
@@ -3985,7 +4075,7 @@ vrb2_check_mld_r_constraint(struct rte_bbdev_mldts_op *op) {
 	layer_idx = RTE_MIN(op->mldts.num_layers - VRB2_MLD_MIN_LAYER,
 			VRB2_MLD_MAX_LAYER - VRB2_MLD_MIN_LAYER);
 	rrep_idx = RTE_MIN(op->mldts.r_rep, VRB2_MLD_MAX_RREP);
-	rte_bbdev_log_debug("RB %d index %d %d max %d\n", op->mldts.num_rbs, layer_idx, rrep_idx,
+	rte_bbdev_log_debug("RB %d index %d %d max %d", op->mldts.num_rbs, layer_idx, rrep_idx,
 			max_rb[layer_idx][rrep_idx]);
 
 	return (op->mldts.num_rbs <= max_rb[layer_idx][rrep_idx]);
@@ -4145,9 +4235,7 @@ vrb2_enqueue_mldts(struct rte_bbdev_queue_data *q_data,
 
 	acc_dma_enqueue(q, enqueued_descs, &q_data->queue_stats);
 
-	/* Update stats. */
-	q_data->queue_stats.enqueued_count += i;
-	q_data->queue_stats.enqueue_err_count += num - i;
+	acc_update_qstat_enqueue(q_data, i, num - i);
 	return i;
 }
 
@@ -4166,7 +4254,8 @@ dequeue_mldts_one_op(struct rte_bbdev_queue_data *q_data,
 	uint8_t descs_in_op, i;
 
 	desc = acc_desc_tail(q, dequeued_ops);
-	atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+	atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+			rte_memory_order_relaxed);
 
 	/* Check fdone bit. */
 	if (!(atom_desc.rsp.val & ACC_FDONE))
@@ -4177,7 +4266,8 @@ dequeue_mldts_one_op(struct rte_bbdev_queue_data *q_data,
 		/* Get last CB. */
 		last_desc = acc_desc_tail(q, dequeued_ops + descs_in_op - 1);
 		/* Check if last op is ready to dequeue by checking fdone bit. If not exit. */
-		atom_desc.atom_hdr = __atomic_load_n((uint64_t *)last_desc, __ATOMIC_RELAXED);
+		atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)last_desc,
+				rte_memory_order_relaxed);
 		if (!(atom_desc.rsp.val & ACC_FDONE))
 			return -1;
 #ifdef RTE_LIBRTE_BBDEV_DEBUG
@@ -4187,8 +4277,9 @@ dequeue_mldts_one_op(struct rte_bbdev_queue_data *q_data,
 		for (i = 1; i < descs_in_op - 1; i++) {
 			last_desc = q->ring_addr + ((q->sw_ring_tail + dequeued_ops + i)
 					& q->sw_ring_wrap_mask);
-			atom_desc.atom_hdr = __atomic_load_n((uint64_t *)last_desc,
-					__ATOMIC_RELAXED);
+			atom_desc.atom_hdr = rte_atomic_load_explicit(
+					(uint64_t __rte_atomic *)last_desc,
+					rte_memory_order_relaxed);
 			if (!(atom_desc.rsp.val & ACC_FDONE))
 				return -1;
 		}
@@ -4204,12 +4295,11 @@ dequeue_mldts_one_op(struct rte_bbdev_queue_data *q_data,
 
 	for (i = 0; i < descs_in_op; i++) {
 		desc = q->ring_addr + ((q->sw_ring_tail + dequeued_ops + i) & q->sw_ring_wrap_mask);
-		atom_desc.atom_hdr = __atomic_load_n((uint64_t *)desc, __ATOMIC_RELAXED);
+		atom_desc.atom_hdr = rte_atomic_load_explicit((uint64_t __rte_atomic *)desc,
+				rte_memory_order_relaxed);
 		rsp.val = atom_desc.rsp.val;
-		op->status |= rsp.input_err << RTE_BBDEV_DATA_ERROR;
-		op->status |= rsp.dma_err << RTE_BBDEV_DRV_ERROR;
-		op->status |= rsp.fcw_err << RTE_BBDEV_DRV_ERROR;
-		op->status |= rsp.engine_hung << RTE_BBDEV_ENGINE_ERROR;
+
+		vrb_update_dequeued_operation(desc, rsp, &op->status, aq_dequeued, true, false);
 	}
 
 	if (op->status != 0)
@@ -4217,13 +4307,6 @@ dequeue_mldts_one_op(struct rte_bbdev_queue_data *q_data,
 	if (op->status & (1 << RTE_BBDEV_DRV_ERROR))
 		vrb_check_ir(q->d);
 
-	/* Check if this is the last desc in batch (Atomic Queue). */
-	if (desc->req.last_desc_in_batch) {
-		(*aq_dequeued)++;
-		desc->req.last_desc_in_batch = 0;
-	}
-	desc->rsp.val = ACC_DMA_DESC_TYPE;
-	desc->rsp.add_info_0 = 0;
 	*ref_op = op;
 
 	return descs_in_op;
@@ -4251,8 +4334,9 @@ vrb2_dequeue_mldts(struct rte_bbdev_queue_data *q_data,
 
 	q->aq_dequeued += aq_dequeued;
 	q->sw_ring_tail += dequeued_cbs;
-	/* Update enqueue stats. */
-	q_data->queue_stats.dequeued_count += i;
+
+	acc_update_qstat_dequeue(q_data, i);
+
 	return i;
 }
 
@@ -4291,7 +4375,8 @@ vrb_bbdev_init(struct rte_bbdev *dev, struct rte_pci_driver *drv)
 			d->reg_addr = &vrb1_pf_reg_addr;
 		else
 			d->reg_addr = &vrb1_vf_reg_addr;
-	} else {
+	} else if ((pci_dev->id.device_id == RTE_VRB2_PF_DEVICE_ID) ||
+			(pci_dev->id.device_id == RTE_VRB2_VF_DEVICE_ID)) {
 		d->device_variant = VRB2_VARIANT;
 		d->queue_offset = vrb2_queue_offset;
 		d->num_qgroups = VRB2_NUM_QGRPS;
@@ -4650,7 +4735,7 @@ vrb1_configure(const char *dev_name, struct rte_acc_conf *conf)
 	}
 
 	if (aram_address > VRB1_WORDS_IN_ARAM_SIZE) {
-		rte_bbdev_log(ERR, "ARAM Configuration not fitting %d %d\n",
+		rte_bbdev_log(ERR, "ARAM Configuration not fitting %d %d",
 				aram_address, VRB1_WORDS_IN_ARAM_SIZE);
 		return -EINVAL;
 	}
@@ -5020,7 +5105,7 @@ vrb2_configure(const char *dev_name, struct rte_acc_conf *conf)
 			}
 		}
 		if (aram_address > VRB2_WORDS_IN_ARAM_SIZE) {
-			rte_bbdev_log(ERR, "ARAM Configuration not fitting %d %d\n",
+			rte_bbdev_log(ERR, "ARAM Configuration not fitting %d %d",
 					aram_address, VRB2_WORDS_IN_ARAM_SIZE);
 			return -EINVAL;
 		}

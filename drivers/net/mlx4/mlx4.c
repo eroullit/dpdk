@@ -106,7 +106,7 @@ mlx4_init_shared_data(void)
 						 sizeof(*mlx4_shared_data),
 						 SOCKET_ID_ANY, 0);
 			if (mz == NULL) {
-				ERROR("Cannot allocate mlx4 shared data\n");
+				ERROR("Cannot allocate mlx4 shared data");
 				ret = -rte_errno;
 				goto error;
 			}
@@ -117,7 +117,7 @@ mlx4_init_shared_data(void)
 			/* Lookup allocated shared memory. */
 			mz = rte_memzone_lookup(MZ_MLX4_PMD_SHARED_DATA);
 			if (mz == NULL) {
-				ERROR("Cannot attach mlx4 shared data\n");
+				ERROR("Cannot attach mlx4 shared data");
 				ret = -rte_errno;
 				goto error;
 			}
@@ -1058,7 +1058,7 @@ err_secondary:
 		priv->intr_handle =
 			rte_intr_instance_alloc(RTE_INTR_INSTANCE_F_SHARED);
 		if (priv->intr_handle == NULL) {
-			RTE_LOG(ERR, EAL, "Fail to allocate intr_handle\n");
+			ERROR("can not allocate intr_handle");
 			goto port_error;
 		}
 

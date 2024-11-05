@@ -5,6 +5,7 @@
 #include "cnxk_cryptodev_ops.h"
 #include "cnxk_ethdev.h"
 #include "cnxk_eventdev.h"
+#include "cnxk_dmadev.h"
 
 void
 cnxk_sso_updt_xae_cnt(struct cnxk_sso_evdev *dev, void *data,
@@ -212,7 +213,7 @@ static void
 cnxk_sso_tstamp_cfg(uint16_t port_id, struct cnxk_eth_dev *cnxk_eth_dev,
 		    struct cnxk_sso_evdev *dev)
 {
-	if (cnxk_eth_dev->rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP)
+	if (cnxk_eth_dev->rx_offloads & RTE_ETH_RX_OFFLOAD_TIMESTAMP || cnxk_eth_dev->ptp_en)
 		dev->tstamp[port_id] = &cnxk_eth_dev->tstamp;
 }
 
@@ -631,7 +632,7 @@ crypto_adapter_qp_setup(const struct rte_cryptodev *cdev, struct cnxk_cpt_qp *qp
 	 * simultaneous enqueue from all available cores.
 	 */
 	if (roc_model_is_cn10k())
-		nb_desc_min = rte_lcore_count() * 32;
+		nb_desc_min = rte_lcore_count() * CN10K_CPT_PKTS_PER_LOOP;
 	else
 		nb_desc_min = rte_lcore_count() * 2;
 
@@ -706,7 +707,7 @@ crypto_adapter_qp_free(struct cnxk_cpt_qp *qp)
 	rte_mempool_free(qp->ca.req_mp);
 	qp->ca.enabled = false;
 
-	ret = roc_cpt_lmtline_init(qp->lf.roc_cpt, &qp->lmtline, qp->lf.lf_id);
+	ret = roc_cpt_lmtline_init(qp->lf.roc_cpt, &qp->lmtline, qp->lf.lf_id, true);
 	if (ret < 0) {
 		plt_err("Could not reset lmtline for queue pair %d", qp->lf.lf_id);
 		return ret;
@@ -733,6 +734,69 @@ cnxk_crypto_adapter_qp_del(const struct rte_cryptodev *cdev,
 		qp = cdev->data->queue_pairs[queue_pair_id];
 		if (qp->ca.enabled)
 			crypto_adapter_qp_free(qp);
+	}
+
+	return 0;
+}
+
+int
+cnxk_dma_adapter_vchan_add(const struct rte_eventdev *event_dev,
+			   const int16_t dma_dev_id, uint16_t vchan_id)
+{
+	struct cnxk_sso_evdev *sso_evdev = cnxk_sso_pmd_priv(event_dev);
+	uint32_t adptr_xae_cnt = 0;
+	struct cnxk_dpi_vf_s *dpivf;
+	struct cnxk_dpi_conf *vchan;
+
+	dpivf = rte_dma_fp_objs[dma_dev_id].dev_private;
+	if ((int16_t)vchan_id == -1) {
+		uint16_t vchan_id;
+
+		for (vchan_id = 0; vchan_id < dpivf->num_vchans; vchan_id++) {
+			vchan = &dpivf->conf[vchan_id];
+			vchan->adapter_enabled = true;
+			adptr_xae_cnt += vchan->c_desc.max_cnt;
+		}
+	} else {
+		vchan = &dpivf->conf[vchan_id];
+		vchan->adapter_enabled = true;
+		adptr_xae_cnt = vchan->c_desc.max_cnt;
+	}
+
+	/* Update dma adapter XAE count */
+	sso_evdev->adptr_xae_cnt += adptr_xae_cnt;
+	cnxk_sso_xae_reconfigure((struct rte_eventdev *)(uintptr_t)event_dev);
+
+	return 0;
+}
+
+static int
+dma_adapter_vchan_free(struct cnxk_dpi_conf *vchan)
+{
+	vchan->adapter_enabled = false;
+
+	return 0;
+}
+
+int
+cnxk_dma_adapter_vchan_del(const int16_t dma_dev_id, uint16_t vchan_id)
+{
+	struct cnxk_dpi_vf_s *dpivf;
+	struct cnxk_dpi_conf *vchan;
+
+	dpivf = rte_dma_fp_objs[dma_dev_id].dev_private;
+	if ((int16_t)vchan_id == -1) {
+		uint16_t vchan_id;
+
+		for (vchan_id = 0; vchan_id < dpivf->num_vchans; vchan_id++) {
+			vchan = &dpivf->conf[vchan_id];
+			if (vchan->adapter_enabled)
+				dma_adapter_vchan_free(vchan);
+		}
+	} else {
+		vchan = &dpivf->conf[vchan_id];
+		if (vchan->adapter_enabled)
+			dma_adapter_vchan_free(vchan);
 	}
 
 	return 0;

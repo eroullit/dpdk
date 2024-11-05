@@ -204,8 +204,9 @@ qat_sym_crypto_cap_get_gen3(struct qat_cryptodev_private *internals,
 	uint32_t legacy_size = sizeof(qat_sym_crypto_legacy_caps_gen3);
 	capa_num = size/sizeof(struct rte_cryptodev_capabilities);
 	legacy_capa_num = legacy_size/sizeof(struct rte_cryptodev_capabilities);
+	struct rte_cryptodev_capabilities *cap;
 
-	if (unlikely(qat_legacy_capa))
+	if (unlikely(internals->qat_dev->options.legacy_alg))
 		size = size + legacy_size;
 
 	internals->capa_mz = rte_memzone_lookup(capa_memz_name);
@@ -224,7 +225,7 @@ qat_sym_crypto_cap_get_gen3(struct qat_cryptodev_private *internals,
 				internals->capa_mz->addr;
 	struct rte_cryptodev_capabilities *capabilities;
 
-	if (unlikely(qat_legacy_capa)) {
+	if (unlikely(internals->qat_dev->options.legacy_alg)) {
 		capabilities = qat_sym_crypto_legacy_caps_gen3;
 		capa_num += legacy_capa_num;
 	} else {
@@ -232,7 +233,8 @@ qat_sym_crypto_cap_get_gen3(struct qat_cryptodev_private *internals,
 	}
 
 	for (i = 0; i < capa_num; i++, iter++) {
-		if (unlikely(qat_legacy_capa) && (i == legacy_capa_num)) {
+		if (unlikely(internals->qat_dev->options.legacy_alg) &&
+				(i == legacy_capa_num)) {
 			capabilities = qat_sym_crypto_caps_gen3;
 			addr += curr_capa;
 			curr_capa = 0;
@@ -255,8 +257,49 @@ qat_sym_crypto_cap_get_gen3(struct qat_cryptodev_private *internals,
 				RTE_CRYPTO_AUTH_SM3_HMAC))) {
 			continue;
 		}
+
+		if (slice_map & ICP_ACCEL_MASK_ZUC_256_SLICE && (
+			check_auth_capa(&capabilities[iter],
+				RTE_CRYPTO_AUTH_ZUC_EIA3) ||
+			check_cipher_capa(&capabilities[iter],
+				RTE_CRYPTO_CIPHER_ZUC_EEA3))) {
+			continue;
+		}
+
+		if (internals->qat_dev->options.has_wireless_slice && (
+			check_auth_capa(&capabilities[iter],
+				RTE_CRYPTO_AUTH_KASUMI_F9) ||
+			check_cipher_capa(&capabilities[iter],
+				RTE_CRYPTO_CIPHER_KASUMI_F8) ||
+			check_cipher_capa(&capabilities[iter],
+				RTE_CRYPTO_CIPHER_DES_CBC) ||
+			check_cipher_capa(&capabilities[iter],
+				RTE_CRYPTO_CIPHER_DES_DOCSISBPI)))
+			continue;
+
 		memcpy(addr + curr_capa, capabilities + iter,
 			sizeof(struct rte_cryptodev_capabilities));
+
+		if (internals->qat_dev->options.has_wireless_slice && (
+			check_auth_capa(&capabilities[iter],
+				RTE_CRYPTO_AUTH_ZUC_EIA3))) {
+			cap = addr + curr_capa;
+			cap->sym.auth.key_size.max = 32;
+			cap->sym.auth.key_size.increment = 16;
+			cap->sym.auth.iv_size.max = 25;
+			cap->sym.auth.iv_size.increment = 1;
+			cap->sym.auth.digest_size.max = 16;
+			cap->sym.auth.digest_size.increment = 4;
+		}
+		if (internals->qat_dev->options.has_wireless_slice && (
+			check_cipher_capa(&capabilities[iter],
+				RTE_CRYPTO_CIPHER_ZUC_EEA3))) {
+			cap = addr + curr_capa;
+			cap->sym.cipher.key_size.max = 32;
+			cap->sym.cipher.key_size.increment = 16;
+			cap->sym.cipher.iv_size.max = 25;
+			cap->sym.cipher.iv_size.increment = 1;
+		}
 		curr_capa++;
 	}
 	internals->qat_dev_capabilities = internals->capa_mz->addr;
@@ -469,11 +512,14 @@ qat_sym_build_op_auth_gen3(void *in_op, struct qat_sym_session *ctx,
 }
 
 static int
-qat_sym_crypto_set_session_gen3(void *cdev __rte_unused, void *session)
+qat_sym_crypto_set_session_gen3(void *cdev, void *session)
 {
 	struct qat_sym_session *ctx = session;
 	enum rte_proc_type_t proc_type = rte_eal_process_type();
 	int ret;
+	struct qat_cryptodev_private *internals;
+
+	internals = ((struct rte_cryptodev *)cdev)->data->dev_private;
 
 	if (proc_type == RTE_PROC_AUTO || proc_type == RTE_PROC_INVALID)
 		return -EINVAL;
@@ -506,6 +552,22 @@ qat_sym_crypto_set_session_gen3(void *cdev __rte_unused, void *session)
 				ctx->qat_cipher_alg ==
 				ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3)) {
 			qat_sym_session_set_ext_hash_flags_gen2(ctx, 0);
+		} else if ((internals->qat_dev->options.has_wireless_slice) &&
+				((ctx->aes_cmac ||
+				ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_NULL) &&
+				(ctx->qat_cipher_alg ==
+				ICP_QAT_HW_CIPHER_ALGO_SNOW_3G_UEA2 ||
+				ctx->qat_cipher_alg ==
+				ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3 ||
+				ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_ZUC_256))) {
+			qat_sym_session_set_ext_hash_flags_gen2(ctx, 0);
+		} else if ((internals->qat_dev->options.has_wireless_slice) &&
+			(ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_32 ||
+				ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_64 ||
+				ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_128) &&
+				ctx->qat_cipher_alg != ICP_QAT_HW_CIPHER_ALGO_ZUC_256) {
+			qat_sym_session_set_ext_hash_flags_gen2(ctx,
+					1 << ICP_QAT_FW_AUTH_HDR_FLAG_ZUC_EIA3_BITPOS);
 		}
 
 		ret = 0;

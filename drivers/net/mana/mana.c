@@ -94,6 +94,9 @@ mana_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
+	priv->vlan_strip = !!(dev_conf->rxmode.offloads &
+			      RTE_ETH_RX_OFFLOAD_VLAN_STRIP);
+
 	priv->num_queues = dev->data->nb_rx_queues;
 
 	manadv_set_context_attr(priv->ib_ctx, MANADV_CTX_ATTR_BUF_ALLOCATORS,
@@ -296,8 +299,8 @@ mana_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->min_rx_bufsize = MIN_RX_BUF_SIZE;
 	dev_info->max_rx_pktlen = MANA_MAX_MTU + RTE_ETHER_HDR_LEN;
 
-	dev_info->max_rx_queues = priv->max_rx_queues;
-	dev_info->max_tx_queues = priv->max_tx_queues;
+	dev_info->max_rx_queues = RTE_MIN(priv->max_rx_queues, UINT16_MAX);
+	dev_info->max_tx_queues = RTE_MIN(priv->max_tx_queues, UINT16_MAX);
 
 	dev_info->max_mac_addrs = MANA_MAX_MAC_ADDR;
 	dev_info->max_hash_mac_addrs = 0;
@@ -338,16 +341,20 @@ mana_dev_info_get(struct rte_eth_dev *dev,
 
 	/* Buffer limits */
 	dev_info->rx_desc_lim.nb_min = MIN_BUFFERS_PER_QUEUE;
-	dev_info->rx_desc_lim.nb_max = priv->max_rx_desc;
+	dev_info->rx_desc_lim.nb_max = RTE_MIN(priv->max_rx_desc, UINT16_MAX);
 	dev_info->rx_desc_lim.nb_align = MIN_BUFFERS_PER_QUEUE;
-	dev_info->rx_desc_lim.nb_seg_max = priv->max_recv_sge;
-	dev_info->rx_desc_lim.nb_mtu_seg_max = priv->max_recv_sge;
+	dev_info->rx_desc_lim.nb_seg_max =
+		RTE_MIN(priv->max_recv_sge, UINT16_MAX);
+	dev_info->rx_desc_lim.nb_mtu_seg_max =
+		RTE_MIN(priv->max_recv_sge, UINT16_MAX);
 
 	dev_info->tx_desc_lim.nb_min = MIN_BUFFERS_PER_QUEUE;
-	dev_info->tx_desc_lim.nb_max = priv->max_tx_desc;
+	dev_info->tx_desc_lim.nb_max = RTE_MIN(priv->max_tx_desc, UINT16_MAX);
 	dev_info->tx_desc_lim.nb_align = MIN_BUFFERS_PER_QUEUE;
-	dev_info->tx_desc_lim.nb_seg_max = priv->max_send_sge;
-	dev_info->rx_desc_lim.nb_mtu_seg_max = priv->max_recv_sge;
+	dev_info->tx_desc_lim.nb_seg_max =
+		RTE_MIN(priv->max_send_sge, UINT16_MAX);
+	dev_info->tx_desc_lim.nb_mtu_seg_max =
+		RTE_MIN(priv->max_send_sge, UINT16_MAX);
 
 	/* Speed */
 	dev_info->speed_capa = RTE_ETH_LINK_SPEED_100G;
@@ -387,7 +394,8 @@ mana_dev_rx_queue_info(struct rte_eth_dev *dev, uint16_t queue_id,
 }
 
 static const uint32_t *
-mana_supported_ptypes(struct rte_eth_dev *dev __rte_unused)
+mana_supported_ptypes(struct rte_eth_dev *dev __rte_unused,
+		      size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		RTE_PTYPE_L2_ETHER,
@@ -396,9 +404,9 @@ mana_supported_ptypes(struct rte_eth_dev *dev __rte_unused)
 		RTE_PTYPE_L4_FRAG,
 		RTE_PTYPE_L4_TCP,
 		RTE_PTYPE_L4_UDP,
-		RTE_PTYPE_UNKNOWN
 	};
 
+	*no_of_elements = RTE_DIM(ptypes);
 	return ptypes;
 }
 
@@ -707,7 +715,7 @@ mana_dev_stats_reset(struct rte_eth_dev *dev __rte_unused)
 static int
 mana_get_ifname(const struct mana_priv *priv, char (*ifname)[IF_NAMESIZE])
 {
-	int ret;
+	int ret = -ENODEV;
 	DIR *dir;
 	struct dirent *dent;
 
@@ -1308,8 +1316,8 @@ mana_probe_port(struct ibv_device *ibdev, struct ibv_device_attr_ex *dev_attr,
 		/* fd is no not used after mapping doorbell */
 		close(fd);
 
-		eth_dev->tx_pkt_burst = mana_tx_burst_removed;
-		eth_dev->rx_pkt_burst = mana_rx_burst_removed;
+		eth_dev->tx_pkt_burst = mana_tx_burst;
+		eth_dev->rx_pkt_burst = mana_rx_burst;
 
 		rte_spinlock_lock(&mana_shared_data->lock);
 		mana_shared_data->secondary_cnt++;
@@ -1385,9 +1393,9 @@ mana_probe_port(struct ibv_device *ibdev, struct ibv_device_attr_ex *dev_attr,
 	priv->max_mr = dev_attr->orig_attr.max_mr;
 	priv->max_mr_size = dev_attr->orig_attr.max_mr_size;
 
-	DRV_LOG(INFO, "dev %s max queues %d desc %d sge %d",
+	DRV_LOG(INFO, "dev %s max queues %d desc %d sge %d mr %" PRIu64,
 		name, priv->max_rx_queues, priv->max_rx_desc,
-		priv->max_send_sge);
+		priv->max_send_sge, priv->max_mr_size);
 
 	rte_eth_copy_pci_info(eth_dev, pci_dev);
 

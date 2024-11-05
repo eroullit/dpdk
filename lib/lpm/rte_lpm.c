@@ -85,7 +85,7 @@ struct __rte_lpm {
  * depth  (IN)		: range = 1 - 32
  * mask   (OUT)		: 32bit mask
  */
-static uint32_t __attribute__((pure))
+static uint32_t __rte_pure
 depth_to_mask(uint8_t depth)
 {
 	VERIFY_DEPTH(depth);
@@ -99,7 +99,7 @@ depth_to_mask(uint8_t depth)
 /*
  * Converts given depth value to its corresponding range value.
  */
-static uint32_t __attribute__((pure))
+static uint32_t __rte_pure
 depth_to_range(uint8_t depth)
 {
 	VERIFY_DEPTH(depth);
@@ -1116,7 +1116,7 @@ delete_depth_big(struct __rte_lpm *i_lpm, uint32_t ip_masked,
 		 * Prevent the free of the tbl8 group from hoisting.
 		 */
 		i_lpm->lpm.tbl24[tbl24_index].valid = 0;
-		__atomic_thread_fence(__ATOMIC_RELEASE);
+		rte_atomic_thread_fence(rte_memory_order_release);
 		status = tbl8_free(i_lpm, tbl8_group_start);
 	} else if (tbl8_recycle_index > -1) {
 		/* Update tbl24 entry. */
@@ -1132,7 +1132,7 @@ delete_depth_big(struct __rte_lpm *i_lpm, uint32_t ip_masked,
 		 */
 		__atomic_store(&i_lpm->lpm.tbl24[tbl24_index], &new_tbl24_entry,
 				__ATOMIC_RELAXED);
-		__atomic_thread_fence(__ATOMIC_RELEASE);
+		rte_atomic_thread_fence(rte_memory_order_release);
 		status = tbl8_free(i_lpm, tbl8_group_start);
 	}
 #undef group_idx

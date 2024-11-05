@@ -117,7 +117,10 @@ qat_auth_is_len_in_bits(struct qat_sym_session *ctx,
 {
 	if (ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_SNOW_3G_UIA2 ||
 		ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_KASUMI_F9 ||
-		ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3) {
+		ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3 ||
+		ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_32 ||
+		ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_64 ||
+		ctx->qat_hash_alg == ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_128) {
 		if (unlikely((op->sym->auth.data.offset % BYTE_LENGTH != 0) ||
 				(op->sym->auth.data.length % BYTE_LENGTH != 0)))
 			return -EINVAL;
@@ -132,7 +135,8 @@ qat_cipher_is_len_in_bits(struct qat_sym_session *ctx,
 {
 	if (ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_SNOW_3G_UEA2 ||
 		ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_KASUMI ||
-		ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3) {
+		ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_ZUC_3G_128_EEA3 ||
+		ctx->qat_cipher_alg == ICP_QAT_HW_CIPHER_ALGO_ZUC_256)  {
 		if (unlikely((op->sym->cipher.data.length % BYTE_LENGTH != 0) ||
 			((op->sym->cipher.data.offset %
 			BYTE_LENGTH) != 0)))
@@ -395,7 +399,7 @@ qat_sym_convert_op_to_vec_chain(struct rte_crypto_op *op,
 		struct qat_sym_op_cookie *cookie)
 {
 	union rte_crypto_sym_ofs ofs;
-	uint32_t max_len = 0;
+	uint32_t max_len = 0, oop_offset = 0;
 	uint32_t cipher_len = 0, cipher_ofs = 0;
 	uint32_t auth_len = 0, auth_ofs = 0;
 	int is_oop = (op->sym->m_dst != NULL) &&
@@ -469,6 +473,16 @@ qat_sym_convert_op_to_vec_chain(struct rte_crypto_op *op,
 
 	max_len = RTE_MAX(cipher_ofs + cipher_len, auth_ofs + auth_len);
 
+	/* If OOP, we need to keep in mind that offset needs to start where
+	 * cipher/auth starts, namely no offset on the smaller one
+	 */
+	if (is_oop) {
+		oop_offset = RTE_MIN(auth_ofs, cipher_ofs);
+		auth_ofs -= oop_offset;
+		cipher_ofs -= oop_offset;
+		max_len -= oop_offset;
+	}
+
 	/* digest in buffer check. Needed only for wireless algos
 	 * or combined cipher-crc operations
 	 */
@@ -509,9 +523,7 @@ qat_sym_convert_op_to_vec_chain(struct rte_crypto_op *op,
 			max_len = RTE_MAX(max_len, auth_ofs + auth_len +
 					ctx->digest_length);
 	}
-
-	/* Passing 0 as cipher & auth offsets are assigned into ofs later */
-	n_src = rte_crypto_mbuf_to_vec(op->sym->m_src, 0, max_len,
+	n_src = rte_crypto_mbuf_to_vec(op->sym->m_src, oop_offset, max_len,
 			in_sgl->vec, QAT_SYM_SGL_MAX_NUMBER);
 	if (unlikely(n_src < 0 || n_src > op->sym->m_src->nb_segs)) {
 		op->status = RTE_CRYPTO_OP_STATUS_ERROR;
@@ -521,7 +533,7 @@ qat_sym_convert_op_to_vec_chain(struct rte_crypto_op *op,
 
 	if (unlikely((op->sym->m_dst != NULL) &&
 			(op->sym->m_dst != op->sym->m_src))) {
-		int n_dst = rte_crypto_mbuf_to_vec(op->sym->m_dst, 0,
+		int n_dst = rte_crypto_mbuf_to_vec(op->sym->m_dst, oop_offset,
 				max_len, out_sgl->vec, QAT_SYM_SGL_MAX_NUMBER);
 
 		if (n_dst < 0 || n_dst > op->sym->m_dst->nb_segs) {
@@ -587,6 +599,26 @@ qat_sym_convert_op_to_vec_aead(struct rte_crypto_op *op,
 		out_sgl->num = 0;
 
 	return 0;
+}
+
+static inline void
+zuc256_modify_iv(uint8_t *iv)
+{
+	uint8_t iv_tmp[8];
+
+	iv_tmp[0] = iv[16];
+	/* pack the last 8 bytes of IV to 6 bytes.
+	 * discard the 2 MSB bits of each byte
+	 */
+	iv_tmp[1] = (((iv[17] & 0x3f) << 2) | ((iv[18] >> 4) & 0x3));
+	iv_tmp[2] = (((iv[18] & 0xf) << 4) | ((iv[19] >> 2) & 0xf));
+	iv_tmp[3] = (((iv[19] & 0x3) << 6) | (iv[20] & 0x3f));
+
+	iv_tmp[4] = (((iv[21] & 0x3f) << 2) | ((iv[22] >> 4) & 0x3));
+	iv_tmp[5] = (((iv[22] & 0xf) << 4) | ((iv[23] >> 2) & 0xf));
+	iv_tmp[6] = (((iv[23] & 0x3) << 6) | (iv[24] & 0x3f));
+
+	memcpy(iv + 16, iv_tmp, 8);
 }
 
 static __rte_always_inline void
@@ -665,6 +697,9 @@ enqueue_one_auth_job_gen1(struct qat_sym_session *ctx,
 	case ICP_QAT_HW_AUTH_ALGO_SNOW_3G_UIA2:
 	case ICP_QAT_HW_AUTH_ALGO_KASUMI_F9:
 	case ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3:
+	case ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_32:
+	case ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_64:
+	case ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_128:
 		auth_param->u1.aad_adr = auth_iv->iova;
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_GALOIS_128:
@@ -747,6 +782,9 @@ enqueue_one_chain_job_gen1(struct qat_sym_session *ctx,
 	case ICP_QAT_HW_AUTH_ALGO_SNOW_3G_UIA2:
 	case ICP_QAT_HW_AUTH_ALGO_KASUMI_F9:
 	case ICP_QAT_HW_AUTH_ALGO_ZUC_3G_128_EIA3:
+	case ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_32:
+	case ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_64:
+	case ICP_QAT_HW_AUTH_ALGO_ZUC_256_MAC_128:
 		auth_param->u1.aad_adr = auth_iv->iova;
 		break;
 	case ICP_QAT_HW_AUTH_ALGO_GALOIS_128:
@@ -895,10 +933,12 @@ enqueue_one_aead_job_gen1(struct qat_sym_session *ctx,
 		*(uint8_t *)&cipher_param->u.cipher_IV_array[0] =
 			q - ICP_QAT_HW_CCM_NONCE_OFFSET;
 
-		rte_memcpy((uint8_t *)aad->va +
-				ICP_QAT_HW_CCM_NONCE_OFFSET,
-			(uint8_t *)iv->va + ICP_QAT_HW_CCM_NONCE_OFFSET,
-			ctx->cipher_iv.length);
+		if (ctx->aad_len > 0) {
+			rte_memcpy((uint8_t *)aad->va +
+					ICP_QAT_HW_CCM_NONCE_OFFSET,
+				(uint8_t *)iv->va + ICP_QAT_HW_CCM_NONCE_OFFSET,
+				ctx->cipher_iv.length);
+		}
 		break;
 	default:
 		break;
@@ -1009,6 +1049,12 @@ int
 qat_sym_dp_dequeue_done_gen1(void *qp_data, uint8_t *drv_ctx, uint32_t n);
 
 int
+qat_sym_dp_enqueue_done_gen4(void *qp_data, uint8_t *drv_ctx, uint32_t n);
+
+int
+qat_sym_dp_dequeue_done_gen4(void *qp_data, uint8_t *drv_ctx, uint32_t n);
+
+int
 qat_sym_configure_raw_dp_ctx_gen1(void *_raw_dp_ctx, void *_ctx);
 
 /* -----------------GENx control path APIs ---------------- */
@@ -1018,9 +1064,15 @@ qat_sym_crypto_feature_flags_get_gen1(struct qat_pci_device *qat_dev);
 int
 qat_sym_crypto_set_session_gen1(void *cryptodev, void *session);
 
+int
+qat_sym_crypto_set_session_gen4(void *cryptodev, void *session);
+
 void
 qat_sym_session_set_ext_hash_flags_gen2(struct qat_sym_session *session,
 		uint8_t hash_flag);
+
+int
+qat_sym_configure_raw_dp_ctx_gen4(void *_raw_dp_ctx, void *_ctx);
 
 int
 qat_asym_crypto_cap_get_gen1(struct qat_cryptodev_private *internals,

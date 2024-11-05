@@ -74,10 +74,10 @@ Configuration Parameters
   Currently supported types are ``DMA_MEM_COPY`` and ``CPU_MEM_COPY``.
 
 ``mem_size``
-  The size of the memory footprint.
+  The size of the memory footprint in megabytes (MB) for source and destination.
 
 ``buf_size``
-  The memory size of a single operation.
+  The memory size of a single operation in bytes (B).
 
 ``dma_ring_size``
   The DMA ring buffer size. Must be a power of two, and between ``64`` and ``4096``.
@@ -119,7 +119,7 @@ Typical command-line invocation to execute the application:
 
 .. code-block:: console
 
-   dpdk-test-dma-perf --config=./config_dma.ini --result=./res_dma.csv
+   dpdk-test-dma-perf --config ./config_dma.ini --result ./res_dma.csv
 
 Where ``config_dma.ini`` is the configuration file,
 and ``res_dma.csv`` will be the generated result file.

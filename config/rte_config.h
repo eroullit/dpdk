@@ -14,6 +14,17 @@
 
 #include <rte_build_config.h>
 
+#if defined(__clang__)
+#define RTE_TOOLCHAIN "clang"
+#define RTE_TOOLCHAIN_CLANG 1
+#elif defined(__GNUC__)
+#define RTE_TOOLCHAIN "gcc"
+#define RTE_TOOLCHAIN_GCC 1
+#elif defined(_MSC_VER)
+#define RTE_TOOLCHAIN "msvc"
+#define RTE_TOOLCHAIN_MSVC 1
+#endif
+
 /* legacy defines */
 #ifdef RTE_EXEC_ENV_LINUX
 #define RTE_EXEC_ENV_LINUXAPP 1
@@ -38,6 +49,7 @@
 #define RTE_MAX_TAILQ 32
 #define RTE_LOG_DP_LEVEL RTE_LOG_INFO
 #define RTE_MAX_VFIO_CONTAINERS 64
+#define RTE_TRACE 1
 
 /* bsd module defines */
 #define RTE_CONTIGMEM_MAX_NUM_BUFS 64
@@ -51,7 +63,6 @@
 
 /* mbuf defines */
 #define RTE_MBUF_DEFAULT_MEMPOOL_OPS "ring_mp_mc"
-#define RTE_PKTMBUF_HEADROOM 128
 
 /* ether defines */
 #define RTE_MAX_QUEUES_PER_PORT 1024

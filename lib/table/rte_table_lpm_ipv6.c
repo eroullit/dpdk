@@ -2,8 +2,9 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
-#include <string.h>
+#include <stdalign.h>
 #include <stdio.h>
+#include <string.h>
 
 #include <rte_common.h>
 #include <rte_malloc.h>
@@ -44,7 +45,7 @@ struct rte_table_lpm_ipv6 {
 
 	/* Next Hop Table (NHT) */
 	uint32_t nht_users[RTE_TABLE_LPM_MAX_NEXT_HOPS];
-	uint8_t nht[0] __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) uint8_t nht[];
 };
 
 static void *
@@ -206,7 +207,7 @@ rte_table_lpm_ipv6_entry_add(
 	}
 
 	/* Check if rule is already present in the table */
-	status = rte_lpm6_is_rule_present(lpm->lpm, ip_prefix->ip,
+	status = rte_lpm6_is_rule_present(lpm->lpm, &ip_prefix->ip,
 		ip_prefix->depth, &nht_pos0);
 	nht_pos0_valid = status > 0;
 
@@ -224,7 +225,7 @@ rte_table_lpm_ipv6_entry_add(
 	}
 
 	/* Add rule to low level LPM table */
-	if (rte_lpm6_add(lpm->lpm, ip_prefix->ip, ip_prefix->depth,
+	if (rte_lpm6_add(lpm->lpm, &ip_prefix->ip, ip_prefix->depth,
 		nht_pos) < 0) {
 		TABLE_LOG(ERR, "%s: LPM IPv6 rule add failed", __func__);
 		return -1;
@@ -269,7 +270,7 @@ rte_table_lpm_ipv6_entry_delete(
 	}
 
 	/* Return if rule is not present in the table */
-	status = rte_lpm6_is_rule_present(lpm->lpm, ip_prefix->ip,
+	status = rte_lpm6_is_rule_present(lpm->lpm, &ip_prefix->ip,
 		ip_prefix->depth, &nht_pos);
 	if (status < 0) {
 		TABLE_LOG(ERR, "%s: LPM IPv6 algorithmic error",
@@ -282,7 +283,7 @@ rte_table_lpm_ipv6_entry_delete(
 	}
 
 	/* Delete rule from the low-level LPM table */
-	status = rte_lpm6_delete(lpm->lpm, ip_prefix->ip, ip_prefix->depth);
+	status = rte_lpm6_delete(lpm->lpm, &ip_prefix->ip, ip_prefix->depth);
 	if (status) {
 		TABLE_LOG(ERR, "%s: LPM IPv6 rule delete failed",
 			__func__);
@@ -322,11 +323,11 @@ rte_table_lpm_ipv6_lookup(
 
 		if (pkt_mask & pkts_mask) {
 			struct rte_mbuf *pkt = pkts[i];
-			uint8_t *ip = RTE_MBUF_METADATA_UINT8_PTR(pkt,
-				lpm->offset);
+			const struct rte_ipv6_addr *ip;
 			int status;
 			uint32_t nht_pos;
 
+			ip = (struct rte_ipv6_addr *)RTE_MBUF_METADATA_UINT8_PTR(pkt, lpm->offset);
 			status = rte_lpm6_lookup(lpm->lpm, ip, &nht_pos);
 			if (status == 0) {
 				pkts_out_mask |= pkt_mask;

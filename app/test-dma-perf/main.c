@@ -16,6 +16,8 @@
 #include <rte_cfgfile.h>
 #include <rte_string_fns.h>
 #include <rte_lcore.h>
+#include <rte_dmadev.h>
+#include <rte_kvargs.h>
 
 #include "main.h"
 
@@ -86,20 +88,35 @@ output_header(uint32_t case_id, struct test_configure *case_cfg)
 	output_csv(true);
 }
 
-static void
+static int
+open_output_csv(const char *rst_path_ptr)
+{
+	fd = fopen(rst_path_ptr, "a");
+	if (!fd) {
+		printf("Open output CSV file error.\n");
+		return 1;
+	}
+	output_csv(true);
+	fclose(fd);
+	return 0;
+}
+
+static int
 run_test_case(struct test_configure *case_cfg)
 {
+	int ret = 0;
+
 	switch (case_cfg->test_type) {
 	case TEST_TYPE_DMA_MEM_COPY:
-		mem_copy_benchmark(case_cfg, true);
-		break;
 	case TEST_TYPE_CPU_MEM_COPY:
-		mem_copy_benchmark(case_cfg, false);
+		ret = mem_copy_benchmark(case_cfg);
 		break;
 	default:
 		printf("Unknown test type. %s\n", case_cfg->test_type_str);
 		break;
 	}
+
+	return ret;
 }
 
 static void
@@ -144,8 +161,10 @@ run_test(uint32_t case_id, struct test_configure *case_cfg)
 		case_cfg->scenario_id++;
 		printf("\nRunning scenario %d\n", case_cfg->scenario_id);
 
-		run_test_case(case_cfg);
-		output_csv(false);
+		if (run_test_case(case_cfg) < 0)
+			printf("\nTest fails! skipping this scenario.\n");
+		else
+			output_csv(false);
 
 		if (var_entry->op == OP_ADD)
 			var_entry->cur += var_entry->incr;
@@ -206,6 +225,8 @@ parse_lcore_dma(struct test_configure *test_case, const char *value)
 		return -1;
 
 	input = strndup(value, strlen(value) + 1);
+	if (input == NULL)
+		return -1;
 	addrs = input;
 
 	while (*addrs == '\0')
@@ -310,6 +331,28 @@ out:
 	return args_nr;
 }
 
+static int populate_pcie_config(const char *key, const char *value, void *test)
+{
+	struct test_configure *test_case = (struct test_configure *)test;
+	char *endptr;
+	int ret = 0;
+
+	if (strcmp(key, "raddr") == 0)
+		test_case->vchan_dev.raddr = strtoull(value, &endptr, 16);
+	else if (strcmp(key, "coreid") == 0)
+		test_case->vchan_dev.port.pcie.coreid = (uint8_t)atoi(value);
+	else if (strcmp(key, "vfid") == 0)
+		test_case->vchan_dev.port.pcie.vfid = (uint16_t)atoi(value);
+	else if (strcmp(key, "pfid") == 0)
+		test_case->vchan_dev.port.pcie.pfid = (uint16_t)atoi(value);
+	else {
+		printf("Invalid config param: %s\n", key);
+		ret = -1;
+	}
+
+	return ret;
+}
+
 static uint16_t
 load_configs(const char *path)
 {
@@ -318,8 +361,13 @@ load_configs(const char *path)
 	struct test_configure *test_case;
 	char section_name[CFG_NAME_LEN];
 	const char *case_type;
+	const char *transfer_dir;
 	const char *lcore_dma;
-	const char *mem_size_str, *buf_size_str, *ring_size_str, *kick_batch_str;
+	const char *mem_size_str, *buf_size_str, *ring_size_str, *kick_batch_str,
+		*src_sges_str, *dst_sges_str;
+	const char *skip;
+	struct rte_kvargs *kvlist;
+	const char *vchan_dev;
 	int args_nr, nb_vp;
 	bool is_dma;
 
@@ -339,6 +387,13 @@ load_configs(const char *path)
 	for (i = 0; i < nb_sections; i++) {
 		snprintf(section_name, CFG_NAME_LEN, "case%d", i + 1);
 		test_case = &test_cases[i];
+
+		skip = rte_cfgfile_get_entry(cfgfile, section_name, "skip");
+		if (skip && (atoi(skip) == 1)) {
+			test_case->is_skip = true;
+			continue;
+		}
+
 		case_type = rte_cfgfile_get_entry(cfgfile, section_name, "type");
 		if (case_type == NULL) {
 			printf("Error: No case type in case %d, the test will be finished here.\n",
@@ -350,6 +405,22 @@ load_configs(const char *path)
 		if (strcmp(case_type, DMA_MEM_COPY) == 0) {
 			test_case->test_type = TEST_TYPE_DMA_MEM_COPY;
 			test_case->test_type_str = DMA_MEM_COPY;
+
+			transfer_dir = rte_cfgfile_get_entry(cfgfile, section_name, "direction");
+			if (transfer_dir == NULL) {
+				printf("Transfer direction not configured."
+					" Defaulting it to MEM to MEM transfer.\n");
+				test_case->transfer_dir = RTE_DMA_DIR_MEM_TO_MEM;
+			} else {
+				if (strcmp(transfer_dir, "mem2dev") == 0)
+					test_case->transfer_dir = RTE_DMA_DIR_MEM_TO_DEV;
+				else if (strcmp(transfer_dir, "dev2mem") == 0)
+					test_case->transfer_dir = RTE_DMA_DIR_DEV_TO_MEM;
+				else {
+					printf("Defaulting the test to MEM to MEM transfer\n");
+					test_case->transfer_dir = RTE_DMA_DIR_MEM_TO_MEM;
+				}
+			}
 			is_dma = true;
 		} else if (strcmp(case_type, CPU_MEM_COPY) == 0) {
 			test_case->test_type = TEST_TYPE_CPU_MEM_COPY;
@@ -361,6 +432,41 @@ load_configs(const char *path)
 			continue;
 		}
 
+		if (test_case->transfer_dir == RTE_DMA_DIR_MEM_TO_DEV ||
+			test_case->transfer_dir == RTE_DMA_DIR_DEV_TO_MEM) {
+			vchan_dev = rte_cfgfile_get_entry(cfgfile, section_name, "vchan_dev");
+			if (vchan_dev == NULL) {
+				printf("Transfer direction mem2dev and dev2mem"
+				       " vhcan_dev shall be configured.\n");
+				test_case->is_valid = false;
+				continue;
+			}
+
+			kvlist = rte_kvargs_parse(vchan_dev, NULL);
+			if (kvlist == NULL) {
+				printf("rte_kvargs_parse() error");
+				test_case->is_valid = false;
+				continue;
+			}
+
+			if (rte_kvargs_process(kvlist, NULL, populate_pcie_config,
+					       (void *)test_case) < 0) {
+				printf("rte_kvargs_process() error\n");
+				rte_kvargs_free(kvlist);
+				test_case->is_valid = false;
+				continue;
+			}
+
+			if (!test_case->vchan_dev.raddr) {
+				printf("For mem2dev and dev2mem configure raddr\n");
+				rte_kvargs_free(kvlist);
+				test_case->is_valid = false;
+				continue;
+			}
+			rte_kvargs_free(kvlist);
+		}
+
+		test_case->is_dma = is_dma;
 		test_case->src_numa_node = (int)atoi(rte_cfgfile_get_entry(cfgfile,
 								section_name, "src_numa_node"));
 		test_case->dst_numa_node = (int)atoi(rte_cfgfile_get_entry(cfgfile,
@@ -394,6 +500,39 @@ load_configs(const char *path)
 				continue;
 			} else if (args_nr == 4)
 				nb_vp++;
+
+			src_sges_str = rte_cfgfile_get_entry(cfgfile, section_name,
+								"dma_src_sge");
+			if (src_sges_str != NULL) {
+				test_case->nb_src_sges = (int)atoi(rte_cfgfile_get_entry(cfgfile,
+								section_name, "dma_src_sge"));
+			}
+
+			dst_sges_str = rte_cfgfile_get_entry(cfgfile, section_name,
+								"dma_dst_sge");
+			if (dst_sges_str != NULL) {
+				test_case->nb_dst_sges = (int)atoi(rte_cfgfile_get_entry(cfgfile,
+								section_name, "dma_dst_sge"));
+			}
+
+			if ((src_sges_str != NULL && dst_sges_str == NULL) ||
+			    (src_sges_str == NULL && dst_sges_str != NULL)) {
+				printf("parse dma_src_sge, dma_dst_sge error in case %d.\n",
+					i + 1);
+				test_case->is_valid = false;
+				continue;
+			} else if (src_sges_str != NULL && dst_sges_str != NULL) {
+				test_case->is_sg = true;
+
+				if (test_case->nb_src_sges == 0 || test_case->nb_dst_sges == 0) {
+					printf("dma_src_sge and dma_dst_sge can not be 0 in case %d.\n",
+						i + 1);
+					test_case->is_valid = false;
+					continue;
+				}
+			} else {
+				test_case->is_sg = false;
+			}
 
 			kick_batch_str = rte_cfgfile_get_entry(cfgfile, section_name, "kick_batch");
 			args_nr = parse_entry(kick_batch_str, &test_case->kick_batch);
@@ -523,31 +662,20 @@ main(int argc, char *argv[])
 
 	printf("Running cases...\n");
 	for (i = 0; i < case_nb; i++) {
-		if (!test_cases[i].is_valid) {
-			printf("Invalid test case %d.\n\n", i + 1);
-			snprintf(output_str[0], MAX_OUTPUT_STR_LEN, "Invalid case %d\n", i + 1);
-
-			fd = fopen(rst_path_ptr, "a");
-			if (!fd) {
-				printf("Open output CSV file error.\n");
+		if (test_cases[i].is_skip) {
+			printf("Test case %d configured to be skipped.\n\n", i + 1);
+			snprintf(output_str[0], MAX_OUTPUT_STR_LEN, "Skip the test-case %d\n",
+				 i + 1);
+			if (open_output_csv(rst_path_ptr))
 				return 0;
-			}
-			output_csv(true);
-			fclose(fd);
 			continue;
 		}
 
-		if (test_cases[i].test_type == TEST_TYPE_NONE) {
-			printf("No valid test type in test case %d.\n\n", i + 1);
+		if (!test_cases[i].is_valid) {
+			printf("Invalid test case %d.\n\n", i + 1);
 			snprintf(output_str[0], MAX_OUTPUT_STR_LEN, "Invalid case %d\n", i + 1);
-
-			fd = fopen(rst_path_ptr, "a");
-			if (!fd) {
-				printf("Open output CSV file error.\n");
+			if (open_output_csv(rst_path_ptr))
 				return 0;
-			}
-			output_csv(true);
-			fclose(fd);
 			continue;
 		}
 

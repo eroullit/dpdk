@@ -123,6 +123,14 @@ mlx5_dev_configure(struct rte_eth_dev *dev)
 			dev->data->port_id, priv->txqs_n, txqs_n);
 		priv->txqs_n = txqs_n;
 	}
+	if (priv->ext_txqs && txqs_n >= MLX5_EXTERNAL_TX_QUEUE_ID_MIN) {
+		DRV_LOG(ERR, "port %u cannot handle this many Tx queues (%u), "
+			"the maximal number of internal Tx queues is %u",
+			dev->data->port_id, txqs_n,
+			MLX5_EXTERNAL_TX_QUEUE_ID_MIN - 1);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	if (rxqs_n > priv->sh->dev_cap.ind_table_max_size) {
 		DRV_LOG(ERR, "port %u cannot handle this many Rx queues (%u)",
 			dev->data->port_id, rxqs_n);
@@ -146,6 +154,12 @@ mlx5_dev_configure(struct rte_eth_dev *dev)
 	ret = mlx5_proc_priv_init(dev);
 	if (ret)
 		return ret;
+	ret = mlx5_dev_set_mtu(dev, dev->data->mtu);
+	if (ret) {
+		DRV_LOG(ERR, "port %u failed to set MTU to %u", dev->data->port_id,
+			dev->data->mtu);
+		return ret;
+	}
 	return 0;
 }
 
@@ -242,8 +256,8 @@ mlx5_set_default_params(struct rte_eth_dev *dev, struct rte_eth_dev_info *info)
 	info->default_txportconf.ring_size = 256;
 	info->default_rxportconf.burst_size = MLX5_RX_DEFAULT_BURST;
 	info->default_txportconf.burst_size = MLX5_TX_DEFAULT_BURST;
-	if ((priv->link_speed_capa & RTE_ETH_LINK_SPEED_200G) |
-		(priv->link_speed_capa & RTE_ETH_LINK_SPEED_100G)) {
+	if (priv->link_speed_capa >> rte_bsf32(RTE_ETH_LINK_SPEED_100G)) {
+		/* if supports at least 100G */
 		info->default_rxportconf.nb_queues = 16;
 		info->default_txportconf.nb_queues = 16;
 		if (dev->data->nb_rx_queues > 2 ||
@@ -579,7 +593,7 @@ mlx5_fw_version_get(struct rte_eth_dev *dev, char *fw_ver, size_t fw_size)
  *   A pointer to the supported Packet types array.
  */
 const uint32_t *
-mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev)
+mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev, size_t *no_of_elements)
 {
 	static const uint32_t ptypes[] = {
 		/* refers to rxq_cq_to_pkt_type() */
@@ -596,14 +610,15 @@ mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 		RTE_PTYPE_INNER_L4_FRAG,
 		RTE_PTYPE_INNER_L4_TCP,
 		RTE_PTYPE_INNER_L4_UDP,
-		RTE_PTYPE_UNKNOWN
 	};
 
 	if (dev->rx_pkt_burst == mlx5_rx_burst ||
 	    dev->rx_pkt_burst == mlx5_rx_burst_mprq ||
 	    dev->rx_pkt_burst == mlx5_rx_burst_vec ||
-	    dev->rx_pkt_burst == mlx5_rx_burst_mprq_vec)
+	    dev->rx_pkt_burst == mlx5_rx_burst_mprq_vec) {
+		*no_of_elements = RTE_DIM(ptypes);
 		return ptypes;
+	}
 	return NULL;
 }
 
@@ -779,5 +794,23 @@ mlx5_hairpin_cap_get(struct rte_eth_dev *dev, struct rte_eth_hairpin_cap *cap)
 	cap->rx_cap.rte_memory = 0;
 	cap->tx_cap.locked_device_memory = 0;
 	cap->tx_cap.rte_memory = hca_attr->hairpin_sq_wq_in_host_mem;
+	return 0;
+}
+
+/**
+ * Indicate to ethdev layer, what configuration must be restored.
+ *
+ * @param[in] dev
+ *   Pointer to Ethernet device structure.
+ * @param[in] op
+ *   Type of operation which might require.
+ * @param[out] flags
+ *   Restore flags will be stored here.
+ */
+uint64_t
+mlx5_get_restore_flags(__rte_unused struct rte_eth_dev *dev,
+		       __rte_unused enum rte_eth_dev_operation op)
+{
+	/* mlx5 PMD does not require any configuration restore. */
 	return 0;
 }

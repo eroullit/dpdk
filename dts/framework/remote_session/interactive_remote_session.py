@@ -5,9 +5,10 @@
 
 import socket
 import traceback
+from typing import Union
 
-from paramiko import AutoAddPolicy, SSHClient, Transport  # type: ignore[import]
-from paramiko.ssh_exception import (  # type: ignore[import]
+from paramiko import AutoAddPolicy, SSHClient, Transport  # type: ignore[import-untyped]
+from paramiko.ssh_exception import (  # type: ignore[import-untyped]
     AuthenticationException,
     BadHostKeyException,
     NoValidConnectionsError,
@@ -16,7 +17,7 @@ from paramiko.ssh_exception import (  # type: ignore[import]
 
 from framework.config import NodeConfiguration
 from framework.exception import SSHConnectionError
-from framework.logger import DTSLOG
+from framework.logger import DTSLogger
 
 
 class InteractiveRemoteSession:
@@ -50,11 +51,11 @@ class InteractiveRemoteSession:
     username: str
     password: str
     session: SSHClient
-    _logger: DTSLOG
+    _logger: DTSLogger
     _node_config: NodeConfiguration
-    _transport: Transport | None
+    _transport: Union[Transport, None]
 
-    def __init__(self, node_config: NodeConfiguration, logger: DTSLOG) -> None:
+    def __init__(self, node_config: NodeConfiguration, logger: DTSLogger) -> None:
         """Connect to the node during initialization.
 
         Args:

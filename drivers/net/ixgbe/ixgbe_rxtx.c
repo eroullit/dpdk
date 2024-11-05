@@ -1101,8 +1101,8 @@ ixgbe_prep_pkts(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts)
  * Use 2 different table for normal packet and tunnel packet
  * to save the space.
  */
-const uint32_t
-	ptype_table[IXGBE_PACKET_TYPE_MAX] __rte_cache_aligned = {
+const alignas(RTE_CACHE_LINE_SIZE) uint32_t
+	ptype_table[IXGBE_PACKET_TYPE_MAX] = {
 	[IXGBE_PACKET_TYPE_ETHER] = RTE_PTYPE_L2_ETHER,
 	[IXGBE_PACKET_TYPE_IPV4] = RTE_PTYPE_L2_ETHER |
 		RTE_PTYPE_L3_IPV4,
@@ -1187,8 +1187,8 @@ const uint32_t
 		RTE_PTYPE_INNER_L3_IPV6_EXT | RTE_PTYPE_INNER_L4_SCTP,
 };
 
-const uint32_t
-	ptype_table_tn[IXGBE_PACKET_TYPE_TN_MAX] __rte_cache_aligned = {
+const alignas(RTE_CACHE_LINE_SIZE) uint32_t
+	ptype_table_tn[IXGBE_PACKET_TYPE_TN_MAX] = {
 	[IXGBE_PACKET_TYPE_NVGRE] = RTE_PTYPE_L2_ETHER |
 		RTE_PTYPE_L3_IPV4_EXT_UNKNOWN | RTE_PTYPE_TUNNEL_GRE |
 		RTE_PTYPE_INNER_L2_ETHER,
@@ -1429,7 +1429,7 @@ ixgbe_rxd_pkt_info_to_pkt_type(uint32_t pkt_info, uint16_t ptype_mask)
 static inline uint64_t
 ixgbe_rxd_pkt_info_to_pkt_flags(uint16_t pkt_info)
 {
-	static uint64_t ip_rss_types_map[16] __rte_cache_aligned = {
+	static alignas(RTE_CACHE_LINE_SIZE) uint64_t ip_rss_types_map[16] = {
 		0, RTE_MBUF_F_RX_RSS_HASH, RTE_MBUF_F_RX_RSS_HASH, RTE_MBUF_F_RX_RSS_HASH,
 		0, RTE_MBUF_F_RX_RSS_HASH, 0, RTE_MBUF_F_RX_RSS_HASH,
 		RTE_MBUF_F_RX_RSS_HASH, 0, 0, 0,
@@ -1831,7 +1831,7 @@ ixgbe_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 * Use acquire fence to ensure that status_error which includes
 		 * DD bit is loaded before loading of other descriptor words.
 		 */
-		rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
+		rte_atomic_thread_fence(rte_memory_order_acquire);
 
 		rxd = *rxdp;
 
@@ -2114,7 +2114,7 @@ next_desc:
 		 * Use acquire fence to ensure that status_error which includes
 		 * DD bit is loaded before loading of other descriptor words.
 		 */
-		rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
+		rte_atomic_thread_fence(rte_memory_order_acquire);
 
 		rxd = *rxdp;
 
@@ -5843,6 +5843,25 @@ ixgbevf_dev_rx_init(struct rte_eth_dev *dev)
 	psrtype |= (dev->data->nb_rx_queues >> 1) <<
 		IXGBE_PSRTYPE_RQPL_SHIFT;
 	IXGBE_WRITE_REG(hw, IXGBE_VFPSRTYPE, psrtype);
+
+	/* Initialize the rss for x550_vf cards if enabled */
+	switch (hw->mac.type) {
+	case ixgbe_mac_X550_vf:
+	case ixgbe_mac_X550EM_x_vf:
+	case ixgbe_mac_X550EM_a_vf:
+		switch (dev->data->dev_conf.rxmode.mq_mode) {
+		case RTE_ETH_MQ_RX_RSS:
+		case RTE_ETH_MQ_RX_DCB_RSS:
+		case RTE_ETH_MQ_RX_VMDQ_RSS:
+			ixgbe_rss_configure(dev);
+			break;
+		default:
+			break;
+		}
+		break;
+	default:
+		break;
+	}
 
 	ixgbe_set_rx_function(dev);
 

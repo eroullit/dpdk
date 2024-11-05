@@ -6,6 +6,7 @@
 
 #include <string.h>
 #include <dirent.h>
+#include <stdalign.h>
 #include <stdbool.h>
 
 #include <rte_log.h>
@@ -395,7 +396,7 @@ rte_fslmc_probe(void)
 	static const struct rte_mbuf_dynfield dpaa2_seqn_dynfield_desc = {
 		.name = DPAA2_SEQN_DYNFIELD_NAME,
 		.size = sizeof(dpaa2_seqn_t),
-		.align = __alignof__(dpaa2_seqn_t),
+		.align = alignof(dpaa2_seqn_t),
 	};
 
 	if (TAILQ_EMPTY(&rte_fslmc_bus.device_list))
@@ -499,7 +500,7 @@ rte_fslmc_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
 	const struct rte_dpaa2_device *dstart;
 	struct rte_dpaa2_device *dev;
 
-	DPAA2_BUS_DEBUG("Finding a device named %s\n", (const char *)data);
+	DPAA2_BUS_DEBUG("Finding a device named %s", (const char *)data);
 
 	/* find_device is always called with an opaque object which should be
 	 * passed along to the 'cmp' function iterating over all device obj
@@ -514,7 +515,7 @@ rte_fslmc_find_device(const struct rte_device *start, rte_dev_cmp_t cmp,
 	}
 	while (dev != NULL) {
 		if (cmp(&dev->device, data) == 0) {
-			DPAA2_BUS_DEBUG("Found device (%s)\n",
+			DPAA2_BUS_DEBUG("Found device (%s)",
 					dev->device.name);
 			return &dev->device;
 		}
@@ -628,12 +629,16 @@ fslmc_bus_dev_iterate(const void *start, const char *str,
 
 	/* Expectation is that device would be name=device_name */
 	if (strncmp(str, "name=", 5) != 0) {
-		DPAA2_BUS_DEBUG("Invalid device string (%s)\n", str);
+		DPAA2_BUS_DEBUG("Invalid device string (%s)", str);
 		return NULL;
 	}
 
 	/* Now that name=device_name format is available, split */
 	dup = strdup(str);
+	if (dup == NULL) {
+		DPAA2_BUS_DEBUG("Dup string (%s) failed!", str);
+		return NULL;
+	}
 	dev_name = dup + strlen("name=");
 
 	if (start != NULL) {

@@ -273,6 +273,7 @@ eth_dev_fp_ops_setup(struct rte_eth_fp_ops *fpo,
 	fpo->tx_pkt_prepare = dev->tx_pkt_prepare;
 	fpo->rx_queue_count = dev->rx_queue_count;
 	fpo->rx_descriptor_status = dev->rx_descriptor_status;
+	fpo->tx_queue_count = dev->tx_queue_count;
 	fpo->tx_descriptor_status = dev->tx_descriptor_status;
 	fpo->recycle_tx_mbufs_reuse = dev->recycle_tx_mbufs_reuse;
 	fpo->recycle_rx_descriptors_refill = dev->recycle_rx_descriptors_refill;
@@ -297,8 +298,12 @@ rte_eth_call_rx_callbacks(uint16_t port_id, uint16_t queue_id,
 		cb = cb->next;
 	}
 
-	rte_eth_trace_call_rx_callbacks(port_id, queue_id, (void **)rx_pkts,
-					nb_rx, nb_pkts);
+	if (unlikely(nb_rx))
+		rte_eth_trace_call_rx_callbacks_nonempty(port_id, queue_id, (void **)rx_pkts,
+						nb_rx, nb_pkts);
+	else
+		rte_eth_trace_call_rx_callbacks_empty(port_id, queue_id, (void **)rx_pkts,
+						nb_pkts);
 
 	return nb_rx;
 }

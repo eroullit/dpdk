@@ -176,6 +176,9 @@ static int mlx5dr_context_init_hws(struct mlx5dr_context *ctx,
 	if (ret)
 		goto uninit_pd;
 
+	if (attr->bwc)
+		ctx->flags |= MLX5DR_CONTEXT_FLAG_BWC_SUPPORT;
+
 	ret = mlx5dr_send_queues_open(ctx, attr->queues, attr->queue_size);
 	if (ret)
 		goto pools_uninit;
@@ -263,6 +266,7 @@ struct mlx5dr_context *mlx5dr_context_open(struct ibv_context *ibv_ctx,
 free_caps:
 	simple_free(ctx->caps);
 free_ctx:
+	pthread_spin_destroy(&ctx->ctrl_lock);
 	simple_free(ctx);
 	return NULL;
 }

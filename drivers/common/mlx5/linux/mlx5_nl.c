@@ -175,10 +175,11 @@ struct mlx5_nl_port_info {
 	uint16_t state; /**< IB device port state (out). */
 };
 
-uint32_t atomic_sn;
+RTE_ATOMIC(uint32_t) atomic_sn;
 
 /* Generate Netlink sequence number. */
-#define MLX5_NL_SN_GENERATE (__atomic_fetch_add(&atomic_sn, 1, __ATOMIC_RELAXED) + 1)
+#define MLX5_NL_SN_GENERATE (rte_atomic_fetch_add_explicit(&atomic_sn, 1, \
+	rte_memory_order_relaxed) + 1)
 
 /**
  * Opens a Netlink socket.
@@ -1507,7 +1508,7 @@ mlx5_nl_vlan_vmwa_create(struct mlx5_nl_vlan_vmwa_context *vmwa,
 	struct ifinfomsg *ifm;
 	char name[sizeof(MLX5_VMWA_VLAN_DEVICE_PFX) + 32];
 
-	__rte_cache_aligned
+	alignas(RTE_CACHE_LINE_SIZE)
 	uint8_t buf[NLMSG_ALIGN(sizeof(struct nlmsghdr)) +
 		    NLMSG_ALIGN(sizeof(struct ifinfomsg)) +
 		    NLMSG_ALIGN(sizeof(struct nlattr)) * 8 +

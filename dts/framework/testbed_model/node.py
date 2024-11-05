@@ -2,6 +2,7 @@
 # Copyright(c) 2010-2014 Intel Corporation
 # Copyright(c) 2022-2023 PANTHEON.tech s.r.o.
 # Copyright(c) 2022-2023 University of New Hampshire
+# Copyright(c) 2024 Arm Limited
 
 """Common functionality for node management.
 
@@ -14,16 +15,11 @@ The :func:`~Node.skip_setup` decorator can be used without subclassing.
 
 from abc import ABC
 from ipaddress import IPv4Interface, IPv6Interface
-from typing import Any, Callable, Type, Union
+from typing import Any, Callable, Union
 
-from framework.config import (
-    OS,
-    BuildTargetConfiguration,
-    ExecutionConfiguration,
-    NodeConfiguration,
-)
+from framework.config import OS, NodeConfiguration, TestRunConfiguration
 from framework.exception import ConfigurationError
-from framework.logger import DTSLOG, getLogger
+from framework.logger import DTSLogger, get_dts_logger
 from framework.settings import SETTINGS
 
 from .cpu import (
@@ -34,9 +30,8 @@ from .cpu import (
     lcore_filter,
 )
 from .linux_session import LinuxSession
-from .os_session import InteractiveShellType, OSSession
+from .os_session import OSSession
 from .port import Port
-from .virtual_device import VirtualDevice
 
 
 class Node(ABC):
@@ -55,7 +50,6 @@ class Node(ABC):
         lcores: The list of logical cores that DTS can use on the node.
             It's derived from logical cores present on the node and the test run configuration.
         ports: The ports of this node specified in the test run configuration.
-        virtual_devices: The virtual devices used on the node.
     """
 
     main_session: OSSession
@@ -63,10 +57,9 @@ class Node(ABC):
     name: str
     lcores: list[LogicalCore]
     ports: list[Port]
-    _logger: DTSLOG
+    _logger: DTSLogger
     _other_sessions: list[OSSession]
-    _execution_config: ExecutionConfiguration
-    virtual_devices: list[VirtualDevice]
+    _test_run_config: TestRunConfiguration
 
     def __init__(self, node_config: NodeConfiguration):
         """Connect to the node and gather info during initialization.
@@ -82,7 +75,7 @@ class Node(ABC):
         """
         self.config = node_config
         self.name = node_config.name
-        self._logger = getLogger(self.name)
+        self._logger = get_dts_logger(self.name)
         self.main_session = create_session(self.config, self.name, self._logger)
 
         self._logger.info(f"Connected to node: {self.name}")
@@ -94,79 +87,31 @@ class Node(ABC):
         ).filter()
 
         self._other_sessions = []
-        self.virtual_devices = []
         self._init_ports()
 
     def _init_ports(self) -> None:
-        self.ports = [Port(self.name, port_config) for port_config in self.config.ports]
+        self.ports = [Port(port_config) for port_config in self.config.ports]
         self.main_session.update_ports(self.ports)
         for port in self.ports:
             self.configure_port_state(port)
 
-    def set_up_execution(self, execution_config: ExecutionConfiguration) -> None:
-        """Execution setup steps.
+    def set_up_test_run(self, test_run_config: TestRunConfiguration) -> None:
+        """Test run setup steps.
 
-        Configure hugepages and call :meth:`_set_up_execution` where
-        the rest of the configuration steps (if any) are implemented.
+        Configure hugepages on all DTS node types. Additional steps can be added by
+        extending the method in subclasses with the use of super().
 
         Args:
-            execution_config: The execution test run configuration according to which
+            test_run_config: A test run configuration according to which
                 the setup steps will be taken.
         """
         self._setup_hugepages()
-        self._set_up_execution(execution_config)
-        self._execution_config = execution_config
-        for vdev in execution_config.vdevs:
-            self.virtual_devices.append(VirtualDevice(vdev))
 
-    def _set_up_execution(self, execution_config: ExecutionConfiguration) -> None:
-        """Optional additional execution setup steps for subclasses.
-
-        Subclasses should override this if they need to add additional execution setup steps.
-        """
-
-    def tear_down_execution(self) -> None:
-        """Execution teardown steps.
+    def tear_down_test_run(self) -> None:
+        """Test run teardown steps.
 
         There are currently no common execution teardown steps common to all DTS node types.
-        """
-        self.virtual_devices = []
-        self._tear_down_execution()
-
-    def _tear_down_execution(self) -> None:
-        """Optional additional execution teardown steps for subclasses.
-
-        Subclasses should override this if they need to add additional execution teardown steps.
-        """
-
-    def set_up_build_target(self, build_target_config: BuildTargetConfiguration) -> None:
-        """Build target setup steps.
-
-        There are currently no common build target setup steps common to all DTS node types.
-
-        Args:
-            build_target_config: The build target test run configuration according to which
-                the setup steps will be taken.
-        """
-        self._set_up_build_target(build_target_config)
-
-    def _set_up_build_target(self, build_target_config: BuildTargetConfiguration) -> None:
-        """Optional additional build target setup steps for subclasses.
-
-        Subclasses should override this if they need to add additional build target setup steps.
-        """
-
-    def tear_down_build_target(self) -> None:
-        """Build target teardown steps.
-
-        There are currently no common build target teardown steps common to all DTS node types.
-        """
-        self._tear_down_build_target()
-
-    def _tear_down_build_target(self) -> None:
-        """Optional additional build target teardown steps for subclasses.
-
-        Subclasses should override this if they need to add additional build target teardown steps.
+        Additional steps can be added by extending the method in subclasses with the use of super().
         """
 
     def create_session(self, name: str) -> OSSession:
@@ -189,41 +134,10 @@ class Node(ABC):
         connection = create_session(
             self.config,
             session_name,
-            getLogger(session_name, node=self.name),
+            get_dts_logger(session_name),
         )
         self._other_sessions.append(connection)
         return connection
-
-    def create_interactive_shell(
-        self,
-        shell_cls: Type[InteractiveShellType],
-        timeout: float = SETTINGS.timeout,
-        privileged: bool = False,
-        app_args: str = "",
-    ) -> InteractiveShellType:
-        """Factory for interactive session handlers.
-
-        Instantiate `shell_cls` according to the remote OS specifics.
-
-        Args:
-            shell_cls: The class of the shell.
-            timeout: Timeout for reading output from the SSH channel. If you are reading from
-                the buffer and don't receive any data within the timeout it will throw an error.
-            privileged: Whether to run the shell with administrative privileges.
-            app_args: The arguments to be passed to the application.
-
-        Returns:
-            An instance of the desired interactive application shell.
-        """
-        if not shell_cls.dpdk_app:
-            shell_cls.path = self.main_session.join_remote_path(shell_cls.path)
-
-        return self.main_session.create_interactive_shell(
-            shell_cls,
-            timeout,
-            privileged,
-            app_args,
-        )
 
     def filter_lcores(
         self,
@@ -266,7 +180,9 @@ class Node(ABC):
         """
         if self.config.hugepages:
             self.main_session.setup_hugepages(
-                self.config.hugepages.amount, self.config.hugepages.force_first_numa
+                self.config.hugepages.number_of,
+                self.main_session.hugepage_size,
+                self.config.hugepages.force_first_numa,
             )
 
     def configure_port_state(self, port: Port, enable: bool = True) -> None:
@@ -299,7 +215,6 @@ class Node(ABC):
             self.main_session.close()
         for session in self._other_sessions:
             session.close()
-        self._logger.logger_exit()
 
     @staticmethod
     def skip_setup(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -314,7 +229,7 @@ class Node(ABC):
             return func
 
 
-def create_session(node_config: NodeConfiguration, name: str, logger: DTSLOG) -> OSSession:
+def create_session(node_config: NodeConfiguration, name: str, logger: DTSLogger) -> OSSession:
     """Factory for OS-aware sessions.
 
     Args:

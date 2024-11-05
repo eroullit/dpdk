@@ -35,7 +35,7 @@ static const char *MZ_MLX5_PMD_SHARED_DATA = "mlx5_pmd_shared_data";
 static rte_spinlock_t mlx5_shared_data_lock = RTE_SPINLOCK_INITIALIZER;
 
 /* rte flow indexed pool configuration. */
-static struct mlx5_indexed_pool_config icfg[] = {
+static const struct mlx5_indexed_pool_config default_icfg[] = {
 	{
 		.size = sizeof(struct rte_flow),
 		.trunk_size = 64,
@@ -83,6 +83,7 @@ mlx5_queue_counter_id_prepare(struct rte_eth_dev *dev)
 		DRV_LOG(ERR, "Port %d queue counter object cannot be created "
 			"by DevX - imissed counter will be unavailable",
 			dev->data->port_id);
+		priv->q_counters_allocation_failure = 1;
 		return;
 	}
 	priv->counter_set_id = priv->q_counters->id;
@@ -352,7 +353,9 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 	int own_domain_id = 0;
 	uint16_t port_id;
 	int i;
+	struct mlx5_indexed_pool_config icfg[RTE_DIM(default_icfg)];
 
+	memcpy(icfg, default_icfg, sizeof(icfg));
 	/* Build device name. */
 	strlcpy(name, dpdk_dev->name, sizeof(name));
 	/* check if the device is already spawned */
@@ -538,6 +541,10 @@ mlx5_dev_spawn(struct rte_device *dpdk_dev,
 		icfg[i].release_mem_en = !!sh->config.reclaim_mode;
 		if (sh->config.reclaim_mode)
 			icfg[i].per_core_cache = 0;
+#ifdef HAVE_MLX5_HWS_SUPPORT
+		if (priv->sh->config.dv_flow_en == 2)
+			icfg[i].size = sizeof(struct rte_flow_hw) + sizeof(struct rte_flow_nt2hws);
+#endif
 		priv->flows[i] = mlx5_ipool_create(&icfg[i]);
 		if (!priv->flows[i])
 			goto error;

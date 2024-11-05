@@ -2,6 +2,7 @@
  * Copyright(c) 2016 Cavium, Inc
  */
 
+#include <stdalign.h>
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1405,7 +1406,7 @@ int rte_event_dev_selftest(uint8_t dev_id)
 	static const struct rte_mbuf_dynfield test_seqn_dynfield_desc = {
 		.name = "rte_event_pmd_selftest_seqn_dynfield",
 		.size = sizeof(rte_event_pmd_selftest_seqn_t),
-		.align = __alignof__(rte_event_pmd_selftest_seqn_t),
+		.align = alignof(rte_event_pmd_selftest_seqn_t),
 	};
 	struct rte_eventdev *dev = &rte_eventdevs[dev_id];
 
@@ -2004,7 +2005,7 @@ handle_dev_dump(const char *cmd __rte_unused,
 
 	RTE_EVENTDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
 
-	buf = calloc(sizeof(char), RTE_TEL_MAX_SINGLE_STRING_LEN);
+	buf = calloc(RTE_TEL_MAX_SINGLE_STRING_LEN, sizeof(char));
 	if (buf == NULL)
 		return -ENOMEM;
 

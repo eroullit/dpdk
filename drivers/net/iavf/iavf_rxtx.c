@@ -2025,7 +2025,7 @@ iavf_rx_scan_hw_ring_flex_rxd(struct iavf_rx_queue *rxq,
 			s[j] = rte_le_to_cpu_16(rxdp[j].wb.status_error0);
 
 		/* This barrier is to order loads of different words in the descriptor */
-		rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
+		rte_atomic_thread_fence(rte_memory_order_acquire);
 
 		/* Compute how many contiguous DD bits were set */
 		for (j = 0, nb_dd = 0; j < IAVF_LOOK_AHEAD; j++) {
@@ -2152,7 +2152,7 @@ iavf_rx_scan_hw_ring(struct iavf_rx_queue *rxq, struct rte_mbuf **rx_pkts, uint1
 		}
 
 		/* This barrier is to order loads of different words in the descriptor */
-		rte_atomic_thread_fence(__ATOMIC_ACQUIRE);
+		rte_atomic_thread_fence(rte_memory_order_acquire);
 
 		/* Compute how many contiguous DD bits were set */
 		for (j = 0, nb_dd = 0; j < IAVF_LOOK_AHEAD; j++) {
@@ -3036,7 +3036,7 @@ iavf_check_vlan_up2tc(struct iavf_tx_queue *txq, struct rte_mbuf *m)
 	up = m->vlan_tci >> IAVF_VLAN_TAG_PCP_OFFSET;
 
 	if (!(vf->qos_cap->cap[txq->tc].tc_prio & BIT(up))) {
-		PMD_TX_LOG(ERR, "packet with vlan pcp %u cannot transmit in queue %u\n",
+		PMD_TX_LOG(ERR, "packet with vlan pcp %u cannot transmit in queue %u",
 			up, txq->queue_id);
 		return -1;
 	} else {
@@ -3781,11 +3781,12 @@ iavf_recv_pkts_no_poll(void *rx_queue, struct rte_mbuf **rx_pkts,
 				uint16_t nb_pkts)
 {
 	struct iavf_rx_queue *rxq = rx_queue;
-	enum iavf_rx_burst_type rx_burst_type =
-		rxq->vsi->adapter->rx_burst_type;
+	enum iavf_rx_burst_type rx_burst_type;
 
 	if (!rxq->vsi || rxq->vsi->adapter->no_poll)
 		return 0;
+
+	rx_burst_type = rxq->vsi->adapter->rx_burst_type;
 
 	return iavf_rx_pkt_burst_ops[rx_burst_type](rx_queue,
 								rx_pkts, nb_pkts);
@@ -3796,14 +3797,99 @@ iavf_xmit_pkts_no_poll(void *tx_queue, struct rte_mbuf **tx_pkts,
 				uint16_t nb_pkts)
 {
 	struct iavf_tx_queue *txq = tx_queue;
-	enum iavf_tx_burst_type tx_burst_type =
-		txq->vsi->adapter->tx_burst_type;
+	enum iavf_tx_burst_type tx_burst_type;
 
 	if (!txq->vsi || txq->vsi->adapter->no_poll)
 		return 0;
 
+	tx_burst_type = txq->vsi->adapter->tx_burst_type;
+
 	return iavf_tx_pkt_burst_ops[tx_burst_type](tx_queue,
 								tx_pkts, nb_pkts);
+}
+
+/* Tx mbuf check */
+static uint16_t
+iavf_xmit_pkts_check(void *tx_queue, struct rte_mbuf **tx_pkts,
+	      uint16_t nb_pkts)
+{
+	uint16_t idx;
+	uint64_t ol_flags;
+	struct rte_mbuf *mb;
+	uint16_t good_pkts = nb_pkts;
+	const char *reason = NULL;
+	bool pkt_error = false;
+	struct iavf_tx_queue *txq = tx_queue;
+	struct iavf_adapter *adapter = txq->vsi->adapter;
+	enum iavf_tx_burst_type tx_burst_type =
+		txq->vsi->adapter->tx_burst_type;
+
+	for (idx = 0; idx < nb_pkts; idx++) {
+		mb = tx_pkts[idx];
+		ol_flags = mb->ol_flags;
+
+		if ((adapter->devargs.mbuf_check & IAVF_MBUF_CHECK_F_TX_MBUF) &&
+		    (rte_mbuf_check(mb, 1, &reason) != 0)) {
+			PMD_TX_LOG(ERR, "INVALID mbuf: %s", reason);
+			pkt_error = true;
+			break;
+		}
+
+		if ((adapter->devargs.mbuf_check & IAVF_MBUF_CHECK_F_TX_SIZE) &&
+		    (mb->data_len < IAVF_TX_MIN_PKT_LEN ||
+		     mb->data_len > adapter->vf.max_pkt_len)) {
+			PMD_TX_LOG(ERR, "INVALID mbuf: data_len (%u) is out of range, reasonable range (%d - %u)",
+					mb->data_len, IAVF_TX_MIN_PKT_LEN, adapter->vf.max_pkt_len);
+			pkt_error = true;
+			break;
+		}
+
+		if (adapter->devargs.mbuf_check & IAVF_MBUF_CHECK_F_TX_SEGMENT) {
+			/* Check condition for nb_segs > IAVF_TX_MAX_MTU_SEG. */
+			if (!(ol_flags & (RTE_MBUF_F_TX_TCP_SEG | RTE_MBUF_F_TX_UDP_SEG))) {
+				if (mb->nb_segs > IAVF_TX_MAX_MTU_SEG) {
+					PMD_TX_LOG(ERR, "INVALID mbuf: nb_segs (%d) exceeds HW limit, maximum allowed value is %d",
+							mb->nb_segs, IAVF_TX_MAX_MTU_SEG);
+					pkt_error = true;
+					break;
+				}
+			} else if ((mb->tso_segsz < IAVF_MIN_TSO_MSS) ||
+				   (mb->tso_segsz > IAVF_MAX_TSO_MSS)) {
+				/* MSS outside the range are considered malicious */
+				PMD_TX_LOG(ERR, "INVALID mbuf: tso_segsz (%u) is out of range, reasonable range (%d - %u)",
+						mb->tso_segsz, IAVF_MIN_TSO_MSS, IAVF_MAX_TSO_MSS);
+				pkt_error = true;
+				break;
+			} else if (mb->nb_segs > txq->nb_tx_desc) {
+				PMD_TX_LOG(ERR, "INVALID mbuf: nb_segs out of ring length");
+				pkt_error = true;
+				break;
+			}
+		}
+
+		if (adapter->devargs.mbuf_check & IAVF_MBUF_CHECK_F_TX_OFFLOAD) {
+			if (ol_flags & IAVF_TX_OFFLOAD_NOTSUP_MASK) {
+				PMD_TX_LOG(ERR, "INVALID mbuf: TX offload is not supported");
+				pkt_error = true;
+				break;
+			}
+
+			if (!rte_validate_tx_offload(mb)) {
+				PMD_TX_LOG(ERR, "INVALID mbuf: TX offload setup error");
+				pkt_error = true;
+				break;
+			}
+		}
+	}
+
+	if (pkt_error) {
+		txq->mbuf_errors++;
+		good_pkts = idx;
+		if (good_pkts == 0)
+			return 0;
+	}
+
+	return iavf_tx_pkt_burst_ops[tx_burst_type](tx_queue, tx_pkts, good_pkts);
 }
 
 /* choose rx function*/
@@ -4051,6 +4137,7 @@ iavf_set_tx_function(struct rte_eth_dev *dev)
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	enum iavf_tx_burst_type tx_burst_type;
+	int mbuf_check = adapter->devargs.mbuf_check;
 	int no_poll_on_link_down = adapter->devargs.no_poll_on_link_down;
 #ifdef RTE_ARCH_X86
 	struct iavf_tx_queue *txq;
@@ -4146,6 +4233,9 @@ iavf_set_tx_function(struct rte_eth_dev *dev)
 		if (no_poll_on_link_down) {
 			adapter->tx_burst_type = tx_burst_type;
 			dev->tx_pkt_burst = iavf_xmit_pkts_no_poll;
+		} else if (mbuf_check) {
+			adapter->tx_burst_type = tx_burst_type;
+			dev->tx_pkt_burst = iavf_xmit_pkts_check;
 		} else {
 			dev->tx_pkt_burst = iavf_tx_pkt_burst_ops[tx_burst_type];
 		}
@@ -4162,6 +4252,9 @@ normal:
 	if (no_poll_on_link_down) {
 		adapter->tx_burst_type = tx_burst_type;
 		dev->tx_pkt_burst = iavf_xmit_pkts_no_poll;
+	} else if (mbuf_check) {
+		adapter->tx_burst_type = tx_burst_type;
+		dev->tx_pkt_burst = iavf_xmit_pkts_check;
 	} else {
 		dev->tx_pkt_burst = iavf_tx_pkt_burst_ops[tx_burst_type];
 	}
@@ -4356,8 +4449,7 @@ iavf_dev_tx_desc_status(void *tx_queue, uint16_t offset)
 static inline uint32_t
 iavf_get_default_ptype(uint16_t ptype)
 {
-	static const uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE]
-		__rte_cache_aligned = {
+	static const alignas(RTE_CACHE_LINE_SIZE) uint32_t ptype_tbl[IAVF_MAX_PKT_TYPE] = {
 		/* L2 types */
 		/* [0] reserved */
 		[1] = RTE_PTYPE_L2_ETHER,

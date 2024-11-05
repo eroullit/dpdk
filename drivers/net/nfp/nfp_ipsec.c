@@ -3,6 +3,8 @@
  * All rights reserved.
  */
 
+#include <stdalign.h>
+
 #include "nfp_ipsec.h"
 
 #include <rte_cryptodev.h>
@@ -16,8 +18,10 @@
 #include "nfp_net_common.h"
 #include "nfp_net_ctrl.h"
 #include "nfp_rxtx.h"
+#include "nfp_net_meta.h"
 
 #define NFP_UDP_ESP_PORT            4500
+#define NFP_ESP_IV_LENGTH           8
 
 static const struct rte_cryptodev_capabilities nfp_crypto_caps[] = {
 	{
@@ -449,7 +453,7 @@ nfp_ipsec_cfg_cmd_issue(struct nfp_net_hw *net_hw,
 
 	ret = nfp_net_mbox_reconfig(net_hw, NFP_NET_CFG_MBOX_CMD_IPSEC);
 	if (ret < 0) {
-		PMD_DRV_LOG(ERR, "Failed to IPsec reconfig mbox");
+		PMD_DRV_LOG(ERR, "Failed to IPsec reconfig mbox.");
 		return ret;
 	}
 
@@ -521,10 +525,14 @@ nfp_aesgcm_iv_update(struct ipsec_add_sa *cfg,
 	char *save;
 	char *iv_b;
 	char *iv_str;
-	uint8_t *cfg_iv;
+	const rte_be32_t *iv_value;
+	uint8_t cfg_iv[NFP_ESP_IV_LENGTH] = {};
 
 	iv_str = strdup(iv_string);
-	cfg_iv = (uint8_t *)cfg->aesgcm_fields.iv;
+	if (iv_str == NULL) {
+		PMD_DRV_LOG(ERR, "Failed to strdup iv_string.");
+		return;
+	}
 
 	for (i = 0; i < iv_len; i++) {
 		iv_b = strtok_r(i ? NULL : iv_str, ",", &save);
@@ -534,8 +542,9 @@ nfp_aesgcm_iv_update(struct ipsec_add_sa *cfg,
 		cfg_iv[i] = strtoul(iv_b, NULL, 0);
 	}
 
-	*(uint32_t *)cfg_iv = rte_be_to_cpu_32(*(uint32_t *)cfg_iv);
-	*(uint32_t *)&cfg_iv[4] = rte_be_to_cpu_32(*(uint32_t *)&cfg_iv[4]);
+	iv_value = (const rte_be32_t *)(cfg_iv);
+	cfg->aesgcm_fields.iv[0] = rte_be_to_cpu_32(iv_value[0]);
+	cfg->aesgcm_fields.iv[1] = rte_be_to_cpu_32(iv_value[1]);
 
 	free(iv_str);
 }
@@ -576,7 +585,7 @@ nfp_aead_map(struct rte_eth_dev *eth_dev,
 	uint32_t offset;
 	uint32_t device_id;
 	const char *iv_str;
-	const uint32_t *key;
+	const rte_be32_t *key;
 	struct nfp_net_hw *net_hw;
 
 	net_hw = eth_dev->data->dev_private;
@@ -607,13 +616,13 @@ nfp_aead_map(struct rte_eth_dev *eth_dev,
 		}
 
 		if (aead->digest_length != 16) {
-			PMD_DRV_LOG(ERR, "ICV must be 128bit with RTE_CRYPTO_AEAD_CHACHA20_POLY1305");
+			PMD_DRV_LOG(ERR, "ICV must be 128bit with RTE_CRYPTO_AEAD_CHACHA20_POLY1305.");
 			return -EINVAL;
 		}
 
 		/* Aead->alg_key_len includes 32-bit salt */
 		if (key_length != 32) {
-			PMD_DRV_LOG(ERR, "Unsupported CHACHA20 key length");
+			PMD_DRV_LOG(ERR, "Unsupported CHACHA20 key length.");
 			return -EINVAL;
 		}
 
@@ -626,7 +635,7 @@ nfp_aead_map(struct rte_eth_dev *eth_dev,
 		return -EINVAL;
 	}
 
-	key = (const uint32_t *)(aead->key.data);
+	key = (const rte_be32_t *)(aead->key.data);
 
 	/*
 	 * The CHACHA20's key order needs to be adjusted based on hardware design.
@@ -638,16 +647,22 @@ nfp_aead_map(struct rte_eth_dev *eth_dev,
 
 	for (i = 0; i < key_length / sizeof(cfg->cipher_key[0]); i++) {
 		index = (i + offset) % (key_length / sizeof(cfg->cipher_key[0]));
-		cfg->cipher_key[index] = rte_cpu_to_be_32(*key++);
+		cfg->cipher_key[index] = rte_be_to_cpu_32(key[i]);
 	}
 
 	/*
-	 * The iv of the FW is equal to ESN by default. Reading the
-	 * iv of the configuration information is not supported.
+	 * The iv of the FW is equal to ESN by default. Only the
+	 * aead algorithm can offload the iv of configuration and
+	 * the length of iv cannot be greater than NFP_ESP_IV_LENGTH.
 	 */
 	iv_str = getenv("ETH_SEC_IV_OVR");
 	if (iv_str != NULL) {
 		iv_len = aead->iv.length;
+		if (iv_len > NFP_ESP_IV_LENGTH) {
+			PMD_DRV_LOG(ERR, "Unsupported length of iv data.");
+			return -EINVAL;
+		}
+
 		nfp_aesgcm_iv_update(cfg, iv_len, iv_str);
 	}
 
@@ -664,7 +679,7 @@ nfp_cipher_map(struct rte_eth_dev *eth_dev,
 	int ret;
 	uint32_t i;
 	uint32_t device_id;
-	const uint32_t *key;
+	const rte_be32_t *key;
 	struct nfp_net_hw *net_hw;
 
 	net_hw = eth_dev->data->dev_private;
@@ -698,14 +713,14 @@ nfp_cipher_map(struct rte_eth_dev *eth_dev,
 		return -EINVAL;
 	}
 
-	key = (const uint32_t  *)(cipher->key.data);
+	key = (const rte_be32_t *)(cipher->key.data);
 	if (key_length > sizeof(cfg->cipher_key)) {
-		PMD_DRV_LOG(ERR, "Insufficient space for offloaded key");
+		PMD_DRV_LOG(ERR, "Insufficient space for offloaded key.");
 		return -EINVAL;
 	}
 
 	for (i = 0; i < key_length / sizeof(cfg->cipher_key[0]); i++)
-		cfg->cipher_key[i] = rte_cpu_to_be_32(*key++);
+		cfg->cipher_key[i] = rte_be_to_cpu_32(key[i]);
 
 	return 0;
 }
@@ -800,7 +815,7 @@ nfp_auth_map(struct rte_eth_dev *eth_dev,
 	uint32_t i;
 	uint8_t key_length;
 	uint32_t device_id;
-	const uint32_t *key;
+	const rte_be32_t *key;
 	struct nfp_net_hw *net_hw;
 
 	if (digest_length == 0) {
@@ -843,11 +858,11 @@ nfp_auth_map(struct rte_eth_dev *eth_dev,
 	}
 
 	if (digest_length == 0) {
-		PMD_DRV_LOG(ERR, "Unsupported authentication algorithm digest length");
+		PMD_DRV_LOG(ERR, "Unsupported authentication algorithm digest length.");
 		return -EINVAL;
 	}
 
-	key = (const uint32_t *)(auth->key.data);
+	key = (const rte_be32_t *)(auth->key.data);
 	key_length = auth->key.length;
 	if (key_length > sizeof(cfg->auth_key)) {
 		PMD_DRV_LOG(ERR, "Insufficient space for offloaded auth key!");
@@ -855,7 +870,7 @@ nfp_auth_map(struct rte_eth_dev *eth_dev,
 	}
 
 	for (i = 0; i < key_length / sizeof(cfg->auth_key[0]); i++)
-		cfg->auth_key[i] = rte_cpu_to_be_32(*key++);
+		cfg->auth_key[i] = rte_be_to_cpu_32(key[i]);
 
 	return 0;
 }
@@ -895,7 +910,7 @@ nfp_crypto_msg_build(struct rte_eth_dev *eth_dev,
 			return ret;
 		}
 
-		cfg->aesgcm_fields.salt = rte_cpu_to_be_32(conf->ipsec.salt);
+		cfg->aesgcm_fields.salt = conf->ipsec.salt;
 		break;
 	case RTE_CRYPTO_SYM_XFORM_AUTH:
 		/* Only support Auth + Cipher for inbound */
@@ -960,7 +975,10 @@ nfp_ipsec_msg_build(struct rte_eth_dev *eth_dev,
 		struct rte_security_session_conf *conf,
 		struct nfp_ipsec_msg *msg)
 {
+	int i;
 	int ret;
+	rte_be32_t *src_ip;
+	rte_be32_t *dst_ip;
 	struct ipsec_add_sa *cfg;
 	enum rte_security_ipsec_tunnel_type type;
 
@@ -995,7 +1013,7 @@ nfp_ipsec_msg_build(struct rte_eth_dev *eth_dev,
 		cfg->ctrl_word.encap_dsbl = 0;
 		break;
 	default:
-		PMD_DRV_LOG(ERR, "Unsupported IPsec action for offload, action: %d",
+		PMD_DRV_LOG(ERR, "Unsupported IPsec action for offload, action: %d.",
 				conf->action_type);
 		return -EINVAL;
 	}
@@ -1008,7 +1026,7 @@ nfp_ipsec_msg_build(struct rte_eth_dev *eth_dev,
 		cfg->ctrl_word.proto = NFP_IPSEC_PROTOCOL_AH;
 		break;
 	default:
-		PMD_DRV_LOG(ERR, "Unsupported IPsec protocol for offload, protocol: %d",
+		PMD_DRV_LOG(ERR, "Unsupported IPsec protocol for offload, protocol: %d.",
 				conf->ipsec.proto);
 		return -EINVAL;
 	}
@@ -1018,12 +1036,18 @@ nfp_ipsec_msg_build(struct rte_eth_dev *eth_dev,
 		type = conf->ipsec.tunnel.type;
 		cfg->ctrl_word.mode = NFP_IPSEC_MODE_TUNNEL;
 		if (type == RTE_SECURITY_IPSEC_TUNNEL_IPV4) {
-			cfg->src_ip.v4 = conf->ipsec.tunnel.ipv4.src_ip;
-			cfg->dst_ip.v4 = conf->ipsec.tunnel.ipv4.dst_ip;
+			src_ip = (rte_be32_t *)&conf->ipsec.tunnel.ipv4.src_ip.s_addr;
+			dst_ip = (rte_be32_t *)&conf->ipsec.tunnel.ipv4.dst_ip.s_addr;
+			cfg->src_ip[0] = rte_be_to_cpu_32(src_ip[0]);
+			cfg->dst_ip[0] = rte_be_to_cpu_32(dst_ip[0]);
 			cfg->ipv6 = 0;
 		} else if (type == RTE_SECURITY_IPSEC_TUNNEL_IPV6) {
-			cfg->src_ip.v6 = conf->ipsec.tunnel.ipv6.src_addr;
-			cfg->dst_ip.v6 = conf->ipsec.tunnel.ipv6.dst_addr;
+			src_ip = (rte_be32_t *)&conf->ipsec.tunnel.ipv6.src_addr;
+			dst_ip = (rte_be32_t *)&conf->ipsec.tunnel.ipv6.dst_addr;
+			for (i = 0; i < 4; i++) {
+				cfg->src_ip[i] = rte_be_to_cpu_32(src_ip[i]);
+				cfg->dst_ip[i] = rte_be_to_cpu_32(dst_ip[i]);
+			}
 			cfg->ipv6 = 1;
 		} else {
 			PMD_DRV_LOG(ERR, "Unsupported address family!");
@@ -1032,22 +1056,13 @@ nfp_ipsec_msg_build(struct rte_eth_dev *eth_dev,
 
 		break;
 	case RTE_SECURITY_IPSEC_SA_MODE_TRANSPORT:
-		type = conf->ipsec.tunnel.type;
 		cfg->ctrl_word.mode = NFP_IPSEC_MODE_TRANSPORT;
-		if (type == RTE_SECURITY_IPSEC_TUNNEL_IPV4) {
-			memset(&cfg->src_ip, 0, sizeof(cfg->src_ip));
-			cfg->ipv6 = 0;
-		} else if (type == RTE_SECURITY_IPSEC_TUNNEL_IPV6) {
-			memset(&cfg->src_ip, 0, sizeof(cfg->src_ip));
-			cfg->ipv6 = 1;
-		} else {
-			PMD_DRV_LOG(ERR, "Unsupported address family!");
-			return -EINVAL;
-		}
+		memset(&cfg->src_ip, 0, sizeof(cfg->src_ip));
+		memset(&cfg->dst_ip, 0, sizeof(cfg->dst_ip));
 
 		break;
 	default:
-		PMD_DRV_LOG(ERR, "Unsupported IPsec mode for offload, mode: %d",
+		PMD_DRV_LOG(ERR, "Unsupported IPsec mode for offload, mode: %d.",
 				conf->ipsec.mode);
 		return -EINVAL;
 	}
@@ -1085,7 +1100,7 @@ nfp_crypto_create_session(void *device,
 	net_hw = eth_dev->data->dev_private;
 
 	if (net_hw->ipsec_data->sa_free_cnt == 0) {
-		PMD_DRV_LOG(ERR, "No space in SA table, spi: %d", conf->ipsec.spi);
+		PMD_DRV_LOG(ERR, "No space in SA table, spi: %d.", conf->ipsec.spi);
 		return -EINVAL;
 	}
 
@@ -1107,7 +1122,7 @@ nfp_crypto_create_session(void *device,
 	msg.sa_idx = sa_idx;
 	ret = nfp_ipsec_cfg_cmd_issue(net_hw, &msg);
 	if (ret < 0) {
-		PMD_DRV_LOG(ERR, "Failed to add SA to nic");
+		PMD_DRV_LOG(ERR, "Failed to add SA to nic.");
 		return -EINVAL;
 	}
 
@@ -1172,18 +1187,18 @@ nfp_security_set_pkt_metadata(void *device,
 		desc_md = RTE_MBUF_DYNFIELD(m, offset, struct nfp_tx_ipsec_desc_msg *);
 
 		if (priv_session->msg.ctrl_word.ext_seq != 0 && sqn != NULL) {
-			desc_md->esn.low = rte_cpu_to_be_32(*sqn);
-			desc_md->esn.hi = rte_cpu_to_be_32(*sqn >> 32);
+			desc_md->esn.low = (uint32_t)*sqn;
+			desc_md->esn.hi = (uint32_t)(*sqn >> 32);
 		} else if (priv_session->msg.ctrl_word.ext_seq != 0) {
-			desc_md->esn.low = rte_cpu_to_be_32(priv_session->ipsec.esn.low);
-			desc_md->esn.hi = rte_cpu_to_be_32(priv_session->ipsec.esn.hi);
+			desc_md->esn.low = priv_session->ipsec.esn.low;
+			desc_md->esn.hi = priv_session->ipsec.esn.hi;
 		} else {
-			desc_md->esn.low = rte_cpu_to_be_32(priv_session->ipsec.esn.value);
+			desc_md->esn.low = priv_session->ipsec.esn.low;
 			desc_md->esn.hi = 0;
 		}
 
 		desc_md->enc = 1;
-		desc_md->sa_idx = rte_cpu_to_be_32(priv_session->sa_index);
+		desc_md->sa_idx = priv_session->sa_index;
 	}
 
 	return 0;
@@ -1240,7 +1255,7 @@ nfp_security_session_get_stats(void *device,
 
 	ret = nfp_ipsec_cfg_cmd_issue(net_hw, &msg);
 	if (ret < 0) {
-		PMD_DRV_LOG(ERR, "Failed to get SA stats");
+		PMD_DRV_LOG(ERR, "Failed to get SA stats.");
 		return ret;
 	}
 
@@ -1315,13 +1330,13 @@ nfp_crypto_remove_session(void *device,
 	eth_dev = device;
 	priv_session = SECURITY_GET_SESS_PRIV(session);
 	if (eth_dev != priv_session->dev) {
-		PMD_DRV_LOG(ERR, "Session not bound to this device");
+		PMD_DRV_LOG(ERR, "Session not bound to this device.");
 		return -ENODEV;
 	}
 
 	ret = nfp_crypto_remove_sa(eth_dev, priv_session);
 	if (ret < 0) {
-		PMD_DRV_LOG(ERR, "Failed to remove session");
+		PMD_DRV_LOG(ERR, "Failed to remove session.");
 		return -EFAULT;
 	}
 
@@ -1348,13 +1363,13 @@ nfp_ipsec_ctx_create(struct rte_eth_dev *dev,
 	static const struct rte_mbuf_dynfield pkt_md_dynfield = {
 		.name = "nfp_ipsec_crypto_pkt_metadata",
 		.size = sizeof(struct nfp_tx_ipsec_desc_msg),
-		.align = __alignof__(struct nfp_tx_ipsec_desc_msg),
+		.align = alignof(struct nfp_tx_ipsec_desc_msg),
 	};
 
 	ctx = rte_zmalloc("security_ctx",
 			sizeof(struct rte_security_ctx), 0);
 	if (ctx == NULL) {
-		PMD_INIT_LOG(ERR, "Failed to malloc security_ctx");
+		PMD_INIT_LOG(ERR, "Failed to malloc security_ctx.");
 		return -ENOMEM;
 	}
 
@@ -1365,7 +1380,7 @@ nfp_ipsec_ctx_create(struct rte_eth_dev *dev,
 
 	data->pkt_dynfield_offset = rte_mbuf_dynfield_register(&pkt_md_dynfield);
 	if (data->pkt_dynfield_offset < 0) {
-		PMD_INIT_LOG(ERR, "Failed to register mbuf esn_dynfield");
+		PMD_INIT_LOG(ERR, "Failed to register mbuf esn_dynfield.");
 		return -ENOMEM;
 	}
 
@@ -1384,13 +1399,13 @@ nfp_ipsec_init(struct rte_eth_dev *dev)
 
 	cap_extend = net_hw->super.cap_ext;
 	if ((cap_extend & NFP_NET_CFG_CTRL_IPSEC) == 0) {
-		PMD_INIT_LOG(INFO, "Unsupported IPsec extend capability");
+		PMD_INIT_LOG(INFO, "Unsupported IPsec extend capability.");
 		return 0;
 	}
 
 	data = rte_zmalloc("ipsec_data", sizeof(struct nfp_net_ipsec_data), 0);
 	if (data == NULL) {
-		PMD_INIT_LOG(ERR, "Failed to malloc ipsec_data");
+		PMD_INIT_LOG(ERR, "Failed to malloc ipsec_data.");
 		return -ENOMEM;
 	}
 
@@ -1400,7 +1415,7 @@ nfp_ipsec_init(struct rte_eth_dev *dev)
 
 	ret = nfp_ipsec_ctx_create(dev, data);
 	if (ret != 0) {
-		PMD_INIT_LOG(ERR, "Failed to create IPsec ctx");
+		PMD_INIT_LOG(ERR, "Failed to create IPsec ctx.");
 		goto ipsec_cleanup;
 	}
 
@@ -1430,7 +1445,7 @@ nfp_ipsec_uninit(struct rte_eth_dev *dev)
 
 	cap_extend = net_hw->super.cap_ext;
 	if ((cap_extend & NFP_NET_CFG_CTRL_IPSEC) == 0) {
-		PMD_INIT_LOG(INFO, "Unsupported IPsec extend capability");
+		PMD_INIT_LOG(INFO, "Unsupported IPsec extend capability.");
 		return;
 	}
 

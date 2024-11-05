@@ -1,4 +1,4 @@
-DPDK_24 {
+DPDK_25 {
 	global:
 
 	__rte_cryptodev_trace_dequeue_burst;
@@ -84,6 +84,13 @@ EXPERIMENTAL {
 	rte_cryptodev_get_auth_algo_string;
 	rte_cryptodev_get_cipher_algo_string;
 	rte_cryptodev_queue_pair_event_error_query;
+
+	# added in 24.03
+	__rte_cryptodev_trace_qp_depth_used;
+
+	# added in 24.11
+	rte_cryptodev_asym_xform_capability_check_opcap;
+	rte_cryptodev_queue_pair_reset;
 };
 
 INTERNAL {

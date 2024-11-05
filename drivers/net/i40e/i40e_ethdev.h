@@ -20,13 +20,6 @@
 #include "base/i40e_type.h"
 #include "base/virtchnl.h"
 
-/**
- * _i=0...143,
- * counters 0-127 are for the 128 VFs,
- * counters 128-143 are for the 16 PFs
- */
-#define I40E_GL_RXERR1_H(_i)	(0x00318004 + ((_i) * 8))
-
 #define I40E_AQ_LEN               32
 #define I40E_AQ_BUF_SZ            4096
 /* Number of queues per TC should be one of 1, 2, 4, 8, 16, 32, 64 */
@@ -278,6 +271,7 @@ enum i40e_flxpld_layer_idx {
 #define I40E_DEFAULT_DCB_APP_PRIO   3
 
 #define I40E_FDIR_PRG_PKT_CNT       128
+#define I40E_FDIR_ID_BIT_SHIFT	    13
 
 /*
  * Struct to store flow created.
@@ -1108,6 +1102,10 @@ struct i40e_vf_msg_cfg {
 	uint32_t ignore_second;
 };
 
+struct i40e_mbuf_stats {
+	uint64_t tx_pkt_errors;
+};
+
 /*
  * Structure to store private data specific for PF instance.
  */
@@ -1122,8 +1120,7 @@ struct i40e_pf {
 
 	struct i40e_hw_port_stats stats_offset;
 	struct i40e_hw_port_stats stats;
-	u64 rx_err1;	/* rxerr1 */
-	u64 rx_err1_offset;
+	struct i40e_mbuf_stats mbuf_stats;
 
 	/* internal packet statistics, it should be excluded from the total */
 	struct i40e_eth_stats internal_stats_offset;
@@ -1224,6 +1221,11 @@ struct i40e_vsi_vlan_pvid_info {
 #define I40E_MAX_PKT_TYPE  256
 #define I40E_FLOW_TYPE_MAX 64
 
+#define I40E_MBUF_CHECK_F_TX_MBUF        (1ULL << 0)
+#define I40E_MBUF_CHECK_F_TX_SIZE        (1ULL << 1)
+#define I40E_MBUF_CHECK_F_TX_SEGMENT     (1ULL << 2)
+#define I40E_MBUF_CHECK_F_TX_OFFLOAD     (1ULL << 3)
+
 /*
  * Structure to store private data for each PF/VF instance.
  */
@@ -1240,15 +1242,19 @@ struct i40e_adapter {
 	bool tx_simple_allowed;
 	bool tx_vec_allowed;
 
+	uint64_t mbuf_check; /* mbuf check flags. */
+	uint16_t max_pkt_len; /* Maximum packet length */
+	eth_tx_burst_t tx_pkt_burst;
+
 	/* For PTP */
 	struct rte_timecounter systime_tc;
 	struct rte_timecounter rx_tstamp_tc;
 	struct rte_timecounter tx_tstamp_tc;
 
 	/* ptype mapping table */
-	uint32_t ptype_tbl[I40E_MAX_PKT_TYPE] __rte_cache_min_aligned;
+	alignas(RTE_CACHE_LINE_MIN_SIZE) uint32_t ptype_tbl[I40E_MAX_PKT_TYPE];
 	/* flow type to pctype mapping table */
-	uint64_t pctypes_tbl[I40E_FLOW_TYPE_MAX] __rte_cache_min_aligned;
+	alignas(RTE_CACHE_LINE_MIN_SIZE) uint64_t pctypes_tbl[I40E_FLOW_TYPE_MAX];
 	uint64_t flow_types_mask;
 	uint64_t pctypes_mask;
 

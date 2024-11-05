@@ -155,13 +155,15 @@ static enum rte_flow_item_type first_items[] = {
 	RTE_FLOW_ITEM_TYPE_NVGRE,
 	RTE_FLOW_ITEM_TYPE_VXLAN,
 	RTE_FLOW_ITEM_TYPE_GENEVE,
-	RTE_FLOW_ITEM_TYPE_VXLAN_GPE
+	RTE_FLOW_ITEM_TYPE_VXLAN_GPE,
+	RTE_FLOW_ITEM_TYPE_PTYPE
 };
 
 static enum rte_flow_item_type L2_next_items[] = {
 	RTE_FLOW_ITEM_TYPE_VLAN,
 	RTE_FLOW_ITEM_TYPE_IPV4,
-	RTE_FLOW_ITEM_TYPE_IPV6
+	RTE_FLOW_ITEM_TYPE_IPV6,
+	RTE_FLOW_ITEM_TYPE_PTYPE
 };
 
 static enum rte_flow_item_type L3_next_items[] = {
@@ -169,7 +171,8 @@ static enum rte_flow_item_type L3_next_items[] = {
 	RTE_FLOW_ITEM_TYPE_UDP,
 	RTE_FLOW_ITEM_TYPE_SCTP,
 	RTE_FLOW_ITEM_TYPE_NVGRE,
-	RTE_FLOW_ITEM_TYPE_ICMP
+	RTE_FLOW_ITEM_TYPE_ICMP,
+	RTE_FLOW_ITEM_TYPE_PTYPE
 };
 
 static enum rte_flow_item_type L4_next_items[] = {
@@ -606,6 +609,59 @@ hns3_check_attr(const struct rte_flow_attr *attr, struct rte_flow_error *error)
 }
 
 static int
+hns3_check_tuple(const struct rte_eth_dev *dev, const struct hns3_fdir_rule *rule,
+		 struct rte_flow_error *error)
+{
+	const char * const err_msg[] = {
+		"Not support outer dst mac",
+		"Not support outer src mac",
+		"Not support outer vlan1 tag",
+		"Not support outer vlan2 tag",
+		"Not support outer eth type",
+		"Not support outer l2 rsv",
+		"Not support outer ip tos",
+		"Not support outer ip proto",
+		"Not support outer src ip",
+		"Not support outer dst ip",
+		"Not support outer l3 rsv",
+		"Not support outer src port",
+		"Not support outer dst port",
+		"Not support outer l4 rsv",
+		"Not support outer tun vni",
+		"Not support outer tun flow id",
+		"Not support inner dst mac",
+		"Not support inner src mac",
+		"Not support inner vlan tag1",
+		"Not support inner vlan tag2",
+		"Not support inner eth type",
+		"Not support inner l2 rsv",
+		"Not support inner ip tos",
+		"Not support inner ip proto",
+		"Not support inner src ip",
+		"Not support inner dst ip",
+		"Not support inner l3 rsv",
+		"Not support inner src port",
+		"Not support inner dst port",
+		"Not support inner sctp tag",
+	};
+	struct hns3_adapter *hns = dev->data->dev_private;
+	uint32_t tuple_active = hns->pf.fdir.fd_cfg.key_cfg[HNS3_FD_STAGE_1].tuple_active;
+	uint32_t i;
+
+	for (i = 0; i < MAX_TUPLE; i++) {
+		if ((rule->input_set & BIT(i)) == 0)
+			continue;
+		if (tuple_active & BIT(i))
+			continue;
+		return rte_flow_error_set(error, ENOTSUP,
+					  RTE_FLOW_ERROR_TYPE_ITEM,
+					  NULL, err_msg[i]);
+	}
+
+	return 0;
+}
+
+static int
 hns3_parse_eth(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 	       struct rte_flow_error *error __rte_unused)
 {
@@ -616,8 +672,8 @@ hns3_parse_eth(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 	if (item->spec == NULL && item->mask == NULL)
 		return 0;
 
-	if (item->mask) {
-		eth_mask = item->mask;
+	eth_mask = item->mask;
+	if (eth_mask) {
 		if (eth_mask->hdr.ether_type) {
 			hns3_set_bit(rule->input_set, INNER_ETH_TYPE, 1);
 			rule->key_conf.mask.ether_type =
@@ -633,9 +689,16 @@ hns3_parse_eth(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 			memcpy(rule->key_conf.mask.dst_mac,
 			       eth_mask->hdr.dst_addr.addr_bytes, RTE_ETHER_ADDR_LEN);
 		}
+		if (eth_mask->has_vlan)
+			rule->has_vlan_m = true;
 	}
 
 	eth_spec = item->spec;
+	if (eth_mask && eth_mask->has_vlan && eth_spec->has_vlan) {
+		rule->key_conf.vlan_num++;
+		rule->has_vlan_v = true;
+	}
+
 	rule->key_conf.spec.ether_type = rte_be_to_cpu_16(eth_spec->hdr.ether_type);
 	memcpy(rule->key_conf.spec.src_mac, eth_spec->hdr.src_addr.addr_bytes,
 	       RTE_ETHER_ADDR_LEN);
@@ -651,6 +714,26 @@ hns3_parse_vlan(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 	const struct rte_flow_item_vlan *vlan_spec;
 	const struct rte_flow_item_vlan *vlan_mask;
 
+	if (rule->has_vlan_m && !rule->has_vlan_v)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "VLAN item is conflict with 'has_vlan is 0' in ETH item");
+
+	if (rule->has_more_vlan_m && !rule->has_more_vlan_v)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "VLAN item is conflict with 'has_more_vlan is 0' in the previous VLAN item");
+
+	if (rule->has_vlan_m && rule->has_vlan_v) {
+		rule->has_vlan_m = false;
+		rule->key_conf.vlan_num--;
+	}
+
+	if (rule->has_more_vlan_m && rule->has_more_vlan_v) {
+		rule->has_more_vlan_m = false;
+		rule->key_conf.vlan_num--;
+	}
+
 	rule->key_conf.vlan_num++;
 	if (rule->key_conf.vlan_num > VLAN_TAG_NUM_MAX)
 		return rte_flow_error_set(error, EINVAL,
@@ -661,8 +744,8 @@ hns3_parse_vlan(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 	if (item->spec == NULL && item->mask == NULL)
 		return 0;
 
-	if (item->mask) {
-		vlan_mask = item->mask;
+	vlan_mask = item->mask;
+	if (vlan_mask) {
 		if (vlan_mask->hdr.vlan_tci) {
 			if (rule->key_conf.vlan_num == 1) {
 				hns3_set_bit(rule->input_set, INNER_VLAN_TAG1,
@@ -676,6 +759,8 @@ hns3_parse_vlan(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 				    rte_be_to_cpu_16(vlan_mask->hdr.vlan_tci);
 			}
 		}
+		if (vlan_mask->has_more_vlan)
+			rule->has_more_vlan_m = true;
 	}
 
 	vlan_spec = item->spec;
@@ -685,6 +770,16 @@ hns3_parse_vlan(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 	else
 		rule->key_conf.spec.vlan_tag2 =
 		    rte_be_to_cpu_16(vlan_spec->hdr.vlan_tci);
+
+	if (vlan_mask && vlan_mask->has_more_vlan && vlan_spec->has_more_vlan) {
+		rule->key_conf.vlan_num++;
+		if (rule->key_conf.vlan_num > VLAN_TAG_NUM_MAX)
+			return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "Vlan_num is more than 2");
+		rule->has_more_vlan_v = true;
+	}
+
 	return 0;
 }
 
@@ -783,10 +878,10 @@ hns3_parse_ipv6(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 						  "Only support src & dst ip,proto in IPV6");
 		}
 		net_addr_to_host(rule->key_conf.mask.src_ip,
-				 (const rte_be32_t *)ipv6_mask->hdr.src_addr,
+				 (const rte_be32_t *)&ipv6_mask->hdr.src_addr,
 				 IP_ADDR_LEN);
 		net_addr_to_host(rule->key_conf.mask.dst_ip,
-				 (const rte_be32_t *)ipv6_mask->hdr.dst_addr,
+				 (const rte_be32_t *)&ipv6_mask->hdr.dst_addr,
 				 IP_ADDR_LEN);
 		rule->key_conf.mask.ip_proto = ipv6_mask->hdr.proto;
 		if (rule->key_conf.mask.src_ip[IP_ADDR_KEY_ID])
@@ -799,10 +894,10 @@ hns3_parse_ipv6(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 
 	ipv6_spec = item->spec;
 	net_addr_to_host(rule->key_conf.spec.src_ip,
-			 (const rte_be32_t *)ipv6_spec->hdr.src_addr,
+			 (const rte_be32_t *)&ipv6_spec->hdr.src_addr,
 			 IP_ADDR_LEN);
 	net_addr_to_host(rule->key_conf.spec.dst_ip,
-			 (const rte_be32_t *)ipv6_spec->hdr.dst_addr,
+			 (const rte_be32_t *)&ipv6_spec->hdr.dst_addr,
 			 IP_ADDR_LEN);
 	rule->key_conf.spec.ip_proto = ipv6_spec->hdr.proto;
 
@@ -987,12 +1082,22 @@ hns3_handle_tunnel(const struct rte_flow_item *item,
 		rule->key_conf.mask.ether_type = 0;
 	}
 
-	/* check vlan config */
-	if (rule->input_set & (BIT(INNER_VLAN_TAG1) | BIT(INNER_VLAN_TAG2)))
-		return rte_flow_error_set(error, EINVAL,
-					  RTE_FLOW_ERROR_TYPE_ITEM,
-					  item,
-					  "Outer vlan tags is unsupported");
+	if (rule->input_set & BIT(INNER_VLAN_TAG1)) {
+		hns3_set_bit(rule->input_set, OUTER_VLAN_TAG_FST, 1);
+		hns3_set_bit(rule->input_set, INNER_VLAN_TAG1, 0);
+		rule->key_conf.spec.outer_vlan_tag1 = rule->key_conf.spec.vlan_tag1;
+		rule->key_conf.mask.outer_vlan_tag1 = rule->key_conf.mask.vlan_tag1;
+		rule->key_conf.spec.vlan_tag1 = 0;
+		rule->key_conf.mask.vlan_tag1 = 0;
+	}
+	if (rule->input_set & BIT(INNER_VLAN_TAG2)) {
+		hns3_set_bit(rule->input_set, OUTER_VLAN_TAG_SEC, 1);
+		hns3_set_bit(rule->input_set, INNER_VLAN_TAG2, 0);
+		rule->key_conf.spec.outer_vlan_tag2 = rule->key_conf.spec.vlan_tag2;
+		rule->key_conf.mask.outer_vlan_tag2 = rule->key_conf.mask.vlan_tag2;
+		rule->key_conf.spec.vlan_tag2 = 0;
+		rule->key_conf.mask.vlan_tag2 = 0;
+	}
 
 	/* clear vlan_num for inner vlan select */
 	rule->key_conf.outer_vlan_num = rule->key_conf.vlan_num;
@@ -1166,6 +1271,32 @@ hns3_parse_geneve(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 }
 
 static int
+hns3_parse_ptype(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
+		  struct rte_flow_error *error)
+{
+	const struct rte_flow_item_ptype *spec = item->spec;
+	const struct rte_flow_item_ptype *mask = item->mask;
+
+	if (spec == NULL || mask == NULL)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM, item,
+					  "PTYPE must set spec and mask at the same time!");
+
+	if (spec->packet_type != RTE_PTYPE_TUNNEL_MASK ||
+	    (mask->packet_type & RTE_PTYPE_TUNNEL_MASK) != RTE_PTYPE_TUNNEL_MASK)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM_MASK, item,
+					  "PTYPE only support general tunnel!");
+
+	/*
+	 * Set tunnel_type to non-zero, so that meta-data's tunnel packet bit
+	 * will be set, then hardware will match tunnel packet.
+	 */
+	rule->key_conf.spec.tunnel_type = 1;
+	return 0;
+}
+
+static int
 hns3_parse_tunnel(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 		  struct rte_flow_error *error)
 {
@@ -1182,6 +1313,11 @@ hns3_parse_tunnel(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 					  "Tunnel packets must configure "
 					  "with mask");
 
+	if (rule->key_conf.spec.tunnel_type != 0)
+		return rte_flow_error_set(error, EINVAL,
+					  RTE_FLOW_ERROR_TYPE_ITEM,
+					  item, "Too many tunnel headers!");
+
 	switch (item->type) {
 	case RTE_FLOW_ITEM_TYPE_VXLAN:
 	case RTE_FLOW_ITEM_TYPE_VXLAN_GPE:
@@ -1192,6 +1328,9 @@ hns3_parse_tunnel(const struct rte_flow_item *item, struct hns3_fdir_rule *rule,
 		break;
 	case RTE_FLOW_ITEM_TYPE_GENEVE:
 		ret = hns3_parse_geneve(item, rule, error);
+		break;
+	case RTE_FLOW_ITEM_TYPE_PTYPE:
+		ret = hns3_parse_ptype(item, rule, error);
 		break;
 	default:
 		return rte_flow_error_set(error, ENOTSUP,
@@ -1292,7 +1431,12 @@ is_tunnel_packet(enum rte_flow_item_type type)
 	if (type == RTE_FLOW_ITEM_TYPE_VXLAN_GPE ||
 	    type == RTE_FLOW_ITEM_TYPE_VXLAN ||
 	    type == RTE_FLOW_ITEM_TYPE_NVGRE ||
-	    type == RTE_FLOW_ITEM_TYPE_GENEVE)
+	    type == RTE_FLOW_ITEM_TYPE_GENEVE ||
+	    /*
+	     * Here treat PTYPE as tunnel type because driver only support PTYPE_TUNNEL,
+	     * other PTYPE will return error in hns3_parse_ptype() later.
+	     */
+	    type == RTE_FLOW_ITEM_TYPE_PTYPE)
 		return true;
 	return false;
 }
@@ -1362,6 +1506,10 @@ hns3_parse_fdir_filter(struct rte_eth_dev *dev,
 				return ret;
 		}
 	}
+
+	ret = hns3_check_tuple(dev, rule, error);
+	if (ret)
+		return ret;
 
 	return hns3_handle_actions(dev, actions, rule, error);
 }

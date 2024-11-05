@@ -30,7 +30,7 @@ Compiling the Application
 
 To compile the sample application see :doc:`compiling`.
 
-The application is located in the ``l2fwd-crypt`` sub-directory.
+The application is located in the ``l2fwd-crypto`` sub-directory.
 
 Running the Application
 -----------------------
@@ -56,7 +56,7 @@ where,
 
 *   p PORTMASK: A hexadecimal bitmask of the ports to configure. (Default is all the ports.)
 
-*   q NQ: A number of queues (=ports) per lcore. (Default is 1.)
+*   q NQ: Maximum number of queues per lcore (default is 1)
 
 *   s: manage all ports from a single core.
 

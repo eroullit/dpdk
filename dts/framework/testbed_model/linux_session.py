@@ -15,7 +15,7 @@ from typing import TypedDict, Union
 
 from typing_extensions import NotRequired
 
-from framework.exception import RemoteCommandExecutionError
+from framework.exception import ConfigurationError, RemoteCommandExecutionError
 from framework.utils import expand_range
 
 from .cpu import LogicalCore
@@ -84,28 +84,28 @@ class LinuxSession(PosixSession):
         """Overrides :meth:`~.os_session.OSSession.get_dpdk_file_prefix`."""
         return dpdk_prefix
 
-    def setup_hugepages(self, hugepage_count: int, force_first_numa: bool) -> None:
+    def setup_hugepages(self, number_of: int, hugepage_size: int, force_first_numa: bool) -> None:
         """Overrides :meth:`~.os_session.OSSession.setup_hugepages`."""
         self._logger.info("Getting Hugepage information.")
-        hugepage_size = self._get_hugepage_size()
-        hugepages_total = self._get_hugepages_total()
+        hugepages_total = self._get_hugepages_total(hugepage_size)
+        if (
+            f"hugepages-{hugepage_size}kB"
+            not in self.send_command("ls /sys/kernel/mm/hugepages").stdout
+        ):
+            raise ConfigurationError("hugepage size not supported by operating system")
         self._numa_nodes = self._get_numa_nodes()
 
-        if force_first_numa or hugepages_total != hugepage_count:
+        if force_first_numa or hugepages_total < number_of:
             # when forcing numa, we need to clear existing hugepages regardless
             # of size, so they can be moved to the first numa node
-            self._configure_huge_pages(hugepage_count, hugepage_size, force_first_numa)
+            self._configure_huge_pages(number_of, hugepage_size, force_first_numa)
         else:
             self._logger.info("Hugepages already configured.")
         self._mount_huge_pages()
 
-    def _get_hugepage_size(self) -> int:
-        hugepage_size = self.send_command("awk '/Hugepagesize/ {print $2}' /proc/meminfo").stdout
-        return int(hugepage_size)
-
-    def _get_hugepages_total(self) -> int:
+    def _get_hugepages_total(self, hugepage_size: int) -> int:
         hugepages_total = self.send_command(
-            "awk '/HugePages_Total/ { print $2 }' /proc/meminfo"
+            f"cat /sys/kernel/mm/hugepages/hugepages-{hugepage_size}kB/nr_hugepages"
         ).stdout
         return int(hugepages_total)
 
@@ -123,12 +123,12 @@ class LinuxSession(PosixSession):
     def _mount_huge_pages(self) -> None:
         self._logger.info("Re-mounting Hugepages.")
         hugapge_fs_cmd = "awk '/hugetlbfs/ { print $2 }' /proc/mounts"
-        self.send_command(f"umount $({hugapge_fs_cmd})")
+        self.send_command(f"umount $({hugapge_fs_cmd})", privileged=True)
         result = self.send_command(hugapge_fs_cmd)
         if result.stdout == "":
             remote_mount_path = "/mnt/huge"
-            self.send_command(f"mkdir -p {remote_mount_path}")
-            self.send_command(f"mount -t hugetlbfs nodev {remote_mount_path}")
+            self.send_command(f"mkdir -p {remote_mount_path}", privileged=True)
+            self.send_command(f"mount -t hugetlbfs nodev {remote_mount_path}", privileged=True)
 
     def _supports_numa(self) -> bool:
         # the system supports numa if self._numa_nodes is non-empty and there are more
@@ -136,7 +136,7 @@ class LinuxSession(PosixSession):
         # there's no reason to do any numa specific configuration)
         return len(self._numa_nodes) > 1
 
-    def _configure_huge_pages(self, amount: int, size: int, force_first_numa: bool) -> None:
+    def _configure_huge_pages(self, number_of: int, size: int, force_first_numa: bool) -> None:
         self._logger.info("Configuring Hugepages.")
         hugepage_config_path = f"/sys/kernel/mm/hugepages/hugepages-{size}kB/nr_hugepages"
         if force_first_numa and self._supports_numa():
@@ -147,7 +147,7 @@ class LinuxSession(PosixSession):
                 f"/hugepages-{size}kB/nr_hugepages"
             )
 
-        self.send_command(f"echo {amount} | tee {hugepage_config_path}", privileged=True)
+        self.send_command(f"echo {number_of} | tee {hugepage_config_path}", privileged=True)
 
     def update_ports(self, ports: list[Port]) -> None:
         """Overrides :meth:`~.os_session.OSSession.update_ports`."""
@@ -194,6 +194,14 @@ class LinuxSession(PosixSession):
         command = "del" if delete else "add"
         self.send_command(
             f"ip address {command} {address} dev {port.logical_name}",
+            privileged=True,
+            verify=True,
+        )
+
+    def configure_port_mtu(self, mtu: int, port: Port) -> None:
+        """Overrides :meth:`~.os_session.OSSession.configure_port_mtu`."""
+        self.send_command(
+            f"ip link set dev {port.logical_name} mtu {mtu}",
             privileged=True,
             verify=True,
         )

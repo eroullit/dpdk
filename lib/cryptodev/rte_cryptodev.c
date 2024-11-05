@@ -97,7 +97,8 @@ crypto_cipher_algorithm_strings[] = {
 	[RTE_CRYPTO_CIPHER_SM4_CBC]	= "sm4-cbc",
 	[RTE_CRYPTO_CIPHER_SM4_CTR]	= "sm4-ctr",
 	[RTE_CRYPTO_CIPHER_SM4_CFB]	= "sm4-cfb",
-	[RTE_CRYPTO_CIPHER_SM4_OFB]	= "sm4-ofb"
+	[RTE_CRYPTO_CIPHER_SM4_OFB]	= "sm4-ofb",
+	[RTE_CRYPTO_CIPHER_SM4_XTS]	= "sm4-xts"
 };
 
 /**
@@ -624,6 +625,22 @@ rte_cryptodev_asym_xform_capability_check_hash(
 
 	rte_cryptodev_trace_asym_xform_capability_check_hash(
 		capability->hash_algos, hash, ret);
+
+	return ret;
+}
+
+int
+rte_cryptodev_asym_xform_capability_check_opcap(
+	const struct rte_cryptodev_asymmetric_xform_capability *capability,
+	enum rte_crypto_asym_op_type op_type, uint8_t cap)
+{
+	int ret = 0;
+
+	if (!(capability->op_types & (1 << op_type)))
+		return ret;
+
+	if (capability->op_capa[op_type] & (1 << cap))
+		ret = 1;
 
 	return ret;
 }
@@ -1223,6 +1240,30 @@ rte_cryptodev_queue_pairs_config(struct rte_cryptodev *dev, uint16_t nb_qpairs,
 }
 
 int
+rte_cryptodev_queue_pair_reset(uint8_t dev_id, uint16_t queue_pair_id,
+		const struct rte_cryptodev_qp_conf *qp_conf, int socket_id)
+{
+	struct rte_cryptodev *dev;
+
+	if (!rte_cryptodev_is_valid_dev(dev_id)) {
+		CDEV_LOG_ERR("Invalid dev_id=%" PRIu8, dev_id);
+		return -EINVAL;
+	}
+
+	dev = &rte_crypto_devices[dev_id];
+	if (queue_pair_id >= dev->data->nb_queue_pairs) {
+		CDEV_LOG_ERR("Invalid queue_pair_id=%d", queue_pair_id);
+		return -EINVAL;
+	}
+
+	if (*dev->dev_ops->queue_pair_reset == NULL)
+		return -ENOTSUP;
+
+	rte_cryptodev_trace_queue_pair_reset(dev_id, queue_pair_id, qp_conf, socket_id);
+	return (*dev->dev_ops->queue_pair_reset)(dev, queue_pair_id, qp_conf, socket_id);
+}
+
+int
 rte_cryptodev_configure(uint8_t dev_id, struct rte_cryptodev_config *config)
 {
 	struct rte_cryptodev *dev;
@@ -1491,6 +1532,10 @@ rte_cryptodev_add_enq_callback(uint8_t dev_id,
 			       rte_cryptodev_callback_fn cb_fn,
 			       void *cb_arg)
 {
+#ifndef RTE_CRYPTO_CALLBACKS
+	rte_errno = ENOTSUP;
+	return NULL;
+#endif
 	struct rte_cryptodev *dev;
 	struct rte_cryptodev_cb_rcu *list;
 	struct rte_cryptodev_cb *cb, *tail;
@@ -1556,6 +1601,9 @@ rte_cryptodev_remove_enq_callback(uint8_t dev_id,
 				  uint16_t qp_id,
 				  struct rte_cryptodev_cb *cb)
 {
+#ifndef RTE_CRYPTO_CALLBACKS
+	return -ENOTSUP;
+#endif
 	struct rte_cryptodev *dev;
 	RTE_ATOMIC(struct rte_cryptodev_cb *) *prev_cb;
 	struct rte_cryptodev_cb *curr_cb;
@@ -1630,6 +1678,10 @@ rte_cryptodev_add_deq_callback(uint8_t dev_id,
 			       rte_cryptodev_callback_fn cb_fn,
 			       void *cb_arg)
 {
+#ifndef RTE_CRYPTO_CALLBACKS
+	rte_errno = ENOTSUP;
+	return NULL;
+#endif
 	struct rte_cryptodev *dev;
 	struct rte_cryptodev_cb_rcu *list;
 	struct rte_cryptodev_cb *cb, *tail;
@@ -1696,6 +1748,9 @@ rte_cryptodev_remove_deq_callback(uint8_t dev_id,
 				  uint16_t qp_id,
 				  struct rte_cryptodev_cb *cb)
 {
+#ifndef RTE_CRYPTO_CALLBACKS
+	return -ENOTSUP;
+#endif
 	struct rte_cryptodev *dev;
 	RTE_ATOMIC(struct rte_cryptodev_cb *) *prev_cb;
 	struct rte_cryptodev_cb *curr_cb;
@@ -2573,7 +2628,7 @@ rte_crypto_op_init(struct rte_mempool *mempool,
 
 	__rte_crypto_op_reset(op, type);
 
-	op->phys_addr = rte_mem_virt2iova(_op_data);
+	op->phys_addr = rte_mempool_virt2iova(_op_data);
 	op->mempool = mempool;
 }
 

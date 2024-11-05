@@ -16,7 +16,7 @@ the :doc:`types <framework.config.types>` module.
 
 The test run configuration has two main sections:
 
-    * The :class:`ExecutionConfiguration` which defines what tests are going to be run
+    * The :class:`TestRunConfiguration` which defines what tests are going to be run
       and how DPDK will be built. It also references the testbed where these tests and DPDK
       are going to be run,
     * The nodes of the testbed are defined in the other section,
@@ -35,25 +35,25 @@ All of them use slots and are frozen:
 
 import json
 import os.path
-import pathlib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import auto, unique
+from pathlib import Path
 from typing import Union
 
-import warlock  # type: ignore[import]
+import warlock  # type: ignore[import-untyped]
 import yaml
+from typing_extensions import Self
 
 from framework.config.types import (
     BuildTargetConfigDict,
     ConfigurationDict,
-    ExecutionConfigDict,
     NodeConfigDict,
     PortConfigDict,
+    TestRunConfigDict,
     TestSuiteConfigDict,
     TrafficGeneratorConfigDict,
 )
 from framework.exception import ConfigurationError
-from framework.settings import SETTINGS
 from framework.utils import StrEnum
 
 
@@ -128,11 +128,11 @@ class HugepageConfiguration:
     r"""The hugepage configuration of :class:`~framework.testbed_model.node.Node`\s.
 
     Attributes:
-        amount: The number of hugepages.
+        number_of: The number of hugepages to allocate.
         force_first_numa: If :data:`True`, the hugepages will be configured on the first NUMA node.
     """
 
-    amount: int
+    number_of: int
     force_first_numa: bool
 
 
@@ -157,8 +157,8 @@ class PortConfig:
     peer_node: str
     peer_pci: str
 
-    @staticmethod
-    def from_dict(node: str, d: PortConfigDict) -> "PortConfig":
+    @classmethod
+    def from_dict(cls, node: str, d: PortConfigDict) -> Self:
         """A convenience method that creates the object from fewer inputs.
 
         Args:
@@ -168,7 +168,7 @@ class PortConfig:
         Returns:
             The port configuration instance.
         """
-        return PortConfig(node=node, **d)
+        return cls(node=node, **d)
 
 
 @dataclass(slots=True, frozen=True)
@@ -184,7 +184,7 @@ class TrafficGeneratorConfig:
     traffic_generator_type: TrafficGeneratorType
 
     @staticmethod
-    def from_dict(d: TrafficGeneratorConfigDict) -> "ScapyTrafficGeneratorConfig":
+    def from_dict(d: TrafficGeneratorConfigDict) -> "TrafficGeneratorConfig":
         """A convenience method that produces traffic generator config of the proper type.
 
         Args:
@@ -256,8 +256,8 @@ class NodeConfiguration:
             Either an SUT or TG configuration instance.
         """
         hugepage_config = None
-        if "hugepages" in d:
-            hugepage_config_dict = d["hugepages"]
+        if "hugepages_2mb" in d:
+            hugepage_config_dict = d["hugepages_2mb"]
             if "force_first_numa" not in hugepage_config_dict:
                 hugepage_config_dict["force_first_numa"] = False
             hugepage_config = HugepageConfiguration(**hugepage_config_dict)
@@ -313,7 +313,7 @@ class TGNodeConfiguration(NodeConfiguration):
         traffic_generator: The configuration of the traffic generator present on the TG node.
     """
 
-    traffic_generator: ScapyTrafficGeneratorConfig
+    traffic_generator: TrafficGeneratorConfig
 
 
 @dataclass(slots=True, frozen=True)
@@ -357,8 +357,8 @@ class BuildTargetConfiguration:
     compiler_wrapper: str
     name: str
 
-    @staticmethod
-    def from_dict(d: BuildTargetConfigDict) -> "BuildTargetConfiguration":
+    @classmethod
+    def from_dict(cls, d: BuildTargetConfigDict) -> Self:
         r"""A convenience method that processes the inputs before creating an instance.
 
         `arch`, `os`, `cpu` and `compiler` are converted to :class:`Enum`\s and
@@ -370,7 +370,7 @@ class BuildTargetConfiguration:
         Returns:
             The build target configuration instance.
         """
-        return BuildTargetConfiguration(
+        return cls(
             arch=Architecture(d["arch"]),
             os=OS(d["os"]),
             cpu=CPUType(d["cpu"]),
@@ -408,10 +408,11 @@ class TestSuiteConfig:
     test_suite: str
     test_cases: list[str]
 
-    @staticmethod
+    @classmethod
     def from_dict(
+        cls,
         entry: str | TestSuiteConfigDict,
-    ) -> "TestSuiteConfig":
+    ) -> Self:
         """Create an instance from two different types.
 
         Args:
@@ -421,16 +422,16 @@ class TestSuiteConfig:
             The test suite configuration instance.
         """
         if isinstance(entry, str):
-            return TestSuiteConfig(test_suite=entry, test_cases=[])
+            return cls(test_suite=entry, test_cases=[])
         elif isinstance(entry, dict):
-            return TestSuiteConfig(test_suite=entry["suite"], test_cases=entry["cases"])
+            return cls(test_suite=entry["suite"], test_cases=entry["cases"])
         else:
             raise TypeError(f"{type(entry)} is not valid for a test suite config.")
 
 
 @dataclass(slots=True, frozen=True)
-class ExecutionConfiguration:
-    """The configuration of an execution.
+class TestRunConfiguration:
+    """The configuration of a test run.
 
     The configuration contains testbed information, what tests to execute
     and with what DPDK build.
@@ -441,9 +442,10 @@ class ExecutionConfiguration:
         func: Whether to run functional tests.
         skip_smoke_tests: Whether to skip smoke tests.
         test_suites: The names of test suites and/or test cases to execute.
-        system_under_test_node: The SUT node to use in this execution.
-        traffic_generator_node: The TG node to use in this execution.
+        system_under_test_node: The SUT node to use in this test run.
+        traffic_generator_node: The TG node to use in this test run.
         vdevs: The names of virtual devices to test.
+        random_seed: The seed to use for pseudo-random generation.
     """
 
     build_targets: list[BuildTargetConfiguration]
@@ -454,12 +456,14 @@ class ExecutionConfiguration:
     system_under_test_node: SutNodeConfiguration
     traffic_generator_node: TGNodeConfiguration
     vdevs: list[str]
+    random_seed: int | None
 
-    @staticmethod
+    @classmethod
     def from_dict(
-        d: ExecutionConfigDict,
-        node_map: dict[str, Union[SutNodeConfiguration | TGNodeConfiguration]],
-    ) -> "ExecutionConfiguration":
+        cls,
+        d: TestRunConfigDict,
+        node_map: dict[str, SutNodeConfiguration | TGNodeConfiguration],
+    ) -> Self:
         """A convenience method that processes the inputs before creating an instance.
 
         The build target and the test suite config are transformed into their respective objects.
@@ -467,11 +471,11 @@ class ExecutionConfiguration:
         are just stored.
 
         Args:
-            d: The configuration dictionary.
+            d: The test run configuration dictionary.
             node_map: A dictionary mapping node names to their config objects.
 
         Returns:
-            The execution configuration instance.
+            The test run configuration instance.
         """
         build_targets: list[BuildTargetConfiguration] = list(
             map(BuildTargetConfiguration.from_dict, d["build_targets"])
@@ -479,14 +483,14 @@ class ExecutionConfiguration:
         test_suites: list[TestSuiteConfig] = list(map(TestSuiteConfig.from_dict, d["test_suites"]))
         sut_name = d["system_under_test_node"]["node_name"]
         skip_smoke_tests = d.get("skip_smoke_tests", False)
-        assert sut_name in node_map, f"Unknown SUT {sut_name} in execution {d}"
+        assert sut_name in node_map, f"Unknown SUT {sut_name} in test run {d}"
         system_under_test_node = node_map[sut_name]
         assert isinstance(
             system_under_test_node, SutNodeConfiguration
         ), f"Invalid SUT configuration {system_under_test_node}"
 
         tg_name = d["traffic_generator_node"]
-        assert tg_name in node_map, f"Unknown TG {tg_name} in execution {d}"
+        assert tg_name in node_map, f"Unknown TG {tg_name} in test run {d}"
         traffic_generator_node = node_map[tg_name]
         assert isinstance(
             traffic_generator_node, TGNodeConfiguration
@@ -495,7 +499,8 @@ class ExecutionConfiguration:
         vdevs = (
             d["system_under_test_node"]["vdevs"] if "vdevs" in d["system_under_test_node"] else []
         )
-        return ExecutionConfiguration(
+        random_seed = d.get("random_seed", None)
+        return cls(
             build_targets=build_targets,
             perf=d["perf"],
             func=d["func"],
@@ -504,7 +509,30 @@ class ExecutionConfiguration:
             system_under_test_node=system_under_test_node,
             traffic_generator_node=traffic_generator_node,
             vdevs=vdevs,
+            random_seed=random_seed,
         )
+
+    def copy_and_modify(self, **kwargs) -> Self:
+        """Create a shallow copy with any of the fields modified.
+
+        The only new data are those passed to this method.
+        The rest are copied from the object's fields calling the method.
+
+        Args:
+            **kwargs: The names and types of keyword arguments are defined
+                by the fields of the :class:`TestRunConfiguration` class.
+
+        Returns:
+            The copied and modified test run configuration.
+        """
+        new_config = {}
+        for field in fields(self):
+            if field.name in kwargs:
+                new_config[field.name] = kwargs[field.name]
+            else:
+                new_config[field.name] = getattr(self, field.name)
+
+        return type(self)(**new_config)
 
 
 @dataclass(slots=True, frozen=True)
@@ -512,16 +540,16 @@ class Configuration:
     """DTS testbed and test configuration.
 
     The node configuration is not stored in this object. Rather, all used node configurations
-    are stored inside the execution configuration where the nodes are actually used.
+    are stored inside the test run configuration where the nodes are actually used.
 
     Attributes:
-        executions: Execution configurations.
+        test_runs: Test run configurations.
     """
 
-    executions: list[ExecutionConfiguration]
+    test_runs: list[TestRunConfiguration]
 
-    @staticmethod
-    def from_dict(d: ConfigurationDict) -> "Configuration":
+    @classmethod
+    def from_dict(cls, d: ConfigurationDict) -> Self:
         """A convenience method that processes the inputs before creating an instance.
 
         Build target and test suite config are transformed into their respective objects.
@@ -534,7 +562,7 @@ class Configuration:
         Returns:
             The whole configuration instance.
         """
-        nodes: list[Union[SutNodeConfiguration | TGNodeConfiguration]] = list(
+        nodes: list[SutNodeConfiguration | TGNodeConfiguration] = list(
             map(NodeConfiguration.from_dict, d["nodes"])
         )
         assert len(nodes) > 0, "There must be a node to test"
@@ -542,14 +570,14 @@ class Configuration:
         node_map = {node.name: node for node in nodes}
         assert len(nodes) == len(node_map), "Duplicate node names are not allowed"
 
-        executions: list[ExecutionConfiguration] = list(
-            map(ExecutionConfiguration.from_dict, d["executions"], [node_map for _ in d])
+        test_runs: list[TestRunConfiguration] = list(
+            map(TestRunConfiguration.from_dict, d["test_runs"], [node_map for _ in d])
         )
 
-        return Configuration(executions=executions)
+        return cls(test_runs=test_runs)
 
 
-def load_config() -> Configuration:
+def load_config(config_file_path: Path) -> Configuration:
     """Load DTS test run configuration from a file.
 
     Load the YAML test run configuration file
@@ -559,13 +587,16 @@ def load_config() -> Configuration:
     The YAML test run configuration file is specified in the :option:`--config-file` command line
     argument or the :envvar:`DTS_CFG_FILE` environment variable.
 
+    Args:
+        config_file_path: The path to the YAML test run configuration file.
+
     Returns:
         The parsed test run configuration.
     """
-    with open(SETTINGS.config_file_path, "r") as f:
+    with open(config_file_path, "r") as f:
         config_data = yaml.safe_load(f)
 
-    schema_path = os.path.join(pathlib.Path(__file__).parent.resolve(), "conf_yaml_schema.json")
+    schema_path = os.path.join(Path(__file__).parent.resolve(), "conf_yaml_schema.json")
 
     with open(schema_path, "r") as f:
         schema = json.load(f)

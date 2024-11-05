@@ -2,6 +2,7 @@
 # Copyright(c) 2010-2014 Intel Corporation
 # Copyright(c) 2022-2023 PANTHEON.tech s.r.o.
 # Copyright(c) 2022-2023 University of New Hampshire
+# Copyright(c) 2024 Arm Limited
 
 """Base remote session.
 
@@ -9,18 +10,17 @@ This module contains the abstract base class for remote sessions and defines
 the structure of the result of a command execution.
 """
 
-
-import dataclasses
 from abc import ABC, abstractmethod
+from dataclasses import InitVar, dataclass, field
 from pathlib import PurePath
 
 from framework.config import NodeConfiguration
 from framework.exception import RemoteCommandExecutionError
-from framework.logger import DTSLOG
+from framework.logger import DTSLogger
 from framework.settings import SETTINGS
 
 
-@dataclasses.dataclass(slots=True, frozen=True)
+@dataclass(slots=True, frozen=True)
 class CommandResult:
     """The result of remote execution of a command.
 
@@ -34,9 +34,25 @@ class CommandResult:
 
     name: str
     command: str
-    stdout: str
-    stderr: str
+    init_stdout: InitVar[str]
+    init_stderr: InitVar[str]
     return_code: int
+    stdout: str = field(init=False)
+    stderr: str = field(init=False)
+
+    def __post_init__(self, init_stdout: str, init_stderr: str) -> None:
+        """Strip the whitespaces from stdout and stderr.
+
+        The generated __init__ method uses object.__setattr__() when the dataclass is frozen,
+        so that's what we use here as well.
+
+        In order to get access to dataclass fields in the __post_init__ method,
+        we have to type them as InitVars. These InitVars are included in the __init__ method's
+        signature, so we have to exclude the actual stdout and stderr fields
+        from the __init__ method's signature, so that we have the proper number of arguments.
+        """
+        object.__setattr__(self, "stdout", init_stdout.strip())
+        object.__setattr__(self, "stderr", init_stderr.strip())
 
     def __str__(self) -> str:
         """Format the command outputs."""
@@ -75,14 +91,14 @@ class RemoteSession(ABC):
     username: str
     password: str
     history: list[CommandResult]
-    _logger: DTSLOG
+    _logger: DTSLogger
     _node_config: NodeConfiguration
 
     def __init__(
         self,
         node_config: NodeConfiguration,
         session_name: str,
-        logger: DTSLOG,
+        logger: DTSLogger,
     ):
         """Connect to the node during initialization.
 
@@ -157,7 +173,7 @@ class RemoteSession(ABC):
             )
             self._logger.debug(f"stdout: '{result.stdout}'")
             self._logger.debug(f"stderr: '{result.stderr}'")
-            raise RemoteCommandExecutionError(command, result.return_code)
+            raise RemoteCommandExecutionError(command, result.stderr, result.return_code)
         self._logger.debug(f"Received from '{command}':\n{result}")
         self.history.append(result)
         return result
@@ -173,24 +189,6 @@ class RemoteSession(ABC):
 
             * SSHSessionDeadError if the session is not alive,
             * SSHTimeoutError if the command execution times out.
-        """
-
-    def close(self, force: bool = False) -> None:
-        """Close the remote session and free all used resources.
-
-        Args:
-            force: Force the closure of the connection. This may not clean up all resources.
-        """
-        self._logger.logger_exit()
-        self._close(force)
-
-    @abstractmethod
-    def _close(self, force: bool = False) -> None:
-        """Protocol specific steps needed to close the session properly.
-
-        Args:
-            force: Force the closure of the connection. This may not clean up all resources.
-                This doesn't have to be implemented in the overloaded method.
         """
 
     @abstractmethod
@@ -228,3 +226,7 @@ class RemoteSession(ABC):
             source_file: The file on the local filesystem.
             destination_file: A file or directory path on the remote Node.
         """
+
+    @abstractmethod
+    def close(self) -> None:
+        """Close the remote session and free all used resources."""

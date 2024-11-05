@@ -21,6 +21,7 @@
 #define NFP_FL_FEATS_QOS_PPS            RTE_BIT64(9)
 #define NFP_FL_FEATS_QOS_METER          RTE_BIT64(10)
 #define NFP_FL_FEATS_DECAP_V2           RTE_BIT64(11)
+#define NFP_FL_FEATS_FLOW_PARTIAL       RTE_BIT64(13)
 #define NFP_FL_FEATS_HOST_ACK           RTE_BIT64(31)
 
 /*
@@ -63,12 +64,14 @@ struct nfp_app_fw_flower {
 
 	/** Pointer to the PF vNIC */
 	struct nfp_net_hw *pf_hw;
+	struct rte_eth_dev *pf_ethdev;
 
 	/** Pointer to a mempool for the Ctrl vNIC */
 	struct rte_mempool *ctrl_pktmbuf_pool;
 
 	/** Pointer to the ctrl vNIC */
 	struct nfp_net_hw *ctrl_hw;
+	struct rte_eth_dev *ctrl_ethdev;
 
 	/** Ctrl vNIC Rx counter */
 	uint64_t ctrl_vnic_rx_count;
@@ -104,10 +107,10 @@ nfp_flower_support_decap_v2(const struct nfp_app_fw_flower *app_fw_flower)
 	return app_fw_flower->ext_features & NFP_FL_FEATS_DECAP_V2;
 }
 
-int nfp_init_app_fw_flower(struct nfp_pf_dev *pf_dev,
-		const struct nfp_dev_info *dev_info);
-int nfp_secondary_init_app_fw_flower(struct nfp_pf_dev *pf_dev);
-bool nfp_flower_pf_dispatch_pkts(struct nfp_net_hw *hw,
+int nfp_init_app_fw_flower(struct nfp_net_hw_priv *hw_priv);
+void nfp_uninit_app_fw_flower(struct nfp_net_hw_priv *hw_priv);
+int nfp_secondary_init_app_fw_flower(struct nfp_net_hw_priv *hw_priv);
+bool nfp_flower_pf_dispatch_pkts(struct nfp_net_rxq *rxq,
 		struct rte_mbuf *mbuf,
 		uint32_t port_id);
 uint16_t nfp_flower_pf_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,

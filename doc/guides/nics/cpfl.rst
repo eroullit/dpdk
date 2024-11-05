@@ -35,6 +35,10 @@ Here is the suggested matching list which has been tested and verified.
    +------------+------------------+
    |    23.11   |       1.0        |
    +------------+------------------+
+   |    24.07   |       1.4        |
+   +------------+------------------+
+   |    24.11   |       1.6        |
+   +------------+------------------+
 
 
 Configuration
@@ -149,6 +153,9 @@ Runtime Configuration
 
   Then the PMD will load json file for device ``ca:00.0``.
   The parameter is optional.
+
+  As CPFL PMD can run on both XEON host and IPU's compute complex,
+  the driver dynamically detects which system type it is running on by querying the hostname.
 
 Driver compilation and testing
 ------------------------------

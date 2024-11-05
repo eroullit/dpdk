@@ -226,6 +226,8 @@ eal_save_args(int argc, char **argv)
 		if (strcmp(argv[i], "--") == 0)
 			break;
 		eal_args[i] = strdup(argv[i]);
+		if (eal_args[i] == NULL)
+			goto error;
 	}
 	eal_args[i++] = NULL; /* always finish with NULL */
 
@@ -235,13 +237,31 @@ eal_save_args(int argc, char **argv)
 
 	eal_app_args = calloc(argc - i + 1, sizeof(*eal_args));
 	if (eal_app_args == NULL)
-		return -1;
+		goto error;
 
-	for (j = 0; i < argc; j++, i++)
+	for (j = 0; i < argc; j++, i++) {
 		eal_app_args[j] = strdup(argv[i]);
+		if (eal_app_args[j] == NULL)
+			goto error;
+	}
 	eal_app_args[j] = NULL;
 
 	return 0;
+
+error:
+	if (eal_app_args != NULL) {
+		i = 0;
+		while (eal_app_args[i] != NULL)
+			free(eal_app_args[i++]);
+		free(eal_app_args);
+		eal_app_args = NULL;
+	}
+	i = 0;
+	while (eal_args[i] != NULL)
+		free(eal_args[i++]);
+	free(eal_args);
+	eal_args = NULL;
+	return -1;
 }
 #endif
 
@@ -1667,7 +1687,7 @@ eal_parse_common_option(int opt, const char *optarg,
 		if (core_parsed) {
 			EAL_LOG(ERR, "Option -c is ignored, because (%s) is set!",
 				(core_parsed == LCORE_OPT_LST) ? "-l" :
-				(core_parsed == LCORE_OPT_MAP) ? "--lcore" :
+				(core_parsed == LCORE_OPT_MAP) ? "--lcores" :
 				"-c");
 			return -1;
 		}
@@ -1700,7 +1720,7 @@ eal_parse_common_option(int opt, const char *optarg,
 		if (core_parsed) {
 			EAL_LOG(ERR, "Option -l is ignored, because (%s) is set!",
 				(core_parsed == LCORE_OPT_MSK) ? "-c" :
-				(core_parsed == LCORE_OPT_MAP) ? "--lcore" :
+				(core_parsed == LCORE_OPT_MAP) ? "--lcores" :
 				"-l");
 			return -1;
 		}
@@ -1881,10 +1901,10 @@ eal_parse_common_option(int opt, const char *optarg,
 		}
 
 		if (core_parsed) {
-			EAL_LOG(ERR, "Option --lcore is ignored, because (%s) is set!",
+			EAL_LOG(ERR, "Option --lcores is ignored, because (%s) is set!",
 				(core_parsed == LCORE_OPT_LST) ? "-l" :
 				(core_parsed == LCORE_OPT_MSK) ? "-c" :
-				"--lcore");
+				"--lcores");
 			return -1;
 		}
 

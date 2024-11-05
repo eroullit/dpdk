@@ -264,7 +264,7 @@ int hn_vf_add(struct rte_eth_dev *dev, struct hn_data *hv)
 			goto exit;
 		}
 
-		ret = hn_vf_mtu_set(dev, dev->data->mtu);
+		ret = rte_eth_dev_set_mtu(port, dev->data->mtu);
 		if (ret) {
 			PMD_DRV_LOG(ERR, "Failed to set VF MTU");
 			goto exit;
@@ -466,7 +466,8 @@ int hn_vf_configure_locked(struct rte_eth_dev *dev,
 	return ret;
 }
 
-const uint32_t *hn_vf_supported_ptypes(struct rte_eth_dev *dev)
+const uint32_t *hn_vf_supported_ptypes(struct rte_eth_dev *dev,
+				       size_t *no_of_elements)
 {
 	struct hn_data *hv = dev->data->dev_private;
 	struct rte_eth_dev *vf_dev;
@@ -475,7 +476,8 @@ const uint32_t *hn_vf_supported_ptypes(struct rte_eth_dev *dev)
 	rte_rwlock_read_lock(&hv->vf_lock);
 	vf_dev = hn_get_vf_dev(hv);
 	if (vf_dev && vf_dev->dev_ops->dev_supported_ptypes_get)
-		ptypes = (*vf_dev->dev_ops->dev_supported_ptypes_get)(vf_dev);
+		ptypes = (*vf_dev->dev_ops->dev_supported_ptypes_get)(vf_dev,
+							      no_of_elements);
 	rte_rwlock_read_unlock(&hv->vf_lock);
 
 	return ptypes;
@@ -794,7 +796,7 @@ int hn_vf_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	rte_rwlock_read_lock(&hv->vf_lock);
 	vf_dev = hn_get_vf_dev(hv);
 	if (hv->vf_ctx.vf_vsc_switched && vf_dev)
-		ret = vf_dev->dev_ops->mtu_set(vf_dev, mtu);
+		ret = rte_eth_dev_set_mtu(vf_dev->data->port_id, mtu);
 	rte_rwlock_read_unlock(&hv->vf_lock);
 
 	return ret;

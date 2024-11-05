@@ -15,15 +15,20 @@ static int ice_hierarchy_commit(struct rte_eth_dev *dev,
 static int ice_tm_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	      uint32_t parent_node_id, uint32_t priority,
 	      uint32_t weight, uint32_t level_id,
-	      struct rte_tm_node_params *params,
+	      const struct rte_tm_node_params *params,
 	      struct rte_tm_error *error);
+static int ice_node_query(const struct rte_eth_dev *dev, uint32_t node_id,
+		uint32_t *parent_node_id, uint32_t *priority,
+		uint32_t *weight, uint32_t *level_id,
+		struct rte_tm_node_params *params,
+		struct rte_tm_error *error);
 static int ice_tm_node_delete(struct rte_eth_dev *dev, uint32_t node_id,
 			    struct rte_tm_error *error);
 static int ice_node_type_get(struct rte_eth_dev *dev, uint32_t node_id,
 		   int *is_leaf, struct rte_tm_error *error);
 static int ice_shaper_profile_add(struct rte_eth_dev *dev,
 			uint32_t shaper_profile_id,
-			struct rte_tm_shaper_params *profile,
+			const struct rte_tm_shaper_params *profile,
 			struct rte_tm_error *error);
 static int ice_shaper_profile_del(struct rte_eth_dev *dev,
 				   uint32_t shaper_profile_id,
@@ -35,6 +40,7 @@ const struct rte_tm_ops ice_tm_ops = {
 	.node_add = ice_tm_node_add,
 	.node_delete = ice_tm_node_delete,
 	.node_type_get = ice_node_type_get,
+	.node_query = ice_node_query,
 	.hierarchy_commit = ice_hierarchy_commit,
 };
 
@@ -82,7 +88,7 @@ ice_tm_conf_uninit(struct rte_eth_dev *dev)
 static int
 ice_node_param_check(struct ice_pf *pf, uint32_t node_id,
 		      uint32_t priority, uint32_t weight,
-		      struct rte_tm_node_params *params,
+		      const struct rte_tm_node_params *params,
 		      struct rte_tm_error *error)
 {
 	/* checked all the unsupported parameter */
@@ -219,6 +225,52 @@ ice_node_type_get(struct rte_eth_dev *dev, uint32_t node_id,
 	return 0;
 }
 
+static int
+ice_node_query(const struct rte_eth_dev *dev, uint32_t node_id,
+		uint32_t *parent_node_id, uint32_t *priority,
+		uint32_t *weight, uint32_t *level_id,
+		struct rte_tm_node_params *params,
+		struct rte_tm_error *error)
+{
+	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+	struct ice_tm_node *tm_node;
+
+	if (node_id == RTE_TM_NODE_ID_NULL) {
+		error->type = RTE_TM_ERROR_TYPE_NODE_ID;
+		error->message = "invalid node id";
+		return -EINVAL;
+	}
+
+	/* check if the node id exists */
+	tm_node = find_node(pf->tm_conf.root, node_id);
+	if (!tm_node) {
+		error->type = RTE_TM_ERROR_TYPE_NODE_ID;
+		error->message = "no such node";
+		return -EEXIST;
+	}
+
+	if (parent_node_id != NULL) {
+		if (tm_node->parent != NULL)
+			*parent_node_id = tm_node->parent->id;
+		else
+			*parent_node_id = RTE_TM_NODE_ID_NULL;
+	}
+
+	if (priority != NULL)
+		*priority = tm_node->priority;
+
+	if (weight != NULL)
+		*weight = tm_node->weight;
+
+	if (level_id != NULL)
+		*level_id = tm_node->level;
+
+	if (params != NULL)
+		*params = tm_node->params;
+
+	return 0;
+}
+
 static inline struct ice_tm_shaper_profile *
 ice_shaper_profile_search(struct rte_eth_dev *dev,
 			   uint32_t shaper_profile_id)
@@ -237,7 +289,7 @@ ice_shaper_profile_search(struct rte_eth_dev *dev,
 }
 
 static int
-ice_shaper_profile_param_check(struct rte_tm_shaper_params *profile,
+ice_shaper_profile_param_check(const struct rte_tm_shaper_params *profile,
 				struct rte_tm_error *error)
 {
 	/* min bucket size not supported */
@@ -265,7 +317,7 @@ ice_shaper_profile_param_check(struct rte_tm_shaper_params *profile,
 static int
 ice_shaper_profile_add(struct rte_eth_dev *dev,
 			uint32_t shaper_profile_id,
-			struct rte_tm_shaper_params *profile,
+			const struct rte_tm_shaper_params *profile,
 			struct rte_tm_error *error)
 {
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
@@ -337,7 +389,7 @@ static int
 ice_tm_node_add(struct rte_eth_dev *dev, uint32_t node_id,
 	      uint32_t parent_node_id, uint32_t priority,
 	      uint32_t weight, uint32_t level_id,
-	      struct rte_tm_node_params *params,
+	      const struct rte_tm_node_params *params,
 	      struct rte_tm_error *error)
 {
 	struct ice_pf *pf = ICE_DEV_PRIVATE_TO_PF(dev->data->dev_private);
@@ -592,11 +644,11 @@ static int ice_set_node_rate(struct ice_hw *hw,
 			     struct ice_tm_node *tm_node,
 			     struct ice_sched_node *sched_node)
 {
-	enum ice_status status;
 	bool reset = false;
 	uint32_t peak = 0;
 	uint32_t committed = 0;
 	uint32_t rate;
+	int status;
 
 	if (tm_node == NULL || tm_node->shaper_profile == NULL) {
 		reset = true;
@@ -615,10 +667,8 @@ static int ice_set_node_rate(struct ice_hw *hw,
 					   sched_node,
 					   ICE_MAX_BW,
 					   rate);
-	if (status) {
-		PMD_DRV_LOG(ERR, "Failed to set max bandwidth for node %u", tm_node->id);
+	if (status)
 		return -EINVAL;
-	}
 
 	if (reset || committed == 0)
 		rate = ICE_SCHED_DFLT_BW;
@@ -629,10 +679,8 @@ static int ice_set_node_rate(struct ice_hw *hw,
 					   sched_node,
 					   ICE_MIN_BW,
 					   rate);
-	if (status) {
-		PMD_DRV_LOG(ERR, "Failed to set min bandwidth for node %u", tm_node->id);
+	if (status)
 		return -EINVAL;
-	}
 
 	return 0;
 }
@@ -641,10 +689,9 @@ static int ice_cfg_hw_node(struct ice_hw *hw,
 			   struct ice_tm_node *tm_node,
 			   struct ice_sched_node *sched_node)
 {
-	enum ice_status status;
 	uint8_t priority;
 	uint16_t weight;
-	int ret;
+	int status, ret;
 
 	ret = ice_set_node_rate(hw, tm_node, sched_node);
 	if (ret) {

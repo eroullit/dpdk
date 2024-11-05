@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2023 PANTHEON.tech s.r.o.
 # Copyright(c) 2023 University of New Hampshire
+# Copyright(c) 2024 Arm Limited
 
 """OS-aware remote session.
 
@@ -21,30 +22,26 @@ Example:
     the :attr:`~.node.Node.main_session` translates that to ``rm -rf`` if the node's OS is Linux
     and other commands for other OSs. It also translates the path to match the underlying OS.
 """
-
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from ipaddress import IPv4Interface, IPv6Interface
 from pathlib import PurePath
-from typing import Type, TypeVar, Union
+from typing import Union
 
 from framework.config import Architecture, NodeConfiguration, NodeInfo
-from framework.logger import DTSLOG
+from framework.logger import DTSLogger
 from framework.remote_session import (
-    CommandResult,
     InteractiveRemoteSession,
-    InteractiveShell,
     RemoteSession,
     create_interactive_session,
     create_remote_session,
 )
+from framework.remote_session.remote_session import CommandResult
 from framework.settings import SETTINGS
 from framework.utils import MesonArgs
 
 from .cpu import LogicalCore
 from .port import Port
-
-InteractiveShellType = TypeVar("InteractiveShellType", bound=InteractiveShell)
 
 
 class OSSession(ABC):
@@ -62,15 +59,16 @@ class OSSession(ABC):
 
     _config: NodeConfiguration
     name: str
-    _logger: DTSLOG
+    _logger: DTSLogger
     remote_session: RemoteSession
     interactive_session: InteractiveRemoteSession
+    hugepage_size: int
 
     def __init__(
         self,
         node_config: NodeConfiguration,
         name: str,
-        logger: DTSLOG,
+        logger: DTSLogger,
     ):
         """Initialize the OS-aware session.
 
@@ -81,19 +79,12 @@ class OSSession(ABC):
             name: The name of the session.
             logger: The logger instance this session will use.
         """
+        self.hugepage_size = 2048
         self._config = node_config
         self.name = name
         self._logger = logger
         self.remote_session = create_remote_session(node_config, name, logger)
         self.interactive_session = create_interactive_session(node_config, logger)
-
-    def close(self, force: bool = False) -> None:
-        """Close the underlying remote session.
-
-        Args:
-            force: Force the closure of the connection.
-        """
-        self.remote_session.close(force)
 
     def is_alive(self) -> bool:
         """Check whether the underlying remote session is still responding."""
@@ -130,35 +121,9 @@ class OSSession(ABC):
 
         return self.remote_session.send_command(command, timeout, verify, env)
 
-    def create_interactive_shell(
-        self,
-        shell_cls: Type[InteractiveShellType],
-        timeout: float,
-        privileged: bool,
-        app_args: str,
-    ) -> InteractiveShellType:
-        """Factory for interactive session handlers.
-
-        Instantiate `shell_cls` according to the remote OS specifics.
-
-        Args:
-            shell_cls: The class of the shell.
-            timeout: Timeout for reading output from the SSH channel. If you are
-                reading from the buffer and don't receive any data within the timeout
-                it will throw an error.
-            privileged: Whether to run the shell with administrative privileges.
-            app_args: The arguments to be passed to the application.
-
-        Returns:
-            An instance of the desired interactive application shell.
-        """
-        return shell_cls(
-            self.interactive_session.session,
-            self._logger,
-            self._get_privileged_command if privileged else None,
-            app_args,
-            timeout,
-        )
+    def close(self) -> None:
+        """Close the underlying remote session."""
+        self.remote_session.close()
 
     @staticmethod
     @abstractmethod
@@ -346,15 +311,16 @@ class OSSession(ABC):
         """
 
     @abstractmethod
-    def setup_hugepages(self, hugepage_count: int, force_first_numa: bool) -> None:
+    def setup_hugepages(self, number_of: int, hugepage_size: int, force_first_numa: bool) -> None:
         """Configure hugepages on the node.
 
         Get the node's Hugepage Size, configure the specified count of hugepages
         if needed and mount the hugepages if needed.
 
         Args:
-            hugepage_count: Configure this many hugepages.
-            force_first_numa:  If :data:`True`, configure hugepages just on the first numa node.
+            number_of: Configure this many hugepages.
+            hugepage_size: Configure hugepages of this size.
+            force_first_numa:  If :data:`True`, configure just on the first numa node.
         """
 
     @abstractmethod
@@ -411,6 +377,15 @@ class OSSession(ABC):
             address: The address to configure.
             port: The port to configure.
             delete: If :data:`True`, remove the IP address, otherwise configure it.
+        """
+
+    @abstractmethod
+    def configure_port_mtu(self, mtu: int, port: Port) -> None:
+        """Configure `mtu` on `port`.
+
+        Args:
+            mtu: Desired MTU value.
+            port: Port to set `mtu` on.
         """
 
     @abstractmethod

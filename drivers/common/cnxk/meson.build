@@ -20,6 +20,7 @@ sources = files(
         'roc_cpt_debug.c',
         'roc_dev.c',
         'roc_dpi.c',
+        'roc_eswitch.c',
         'roc_hash.c',
         'roc_idev.c',
         'roc_irq.c',
@@ -89,6 +90,19 @@ sources += files('cnxk_telemetry_bphy.c',
                  'cnxk_telemetry_nix.c',
                  'cnxk_telemetry_sso.c',
 )
+
+if meson.is_cross_build()
+    soc_type = meson.get_external_property('platform', '')
+else
+    soc_type = platform
+endif
+if soc_type == 'cn9k'
+    dpdk_conf.set('ROC_PLATFORM_CN9K', 1)
+elif soc_type == 'cn10k'
+    dpdk_conf.set('ROC_PLATFORM_CN10K', 1)
+elif soc_type == 'cn20k'
+    dpdk_conf.set('ROC_PLATFORM_CN20K', 1)
+endif
 
 deps += ['bus_pci', 'net', 'telemetry']
 

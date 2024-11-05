@@ -14,6 +14,7 @@ subdirs = [
         'common/cnxk',    # depends on bus.
         'common/mlx5',    # depends on bus.
         'common/nfp',     # depends on bus.
+        'common/nitrox',  # depends on bus.
         'common/qat',     # depends on bus.
         'common/sfc_efx', # depends on bus.
         'mempool',        # depends on common and bus.
@@ -31,8 +32,8 @@ subdirs = [
 ]
 
 if meson.is_cross_build()
-    disable_drivers += ',' + meson.get_cross_property('disable_drivers', '')
-    enable_drivers += ',' + meson.get_cross_property('enable_drivers', '')
+    disable_drivers += ',' + meson.get_external_property('disable_drivers', '')
+    enable_drivers += ',' + meson.get_external_property('enable_drivers', '')
 endif
 
 # add cmdline disabled drivers and meson disabled drivers together
@@ -58,9 +59,12 @@ default_cflags = machine_args
 default_cflags += ['-DALLOW_EXPERIMENTAL_API']
 default_cflags += ['-DALLOW_INTERNAL_API']
 
-if cc.has_argument('-Wno-format-truncation')
-    default_cflags += '-Wno-format-truncation'
-endif
+warning_disable_cflags = ['-Wno-format-truncation', '-Wno-address-of-packed-member']
+foreach cflag:warning_disable_cflags
+    if cc.has_argument(cflag)
+        default_cflags += cflag
+    endif
+endforeach
 
 dpdk_drivers_build_dir = meson.current_build_dir()
 
@@ -93,7 +97,7 @@ foreach subpath:subdirs
         if skip_class
             drv_path = join_paths(class, '*')
             dpdk_drvs_disabled += drv_path
-            set_variable(drv_path.underscorify() + '_disable_reason', reason)
+            set_variable('drv_' + drv_path.underscorify() + '_disable_reason', reason)
             continue
         endif
     endif
@@ -199,7 +203,7 @@ foreach subpath:subdirs
             # component disable printout in those cases
             if reason != ''
                 dpdk_drvs_disabled += drv_path
-                set_variable(drv_path.underscorify() + '_disable_reason', reason)
+                set_variable('drv_' + drv_path.underscorify() + '_disable_reason', reason)
             endif
             continue
         endif
@@ -219,6 +223,7 @@ foreach subpath:subdirs
         if get_option('enable_driver_sdk')
             install_headers(driver_sdk_headers)
         endif
+        dpdk_chkinc_headers += driver_sdk_headers
 
         if headers.length() > 0
             dpdk_includes += include_directories(drv_path)
@@ -279,9 +284,6 @@ foreach subpath:subdirs
                 lk_deps += [def_file]
 
                 lk_args = ['-Wl,/def:' + def_file.full_path()]
-                if meson.version().version_compare('<0.54.0')
-                    lk_args += ['-Wl,/implib:drivers\\lib' + lib_name + '.dll.a']
-                endif
             else
                 mingw_map = custom_target(lib_name + '_mingw',
                         command: [map_to_win_cmd, '@INPUT@', '@OUTPUT@'],

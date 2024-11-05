@@ -6,8 +6,6 @@
 
 """The DTS executable."""
 
-import logging
-
 from framework import settings
 
 
@@ -21,12 +19,13 @@ def main() -> None:
     be modified before the settings module is imported anywhere else in the framework.
     """
     settings.SETTINGS = settings.get_settings()
-    from framework import dts
 
-    dts.run_all()
+    from framework.runner import DTSRunner
+
+    dts = DTSRunner()
+    dts.run()
 
 
 # Main program begins here
 if __name__ == "__main__":
-    logging.raiseExceptions = True
     main()

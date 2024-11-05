@@ -100,8 +100,8 @@ enum rte_flow_action_type dpaa2_supported_fs_action_type[] = {
 
 #ifndef __cplusplus
 static const struct rte_flow_item_eth dpaa2_flow_item_eth_mask = {
-	.hdr.dst_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
-	.hdr.src_addr.addr_bytes = "\xff\xff\xff\xff\xff\xff",
+	.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
+	.hdr.src_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
 	.hdr.ether_type = RTE_BE16(0xffff),
 };
 
@@ -117,12 +117,8 @@ static const struct rte_flow_item_ipv4 dpaa2_flow_item_ipv4_mask = {
 
 static const struct rte_flow_item_ipv6 dpaa2_flow_item_ipv6_mask = {
 	.hdr = {
-		.src_addr =
-			"\xff\xff\xff\xff\xff\xff\xff\xff"
-			"\xff\xff\xff\xff\xff\xff\xff\xff",
-		.dst_addr =
-			"\xff\xff\xff\xff\xff\xff\xff\xff"
-			"\xff\xff\xff\xff\xff\xff\xff\xff",
+		.src_addr = RTE_IPV6_MASK_FULL,
+		.dst_addr = RTE_IPV6_MASK_FULL,
 		.proto = 0xff
 	},
 };
@@ -236,7 +232,7 @@ static inline void dpaa2_prot_field_string(
 }
 
 static inline void dpaa2_flow_qos_table_extracts_log(
-	const struct dpaa2_dev_priv *priv)
+	const struct dpaa2_dev_priv *priv, FILE *f)
 {
 	int idx;
 	char string[32];
@@ -244,7 +240,7 @@ static inline void dpaa2_flow_qos_table_extracts_log(
 	if (!dpaa2_flow_control_log)
 		return;
 
-	printf("Setup QoS table: number of extracts: %d\r\n",
+	fprintf(f, "Setup QoS table: number of extracts: %d\r\n",
 			priv->extract.qos_key_extract.dpkg.num_extracts);
 	for (idx = 0; idx < priv->extract.qos_key_extract.dpkg.num_extracts;
 		idx++) {
@@ -253,15 +249,15 @@ static inline void dpaa2_flow_qos_table_extracts_log(
 			priv->extract.qos_key_extract.dpkg.extracts[idx]
 			.extract.from_hdr.field,
 			string);
-		printf("%s", string);
+		fprintf(f, "%s", string);
 		if ((idx + 1) < priv->extract.qos_key_extract.dpkg.num_extracts)
-			printf(" / ");
+			fprintf(f, " / ");
 	}
-	printf("\r\n");
+	fprintf(f, "\r\n");
 }
 
 static inline void dpaa2_flow_fs_table_extracts_log(
-	const struct dpaa2_dev_priv *priv, int tc_id)
+	const struct dpaa2_dev_priv *priv, int tc_id, FILE *f)
 {
 	int idx;
 	char string[32];
@@ -269,7 +265,7 @@ static inline void dpaa2_flow_fs_table_extracts_log(
 	if (!dpaa2_flow_control_log)
 		return;
 
-	printf("Setup FS table: number of extracts of TC[%d]: %d\r\n",
+	fprintf(f, "Setup FS table: number of extracts of TC[%d]: %d\r\n",
 			tc_id, priv->extract.tc_key_extract[tc_id]
 			.dpkg.num_extracts);
 	for (idx = 0; idx < priv->extract.tc_key_extract[tc_id]
@@ -279,16 +275,16 @@ static inline void dpaa2_flow_fs_table_extracts_log(
 			priv->extract.tc_key_extract[tc_id].dpkg.extracts[idx]
 			.extract.from_hdr.field,
 			string);
-		printf("%s", string);
+		fprintf(f, "%s", string);
 		if ((idx + 1) < priv->extract.tc_key_extract[tc_id]
 			.dpkg.num_extracts)
-			printf(" / ");
+			fprintf(f, " / ");
 	}
-	printf("\r\n");
+	fprintf(f, "\r\n");
 }
 
 static inline void dpaa2_flow_qos_entry_log(
-	const char *log_info, const struct rte_flow *flow, int qos_index)
+	const char *log_info, const struct rte_flow *flow, int qos_index, FILE *f)
 {
 	int idx;
 	uint8_t *key, *mask;
@@ -296,27 +292,27 @@ static inline void dpaa2_flow_qos_entry_log(
 	if (!dpaa2_flow_control_log)
 		return;
 
-	printf("\r\n%s QoS entry[%d] for TC[%d], extracts size is %d\r\n",
+	fprintf(f, "\r\n%s QoS entry[%d] for TC[%d], extracts size is %d\r\n",
 		log_info, qos_index, flow->tc_id, flow->qos_real_key_size);
 
 	key = (uint8_t *)(size_t)flow->qos_rule.key_iova;
 	mask = (uint8_t *)(size_t)flow->qos_rule.mask_iova;
 
-	printf("key:\r\n");
+	fprintf(f, "key:\r\n");
 	for (idx = 0; idx < flow->qos_real_key_size; idx++)
-		printf("%02x ", key[idx]);
+		fprintf(f, "%02x ", key[idx]);
 
-	printf("\r\nmask:\r\n");
+	fprintf(f, "\r\nmask:\r\n");
 	for (idx = 0; idx < flow->qos_real_key_size; idx++)
-		printf("%02x ", mask[idx]);
+		fprintf(f, "%02x ", mask[idx]);
 
-	printf("\r\n%s QoS ipsrc: %d, ipdst: %d\r\n", log_info,
+	fprintf(f, "\r\n%s QoS ipsrc: %d, ipdst: %d\r\n", log_info,
 		flow->ipaddr_rule.qos_ipsrc_offset,
 		flow->ipaddr_rule.qos_ipdst_offset);
 }
 
 static inline void dpaa2_flow_fs_entry_log(
-	const char *log_info, const struct rte_flow *flow)
+	const char *log_info, const struct rte_flow *flow, FILE *f)
 {
 	int idx;
 	uint8_t *key, *mask;
@@ -324,21 +320,21 @@ static inline void dpaa2_flow_fs_entry_log(
 	if (!dpaa2_flow_control_log)
 		return;
 
-	printf("\r\n%s FS/TC entry[%d] of TC[%d], extracts size is %d\r\n",
+	fprintf(f, "\r\n%s FS/TC entry[%d] of TC[%d], extracts size is %d\r\n",
 		log_info, flow->tc_index, flow->tc_id, flow->fs_real_key_size);
 
 	key = (uint8_t *)(size_t)flow->fs_rule.key_iova;
 	mask = (uint8_t *)(size_t)flow->fs_rule.mask_iova;
 
-	printf("key:\r\n");
+	fprintf(f, "key:\r\n");
 	for (idx = 0; idx < flow->fs_real_key_size; idx++)
-		printf("%02x ", key[idx]);
+		fprintf(f, "%02x ", key[idx]);
 
-	printf("\r\nmask:\r\n");
+	fprintf(f, "\r\nmask:\r\n");
 	for (idx = 0; idx < flow->fs_real_key_size; idx++)
-		printf("%02x ", mask[idx]);
+		fprintf(f, "%02x ", mask[idx]);
 
-	printf("\r\n%s FS ipsrc: %d, ipdst: %d\r\n", log_info,
+	fprintf(f, "\r\n%s FS ipsrc: %d, ipdst: %d\r\n", log_info,
 		flow->ipaddr_rule.fs_ipsrc_offset,
 		flow->ipaddr_rule.fs_ipdst_offset);
 }
@@ -1480,16 +1476,16 @@ dpaa2_configure_flow_generic_ip(
 		mask_ipv4->hdr.dst_addr)) {
 		flow->ipaddr_rule.ipaddr_type = FLOW_IPV4_ADDR;
 	} else if (mask_ipv6 &&
-		(memcmp((const char *)mask_ipv6->hdr.src_addr,
+		(memcmp(&mask_ipv6->hdr.src_addr,
 				zero_cmp, NH_FLD_IPV6_ADDR_SIZE) ||
-		memcmp((const char *)mask_ipv6->hdr.dst_addr,
+		memcmp(&mask_ipv6->hdr.dst_addr,
 				zero_cmp, NH_FLD_IPV6_ADDR_SIZE))) {
 		flow->ipaddr_rule.ipaddr_type = FLOW_IPV6_ADDR;
 	}
 
 	if ((mask_ipv4 && mask_ipv4->hdr.src_addr) ||
 		(mask_ipv6 &&
-			memcmp((const char *)mask_ipv6->hdr.src_addr,
+			memcmp(&mask_ipv6->hdr.src_addr,
 				zero_cmp, NH_FLD_IPV6_ADDR_SIZE))) {
 		index = dpaa2_flow_extract_search(
 				&priv->extract.qos_key_extract.dpkg,
@@ -1528,13 +1524,13 @@ dpaa2_configure_flow_generic_ip(
 		if (spec_ipv4)
 			key = &spec_ipv4->hdr.src_addr;
 		else
-			key = &spec_ipv6->hdr.src_addr[0];
+			key = &spec_ipv6->hdr.src_addr;
 		if (mask_ipv4) {
 			mask = &mask_ipv4->hdr.src_addr;
 			size = NH_FLD_IPV4_ADDR_SIZE;
 			prot = NET_PROT_IPV4;
 		} else {
-			mask = &mask_ipv6->hdr.src_addr[0];
+			mask = &mask_ipv6->hdr.src_addr;
 			size = NH_FLD_IPV6_ADDR_SIZE;
 			prot = NET_PROT_IPV6;
 		}
@@ -1571,7 +1567,7 @@ dpaa2_configure_flow_generic_ip(
 
 	if ((mask_ipv4 && mask_ipv4->hdr.dst_addr) ||
 		(mask_ipv6 &&
-			memcmp((const char *)mask_ipv6->hdr.dst_addr,
+			memcmp(&mask_ipv6->hdr.dst_addr,
 				zero_cmp, NH_FLD_IPV6_ADDR_SIZE))) {
 		index = dpaa2_flow_extract_search(
 				&priv->extract.qos_key_extract.dpkg,
@@ -1618,13 +1614,13 @@ dpaa2_configure_flow_generic_ip(
 		if (spec_ipv4)
 			key = &spec_ipv4->hdr.dst_addr;
 		else
-			key = spec_ipv6->hdr.dst_addr;
+			key = &spec_ipv6->hdr.dst_addr;
 		if (mask_ipv4) {
 			mask = &mask_ipv4->hdr.dst_addr;
 			size = NH_FLD_IPV4_ADDR_SIZE;
 			prot = NET_PROT_IPV4;
 		} else {
-			mask = &mask_ipv6->hdr.dst_addr[0];
+			mask = &mask_ipv6->hdr.dst_addr;
 			size = NH_FLD_IPV6_ADDR_SIZE;
 			prot = NET_PROT_IPV6;
 		}
@@ -3017,7 +3013,7 @@ dpaa2_flow_entry_update(
 		qos_index = curr->tc_id * priv->fs_entries +
 			curr->tc_index;
 
-		dpaa2_flow_qos_entry_log("Before update", curr, qos_index);
+		dpaa2_flow_qos_entry_log("Before update", curr, qos_index, stdout);
 
 		if (priv->num_rx_tc > 1) {
 			ret = dpni_remove_qos_entry(dpni, CMD_PRI_LOW,
@@ -3124,7 +3120,7 @@ dpaa2_flow_entry_update(
 
 		curr->qos_rule.key_size = FIXED_ENTRY_SIZE;
 
-		dpaa2_flow_qos_entry_log("Start update", curr, qos_index);
+		dpaa2_flow_qos_entry_log("Start update", curr, qos_index, stdout);
 
 		if (priv->num_rx_tc > 1) {
 			ret = dpni_add_qos_entry(dpni, CMD_PRI_LOW,
@@ -3142,7 +3138,7 @@ dpaa2_flow_entry_update(
 			continue;
 		}
 
-		dpaa2_flow_fs_entry_log("Before update", curr);
+		dpaa2_flow_fs_entry_log("Before update", curr, stdout);
 		extend = -1;
 
 		ret = dpni_remove_fs_entry(dpni, CMD_PRI_LOW,
@@ -3237,7 +3233,7 @@ dpaa2_flow_entry_update(
 			curr->fs_real_key_size += extend;
 		curr->fs_rule.key_size = FIXED_ENTRY_SIZE;
 
-		dpaa2_flow_fs_entry_log("Start update", curr);
+		dpaa2_flow_fs_entry_log("Start update", curr, stdout);
 
 		ret = dpni_add_fs_entry(dpni, CMD_PRI_LOW,
 				priv->token, curr->tc_id, curr->tc_index,
@@ -3360,7 +3356,7 @@ dpaa2_flow_verify_action(
 				rxq = priv->rx_vq[rss_conf->queue[i]];
 				if (rxq->tc_index != attr->group) {
 					DPAA2_PMD_ERR(
-						"Queue/Group combination are not supported\n");
+						"Queue/Group combination are not supported");
 					return -ENOTSUP;
 				}
 			}
@@ -3541,7 +3537,8 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 
 			/* Configure FS table first*/
 			if (is_keycfg_configured & DPAA2_FS_TABLE_RECONFIGURE) {
-				dpaa2_flow_fs_table_extracts_log(priv, flow->tc_id);
+				dpaa2_flow_fs_table_extracts_log(priv,
+							flow->tc_id, stdout);
 				if (dpkg_prepare_key_cfg(
 				&priv->extract.tc_key_extract[flow->tc_id].dpkg,
 				(uint8_t *)(size_t)priv->extract
@@ -3580,7 +3577,7 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 
 			/* Configure QoS table then.*/
 			if (is_keycfg_configured & DPAA2_QOS_TABLE_RECONFIGURE) {
-				dpaa2_flow_qos_table_extracts_log(priv);
+				dpaa2_flow_qos_table_extracts_log(priv, stdout);
 				if (dpkg_prepare_key_cfg(
 					&priv->extract.qos_key_extract.dpkg,
 					(uint8_t *)(size_t)priv->extract.qos_extract_param) < 0) {
@@ -3601,7 +3598,7 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 						priv->token, &qos_cfg);
 					if (ret < 0) {
 						DPAA2_PMD_ERR(
-						"RSS QoS table can not be configured(%d)\n",
+						"RSS QoS table can not be configured(%d)",
 							ret);
 						return -1;
 					}
@@ -3646,7 +3643,8 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 				}
 				flow->qos_rule.key_size = FIXED_ENTRY_SIZE;
 
-				dpaa2_flow_qos_entry_log("Start add", flow, qos_index);
+				dpaa2_flow_qos_entry_log("Start add", flow,
+							qos_index, stdout);
 
 				ret = dpni_add_qos_entry(dpni, CMD_PRI_LOW,
 						priv->token, &flow->qos_rule,
@@ -3697,7 +3695,7 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 
 			flow->fs_rule.key_size = FIXED_ENTRY_SIZE;
 
-			dpaa2_flow_fs_entry_log("Start add", flow);
+			dpaa2_flow_fs_entry_log("Start add", flow, stdout);
 
 			ret = dpni_add_fs_entry(dpni, CMD_PRI_LOW, priv->token,
 						flow->tc_id, flow->tc_index,
@@ -3718,14 +3716,14 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 					&priv->extract.tc_key_extract[flow->tc_id].dpkg);
 			if (ret < 0) {
 				DPAA2_PMD_ERR(
-				"unable to set flow distribution.please check queue config\n");
+				"unable to set flow distribution.please check queue config");
 				return ret;
 			}
 
 			/* Allocate DMA'ble memory to write the rules */
 			param = (size_t)rte_malloc(NULL, 256, 64);
 			if (!param) {
-				DPAA2_PMD_ERR("Memory allocation failure\n");
+				DPAA2_PMD_ERR("Memory allocation failure");
 				return -1;
 			}
 
@@ -3747,7 +3745,7 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 						 priv->token, &tc_cfg);
 			if (ret < 0) {
 				DPAA2_PMD_ERR(
-					"RSS TC table cannot be configured: %d\n",
+					"RSS TC table cannot be configured: %d",
 					ret);
 				rte_free((void *)param);
 				return -1;
@@ -3772,7 +3770,7 @@ dpaa2_generic_flow_set(struct rte_flow *flow,
 							 priv->token, &qos_cfg);
 				if (ret < 0) {
 					DPAA2_PMD_ERR(
-					"RSS QoS dist can't be configured-%d\n",
+					"RSS QoS dist can't be configured-%d",
 					ret);
 					return -1;
 				}
@@ -3841,20 +3839,20 @@ dpaa2_dev_verify_attr(struct dpni_attr *dpni_attr,
 	int ret = 0;
 
 	if (unlikely(attr->group >= dpni_attr->num_rx_tcs)) {
-		DPAA2_PMD_ERR("Priority group is out of range\n");
+		DPAA2_PMD_ERR("Priority group is out of range");
 		ret = -ENOTSUP;
 	}
 	if (unlikely(attr->priority >= dpni_attr->fs_entries)) {
-		DPAA2_PMD_ERR("Priority within the group is out of range\n");
+		DPAA2_PMD_ERR("Priority within the group is out of range");
 		ret = -ENOTSUP;
 	}
 	if (unlikely(attr->egress)) {
 		DPAA2_PMD_ERR(
-			"Flow configuration is not supported on egress side\n");
+			"Flow configuration is not supported on egress side");
 		ret = -ENOTSUP;
 	}
 	if (unlikely(!attr->ingress)) {
-		DPAA2_PMD_ERR("Ingress flag must be configured\n");
+		DPAA2_PMD_ERR("Ingress flag must be configured");
 		ret = -EINVAL;
 	}
 	return ret;
@@ -3933,7 +3931,7 @@ int dpaa2_flow_validate(struct rte_eth_dev *dev,
 	ret = dpni_get_attributes(dpni, CMD_PRI_LOW, token, &dpni_attr);
 	if (ret < 0) {
 		DPAA2_PMD_ERR(
-			"Failure to get dpni@%p attribute, err code  %d\n",
+			"Failure to get dpni@%p attribute, err code  %d",
 			dpni, ret);
 		rte_flow_error_set(error, EPERM,
 			   RTE_FLOW_ERROR_TYPE_ATTR,
@@ -3945,7 +3943,7 @@ int dpaa2_flow_validate(struct rte_eth_dev *dev,
 	ret = dpaa2_dev_verify_attr(&dpni_attr, flow_attr);
 	if (ret < 0) {
 		DPAA2_PMD_ERR(
-			"Invalid attributes are given\n");
+			"Invalid attributes are given");
 		rte_flow_error_set(error, EPERM,
 			   RTE_FLOW_ERROR_TYPE_ATTR,
 			   flow_attr, "invalid");
@@ -3955,7 +3953,7 @@ int dpaa2_flow_validate(struct rte_eth_dev *dev,
 	ret = dpaa2_dev_verify_patterns(pattern);
 	if (ret < 0) {
 		DPAA2_PMD_ERR(
-			"Invalid pattern list is given\n");
+			"Invalid pattern list is given");
 		rte_flow_error_set(error, EPERM,
 			   RTE_FLOW_ERROR_TYPE_ITEM,
 			   pattern, "invalid");
@@ -3965,7 +3963,7 @@ int dpaa2_flow_validate(struct rte_eth_dev *dev,
 	ret = dpaa2_dev_verify_actions(actions);
 	if (ret < 0) {
 		DPAA2_PMD_ERR(
-			"Invalid action list is given\n");
+			"Invalid action list is given");
 		rte_flow_error_set(error, EPERM,
 			   RTE_FLOW_ERROR_TYPE_ACTION,
 			   actions, "invalid");
@@ -4012,13 +4010,13 @@ struct rte_flow *dpaa2_flow_create(struct rte_eth_dev *dev,
 	key_iova = (size_t)rte_zmalloc(NULL, 256, 64);
 	if (!key_iova) {
 		DPAA2_PMD_ERR(
-			"Memory allocation failure for rule configuration\n");
+			"Memory allocation failure for rule configuration");
 		goto mem_failure;
 	}
 	mask_iova = (size_t)rte_zmalloc(NULL, 256, 64);
 	if (!mask_iova) {
 		DPAA2_PMD_ERR(
-			"Memory allocation failure for rule configuration\n");
+			"Memory allocation failure for rule configuration");
 		goto mem_failure;
 	}
 
@@ -4029,13 +4027,13 @@ struct rte_flow *dpaa2_flow_create(struct rte_eth_dev *dev,
 	key_iova = (size_t)rte_zmalloc(NULL, 256, 64);
 	if (!key_iova) {
 		DPAA2_PMD_ERR(
-			"Memory allocation failure for rule configuration\n");
+			"Memory allocation failure for rule configuration");
 		goto mem_failure;
 	}
 	mask_iova = (size_t)rte_zmalloc(NULL, 256, 64);
 	if (!mask_iova) {
 		DPAA2_PMD_ERR(
-			"Memory allocation failure for rule configuration\n");
+			"Memory allocation failure for rule configuration");
 		goto mem_failure;
 	}
 

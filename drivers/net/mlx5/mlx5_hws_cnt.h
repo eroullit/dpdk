@@ -97,11 +97,11 @@ struct mlx5_hws_cnt_pool_caches {
 	struct rte_ring *qcache[];
 };
 
-struct mlx5_hws_cnt_pool {
+struct __rte_cache_aligned mlx5_hws_cnt_pool {
 	LIST_ENTRY(mlx5_hws_cnt_pool) next;
-	struct mlx5_hws_cnt_pool_cfg cfg __rte_cache_aligned;
-	struct mlx5_hws_cnt_dcs_mng dcs_mng __rte_cache_aligned;
-	uint32_t query_gen __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) struct mlx5_hws_cnt_pool_cfg cfg;
+	alignas(RTE_CACHE_LINE_SIZE) struct mlx5_hws_cnt_dcs_mng dcs_mng;
+	alignas(RTE_CACHE_LINE_SIZE) RTE_ATOMIC(uint32_t) query_gen;
 	struct mlx5_hws_cnt *pool;
 	struct mlx5_hws_cnt_raw_data_mng *raw_mng;
 	struct rte_ring *reuse_list;
@@ -110,7 +110,7 @@ struct mlx5_hws_cnt_pool {
 	struct mlx5_hws_cnt_pool_caches *cache;
 	uint64_t time_of_last_age_check;
 	struct mlx5_priv *priv;
-} __rte_cache_aligned;
+};
 
 /* HWS AGE status. */
 enum {
@@ -133,11 +133,11 @@ enum {
 };
 
 /* HWS counter age parameter. */
-struct mlx5_hws_age_param {
-	uint32_t timeout; /* Aging timeout in seconds (atomically accessed). */
-	uint32_t sec_since_last_hit;
+struct __rte_cache_aligned mlx5_hws_age_param {
+	RTE_ATOMIC(uint32_t) timeout; /* Aging timeout in seconds (atomically accessed). */
+	RTE_ATOMIC(uint32_t) sec_since_last_hit;
 	/* Time in seconds since last hit (atomically accessed). */
-	uint16_t state; /* AGE state (atomically accessed). */
+	RTE_ATOMIC(uint16_t) state; /* AGE state (atomically accessed). */
 	uint64_t accumulator_last_hits;
 	/* Last total value of hits for comparing. */
 	uint64_t accumulator_hits;
@@ -149,7 +149,7 @@ struct mlx5_hws_age_param {
 	cnt_id_t own_cnt_index;
 	/* Counter action created specifically for this AGE action. */
 	void *context; /* Flow AGE context. */
-} __rte_packed __rte_cache_aligned;
+} __rte_packed;
 
 
 /**
@@ -426,7 +426,7 @@ mlx5_hws_cnt_pool_put(struct mlx5_hws_cnt_pool *cpool, uint32_t *queue,
 	iidx = mlx5_hws_cnt_iidx(hpool, *cnt_id);
 	hpool->pool[iidx].in_used = false;
 	hpool->pool[iidx].query_gen_when_free =
-		__atomic_load_n(&hpool->query_gen, __ATOMIC_RELAXED);
+		rte_atomic_load_explicit(&hpool->query_gen, rte_memory_order_relaxed);
 	if (likely(queue != NULL) && cpool->cfg.host_cpool == NULL)
 		qcache = hpool->cache->qcache[*queue];
 	if (unlikely(qcache == NULL)) {
@@ -557,19 +557,32 @@ mlx5_hws_cnt_pool_get(struct mlx5_hws_cnt_pool *cpool, uint32_t *queue,
 }
 
 /**
- * Check if counter pool allocated for HWS is shared between ports.
+ * Decide if the given queue can be used to perform counter allocation/deallcation
+ * based on counter configuration
  *
  * @param[in] priv
  *   Pointer to the port private data structure.
+ * @param[in] queue
+ *   Pointer to the queue index.
  *
  * @return
- *   True if counter pools is shared between ports. False otherwise.
+ *   @p queue if cache related to the queue can be used. NULL otherwise.
  */
-static __rte_always_inline bool
-mlx5_hws_cnt_is_pool_shared(struct mlx5_priv *priv)
+static __rte_always_inline uint32_t *
+mlx5_hws_cnt_get_queue(struct mlx5_priv *priv, uint32_t *queue)
 {
-	return priv && priv->hws_cpool &&
-	    (priv->shared_refcnt || priv->hws_cpool->cfg.host_cpool != NULL);
+	if (priv && priv->hws_cpool) {
+		/* Do not use queue cache if counter pool is shared. */
+		if (priv->shared_refcnt || priv->hws_cpool->cfg.host_cpool != NULL)
+			return NULL;
+		/* Do not use queue cache if counter cache is disabled. */
+		if (priv->hws_cpool->cache == NULL)
+			return NULL;
+		return queue;
+	}
+	/* This case should not be reached if counter pool was successfully configured. */
+	MLX5_ASSERT(false);
+	return NULL;
 }
 
 static __rte_always_inline unsigned int
@@ -699,9 +712,10 @@ mlx5_hws_cnt_service_thread_create(struct mlx5_dev_ctx_shared *sh);
 void
 mlx5_hws_cnt_service_thread_destroy(struct mlx5_dev_ctx_shared *sh);
 
-struct mlx5_hws_cnt_pool *
+int
 mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
-		const struct rte_flow_port_attr *pattr, uint16_t nb_queue);
+		uint32_t nb_counters, uint16_t nb_queue,
+		struct mlx5_hws_cnt_pool *chost);
 
 void
 mlx5_hws_cnt_pool_destroy(struct mlx5_dev_ctx_shared *sh,
@@ -731,8 +745,9 @@ mlx5_hws_age_context_get(struct mlx5_priv *priv, uint32_t idx);
 
 int
 mlx5_hws_age_pool_init(struct rte_eth_dev *dev,
-		       const struct rte_flow_port_attr *attr,
-		       uint16_t nb_queues);
+		       uint32_t nb_aging_objects,
+		       uint16_t nb_queues,
+		       bool strict_queue);
 
 void
 mlx5_hws_age_pool_destroy(struct mlx5_priv *priv);

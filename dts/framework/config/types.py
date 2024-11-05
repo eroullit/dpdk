@@ -37,7 +37,7 @@ class HugepageConfigurationDict(TypedDict):
     """Allowed keys and values."""
 
     #:
-    amount: int
+    number_of: int
     #:
     force_first_numa: bool
 
@@ -46,7 +46,7 @@ class NodeConfigDict(TypedDict):
     """Allowed keys and values."""
 
     #:
-    hugepages: HugepageConfigurationDict
+    hugepages_2mb: HugepageConfigurationDict
     #:
     name: str
     #:
@@ -95,7 +95,7 @@ class TestSuiteConfigDict(TypedDict):
     cases: list[str]
 
 
-class ExecutionSUTConfigDict(TypedDict):
+class TestRunSUTConfigDict(TypedDict):
     """Allowed keys and values."""
 
     #:
@@ -104,7 +104,7 @@ class ExecutionSUTConfigDict(TypedDict):
     vdevs: list[str]
 
 
-class ExecutionConfigDict(TypedDict):
+class TestRunConfigDict(TypedDict):
     """Allowed keys and values."""
 
     #:
@@ -118,9 +118,11 @@ class ExecutionConfigDict(TypedDict):
     #:
     test_suites: TestSuiteConfigDict
     #:
-    system_under_test_node: ExecutionSUTConfigDict
+    system_under_test_node: TestRunSUTConfigDict
     #:
     traffic_generator_node: str
+    #:
+    random_seed: int
 
 
 class ConfigurationDict(TypedDict):
@@ -129,4 +131,4 @@ class ConfigurationDict(TypedDict):
     #:
     nodes: list[NodeConfigDict]
     #:
-    executions: list[ExecutionConfigDict]
+    test_runs: list[TestRunConfigDict]

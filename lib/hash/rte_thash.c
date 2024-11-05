@@ -2,6 +2,7 @@
  * Copyright(c) 2021 Intel Corporation
  */
 
+#include <stdalign.h>
 #include <sys/queue.h>
 
 #include <rte_thash.h>
@@ -80,7 +81,7 @@ struct rte_thash_subtuple_helper {
 	uint32_t	tuple_offset;	/** < Offset in bits of the subtuple */
 	uint32_t	tuple_len;	/** < Length in bits of the subtuple */
 	uint32_t	lsb_msk;	/** < (1 << reta_sz_log) - 1 */
-	__extension__ uint32_t	compl_table[0] __rte_cache_aligned;
+	alignas(RTE_CACHE_LINE_SIZE) uint32_t	compl_table[];
 	/** < Complementary table */
 };
 
@@ -93,7 +94,7 @@ struct rte_thash_ctx {
 	uint32_t	flags;
 	uint64_t	*matrices;
 	/**< matrices used with rte_thash_gfni implementation */
-	uint8_t		hash_key[0];
+	uint8_t		hash_key[];
 };
 
 int
@@ -165,6 +166,30 @@ thash_get_rand_poly(uint32_t poly_degree)
 		RTE_DIM(irreducible_poly_table[poly_degree])];
 }
 
+static inline uint32_t
+get_rev_poly(uint32_t poly, int degree)
+{
+	int i;
+	/*
+	 * The implicit highest coefficient of the polynomial
+	 * becomes the lowest after reversal.
+	 */
+	uint32_t rev_poly = 1;
+	uint32_t mask = (1 << degree) - 1;
+
+	/*
+	 * Here we assume "poly" argument is an irreducible polynomial,
+	 * thus the lowest coefficient of the "poly" must always be equal to "1".
+	 * After the reversal, this the lowest coefficient becomes the highest and
+	 * it is omitted since the highest coefficient is implicitly determined by
+	 * degree of the polynomial.
+	 */
+	for (i = 1; i < degree; i++)
+		rev_poly |= ((poly >> i) & 0x1) << (degree - i);
+
+	return rev_poly & mask;
+}
+
 static struct thash_lfsr *
 alloc_lfsr(struct rte_thash_ctx *ctx)
 {
@@ -184,7 +209,7 @@ alloc_lfsr(struct rte_thash_ctx *ctx)
 		lfsr->state = rte_rand() & ((1 << lfsr->deg) - 1);
 	} while (lfsr->state == 0);
 	/* init reverse order polynomial */
-	lfsr->rev_poly = (lfsr->poly >> 1) | (1 << (lfsr->deg - 1));
+	lfsr->rev_poly = get_rev_poly(lfsr->poly, lfsr->deg);
 	/* init proper rev_state*/
 	lfsr->rev_state = lfsr->state;
 	for (i = 0; i <= lfsr->deg; i++)

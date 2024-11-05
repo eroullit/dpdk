@@ -54,19 +54,19 @@ bnxt_pmd_get_bp(uint16_t port)
 	struct rte_eth_dev *dev;
 
 	if (!rte_eth_dev_is_valid_port(port)) {
-		PMD_DRV_LOG(ERR, "Invalid port %d\n", port);
+		PMD_DRV_LOG_LINE(ERR, "Invalid port %d", port);
 		return NULL;
 	}
 
 	dev = &rte_eth_devices[port];
 	if (!is_bnxt_supported(dev)) {
-		PMD_DRV_LOG(ERR, "Device %d not supported\n", port);
+		PMD_DRV_LOG_LINE(ERR, "Device %d not supported", port);
 		return NULL;
 	}
 
 	bp = (struct bnxt *)dev->data->dev_private;
 	if (!BNXT_TRUFLOW_EN(bp)) {
-		PMD_DRV_LOG(ERR, "TRUFLOW not enabled\n");
+		PMD_DRV_LOG_LINE(ERR, "TRUFLOW not enabled");
 		return NULL;
 	}
 
@@ -202,7 +202,7 @@ bnxt_pmd_get_svif(uint16_t port_id, bool func_svif,
 	struct bnxt *bp;
 
 	eth_dev = &rte_eth_devices[port_id];
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(eth_dev)) {
+	if (rte_eth_dev_is_repr(eth_dev)) {
 		struct bnxt_representor *vfr = eth_dev->data->dev_private;
 		if (!vfr)
 			return 0;
@@ -260,7 +260,7 @@ bnxt_pmd_get_vnic_id(uint16_t port, enum bnxt_ulp_intf_type type)
 	struct bnxt *bp;
 
 	eth_dev = &rte_eth_devices[port];
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(eth_dev)) {
+	if (rte_eth_dev_is_repr(eth_dev)) {
 		struct bnxt_representor *vfr = eth_dev->data->dev_private;
 		if (!vfr)
 			return 0;
@@ -285,7 +285,7 @@ bnxt_pmd_get_fw_func_id(uint16_t port, enum bnxt_ulp_intf_type type)
 	struct bnxt *bp;
 
 	eth_dev = &rte_eth_devices[port];
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(eth_dev)) {
+	if (rte_eth_dev_is_repr(eth_dev)) {
 		struct bnxt_representor *vfr = eth_dev->data->dev_private;
 		if (!vfr)
 			return 0;
@@ -308,7 +308,7 @@ bnxt_pmd_get_interface_type(uint16_t port)
 	struct bnxt *bp;
 
 	eth_dev = &rte_eth_devices[port];
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(eth_dev))
+	if (rte_eth_dev_is_repr(eth_dev))
 		return BNXT_ULP_INTF_TYPE_VF_REP;
 
 	bp = eth_dev->data->dev_private;
@@ -330,7 +330,7 @@ bnxt_pmd_get_phy_port_id(uint16_t port_id)
 	struct bnxt *bp;
 
 	eth_dev = &rte_eth_devices[port_id];
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(eth_dev)) {
+	if (rte_eth_dev_is_repr(eth_dev)) {
 		vfr = eth_dev->data->dev_private;
 		if (!vfr)
 			return 0;
@@ -350,7 +350,7 @@ bnxt_pmd_get_parif(uint16_t port_id, enum bnxt_ulp_intf_type type)
 	struct bnxt *bp;
 
 	eth_dev = &rte_eth_devices[port_id];
-	if (BNXT_ETH_DEV_IS_REPRESENTOR(eth_dev)) {
+	if (rte_eth_dev_is_repr(eth_dev)) {
 		struct bnxt_representor *vfr = eth_dev->data->dev_private;
 		if (!vfr)
 			return 0;

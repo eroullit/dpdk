@@ -28,6 +28,7 @@ const char *mlx5dr_debug_action_type_str[] = {
 	[MLX5DR_ACTION_TYP_REMOVE_HEADER] = "REMOVE_HEADER",
 	[MLX5DR_ACTION_TYP_POP_IPV6_ROUTE_EXT] = "POP_IPV6_ROUTE_EXT",
 	[MLX5DR_ACTION_TYP_PUSH_IPV6_ROUTE_EXT] = "PUSH_IPV6_ROUTE_EXT",
+	[MLX5DR_ACTION_TYP_NAT64] = "NAT64",
 };
 
 static_assert(ARRAY_SIZE(mlx5dr_debug_action_type_str) == MLX5DR_ACTION_TYP_MAX,
@@ -99,6 +100,7 @@ static int
 mlx5dr_debug_dump_matcher_match_template(FILE *f, struct mlx5dr_matcher *matcher)
 {
 	bool is_root = matcher->tbl->level == MLX5DR_ROOT_LEVEL;
+	bool is_compare = mlx5dr_matcher_is_compare(matcher);
 	enum mlx5dr_debug_res_type type;
 	int i, ret;
 
@@ -117,7 +119,8 @@ mlx5dr_debug_dump_matcher_match_template(FILE *f, struct mlx5dr_matcher *matcher
 			return rte_errno;
 		}
 
-		type = MLX5DR_DEBUG_RES_TYPE_MATCHER_TEMPLATE_MATCH_DEFINER;
+		type = is_compare ? MLX5DR_DEBUG_RES_TYPE_MATCHER_TEMPLATE_COMPARE_MATCH_DEFINER :
+				    MLX5DR_DEBUG_RES_TYPE_MATCHER_TEMPLATE_MATCH_DEFINER;
 		ret = mlx5dr_debug_dump_matcher_template_definer(f, mt, mt->definer, type);
 		if (ret)
 			return ret;
@@ -150,7 +153,7 @@ mlx5dr_debug_dump_matcher_action_template(FILE *f, struct mlx5dr_matcher *matche
 			      MLX5DR_DEBUG_RES_TYPE_MATCHER_ACTION_TEMPLATE,
 			      (uint64_t)(uintptr_t)at,
 			      (uint64_t)(uintptr_t)matcher,
-			      at->only_term ? 0 : 1,
+			      at->only_term,
 			      is_root ? 0 : at->num_of_action_stes,
 			      at->num_actions);
 		if (ret < 0) {
@@ -203,6 +206,7 @@ static int mlx5dr_debug_dump_matcher(FILE *f, struct mlx5dr_matcher *matcher)
 	bool is_shared = mlx5dr_context_shared_gvmi_used(matcher->tbl->ctx);
 	bool is_root = matcher->tbl->level == MLX5DR_ROOT_LEVEL;
 	enum mlx5dr_table_type tbl_type = matcher->tbl->type;
+	struct mlx5dr_matcher_resize_data *resize_data;
 	struct mlx5dr_cmd_ft_query_attr ft_attr = {0};
 	struct mlx5dr_devx_obj *ste_0, *ste_1 = NULL;
 	struct mlx5dr_pool_chunk *ste;
@@ -284,6 +288,28 @@ static int mlx5dr_debug_dump_matcher(FILE *f, struct mlx5dr_matcher *matcher)
 	ret = mlx5dr_debug_dump_matcher_action_template(f, matcher);
 	if (ret)
 		return ret;
+
+	LIST_FOREACH(resize_data, &matcher->resize_data, next) {
+		ste = &resize_data->ste;
+		ste_pool = resize_data->action_ste_pool;
+		if (ste_pool) {
+			ste_0 = mlx5dr_pool_chunk_get_base_devx_obj(ste_pool, ste);
+			if (tbl_type == MLX5DR_TABLE_TYPE_FDB)
+				ste_1 = mlx5dr_pool_chunk_get_base_devx_obj_mirror(ste_pool, ste);
+		} else {
+			ste_0 = NULL;
+			ste_1 = NULL;
+		}
+		ret = fprintf(f, "%d,0x%" PRIx64 ",%d,%d,%d,%d\n",
+			      MLX5DR_DEBUG_RES_TYPE_MATCHER_RESIZABLE_ACTION_ARRAY,
+			      (uint64_t)(uintptr_t)matcher,
+			      resize_data->action_ste_rtc_0 ? resize_data->action_ste_rtc_0->id : 0,
+			      ste_0 ? (int)ste_0->id : -1,
+			      resize_data->action_ste_rtc_1 ? resize_data->action_ste_rtc_1->id : 0,
+			      ste_1 ? (int)ste_1->id : -1);
+		if (ret < 0)
+			return ret;
+	}
 
 	return 0;
 

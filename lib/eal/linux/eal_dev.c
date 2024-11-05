@@ -182,6 +182,8 @@ dev_uev_parse(const char *buf, struct rte_dev_event *event, int length)
 			i += 14;
 			strlcpy(pci_slot_name, buf, sizeof(subsystem));
 			event->devname = strdup(pci_slot_name);
+			if (event->devname == NULL)
+				return -1;
 		}
 		for (; i < length; i++) {
 			if (*buf == '\0')
@@ -391,7 +393,7 @@ exit:
 	return ret;
 }
 
-int
+static int
 dev_sigbus_handler_register(void)
 {
 	sigset_t mask;
@@ -412,7 +414,7 @@ dev_sigbus_handler_register(void)
 	return rte_errno;
 }
 
-int
+static int
 dev_sigbus_handler_unregister(void)
 {
 	rte_errno = 0;

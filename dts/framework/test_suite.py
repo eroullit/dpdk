@@ -8,61 +8,54 @@ The module defines the :class:`TestSuite` class which doesn't contain any test c
 must be extended by subclasses which add test cases. The :class:`TestSuite` contains the basics
 needed by subclasses:
 
-    * Test suite and test case execution flow,
     * Testbed (SUT, TG) configuration,
     * Packet sending and verification,
     * Test case verification.
-
-The module also defines a function, :func:`get_test_suites`,
-for gathering test suites from a Python module.
 """
 
-import importlib
 import inspect
-import re
+from collections import Counter
+from collections.abc import Callable, Sequence
+from enum import Enum, auto
 from ipaddress import IPv4Interface, IPv6Interface, ip_interface
-from types import MethodType
-from typing import Any, ClassVar, Union
+from typing import ClassVar, Protocol, TypeVar, Union, cast
 
-from scapy.layers.inet import IP  # type: ignore[import]
-from scapy.layers.l2 import Ether  # type: ignore[import]
-from scapy.packet import Packet, Padding  # type: ignore[import]
+from scapy.layers.inet import IP  # type: ignore[import-untyped]
+from scapy.layers.l2 import Ether  # type: ignore[import-untyped]
+from scapy.packet import Packet, Padding, raw  # type: ignore[import-untyped]
 
-from .exception import (
-    BlockingTestSuiteError,
-    ConfigurationError,
-    SSHTimeoutError,
-    TestCaseVerifyError,
+from framework.testbed_model.capability import TestProtocol
+from framework.testbed_model.port import Port
+from framework.testbed_model.sut_node import SutNode
+from framework.testbed_model.tg_node import TGNode
+from framework.testbed_model.topology import Topology
+from framework.testbed_model.traffic_generator.capturing_traffic_generator import (
+    PacketFilteringConfig,
 )
-from .logger import DTSLOG, getLogger
-from .settings import SETTINGS
-from .test_result import BuildTargetResult, Result, TestCaseResult, TestSuiteResult
-from .testbed_model import Port, PortLink, SutNode, TGNode
+
+from .exception import ConfigurationError, TestCaseVerifyError
+from .logger import DTSLogger, get_dts_logger
 from .utils import get_packet_summaries
 
 
-class TestSuite(object):
-    """The base class with methods for handling the basic flow of a test suite.
+class TestSuite(TestProtocol):
+    """The base class with building blocks needed by most test cases.
 
-        * Test case filtering and collection,
-        * Test suite setup/cleanup,
-        * Test setup/cleanup,
-        * Test case execution,
-        * Error handling and results storage.
+        * Test suite setup/cleanup methods to override,
+        * Test case setup/cleanup methods to override,
+        * Test case verification,
+        * Testbed configuration,
+        * Traffic sending and verification.
 
     Test cases are implemented by subclasses. Test cases are all methods starting with ``test_``,
     further divided into performance test cases (starting with ``test_perf_``)
     and functional test cases (all other test cases).
 
     By default, all test cases will be executed. A list of testcase names may be specified
-    in the YAML test run configuration file and in the :option:`--test-cases` command line argument
+    in the YAML test run configuration file and in the :option:`--test-suite` command line argument
     or in the :envvar:`DTS_TESTCASES` environment variable to filter which test cases to run.
     The union of both lists will be used. Any unknown test cases from the latter lists
     will be silently ignored.
-
-    If the :option:`--re-run` command line argument or the :envvar:`DTS_RERUN` environment variable
-    is set, in case of a test case failure, the test case will be executed again until it passes
-    or it fails that many times in addition of the first failure.
 
     The methods named ``[set_up|tear_down]_[suite|test_case]`` should be overridden in subclasses
     if the appropriate test suite/test case fixtures are needed.
@@ -80,11 +73,7 @@ class TestSuite(object):
     #: Whether the test suite is blocking. A failure of a blocking test suite
     #: will block the execution of all subsequent test suites in the current build target.
     is_blocking: ClassVar[bool] = False
-    _logger: DTSLOG
-    _test_cases_to_run: list[str]
-    _func: bool
-    _result: TestSuiteResult
-    _port_links: list[PortLink]
+    _logger: DTSLogger
     _sut_port_ingress: Port
     _sut_port_egress: Port
     _sut_ip_address_ingress: Union[IPv4Interface, IPv6Interface]
@@ -98,55 +87,91 @@ class TestSuite(object):
         self,
         sut_node: SutNode,
         tg_node: TGNode,
-        test_cases: list[str],
-        func: bool,
-        build_target_result: BuildTargetResult,
+        topology: Topology,
     ):
         """Initialize the test suite testbed information and basic configuration.
 
-        Process what test cases to run, create the associated
-        :class:`~.test_result.TestSuiteResult`, find links between ports
-        and set up default IP addresses to be used when configuring them.
+        Find links between ports and set up default IP addresses to be used when
+        configuring them.
 
         Args:
             sut_node: The SUT node where the test suite will run.
             tg_node: The TG node where the test suite will run.
-            test_cases: The list of test cases to execute.
-                If empty, all test cases will be executed.
-            func: Whether to run functional tests.
-            build_target_result: The build target result this test suite is run in.
+            topology: The topology where the test suite will run.
         """
         self.sut_node = sut_node
         self.tg_node = tg_node
-        self._logger = getLogger(self.__class__.__name__)
-        self._test_cases_to_run = test_cases
-        self._test_cases_to_run.extend(SETTINGS.test_cases)
-        self._func = func
-        self._result = build_target_result.add_test_suite(self.__class__.__name__)
-        self._port_links = []
-        self._process_links()
-        self._sut_port_ingress, self._tg_port_egress = (
-            self._port_links[0].sut_port,
-            self._port_links[0].tg_port,
-        )
-        self._sut_port_egress, self._tg_port_ingress = (
-            self._port_links[1].sut_port,
-            self._port_links[1].tg_port,
-        )
+        self._logger = get_dts_logger(self.__class__.__name__)
+        self._tg_port_egress = topology.tg_port_egress
+        self._sut_port_ingress = topology.sut_port_ingress
+        self._sut_port_egress = topology.sut_port_egress
+        self._tg_port_ingress = topology.tg_port_ingress
         self._sut_ip_address_ingress = ip_interface("192.168.100.2/24")
         self._sut_ip_address_egress = ip_interface("192.168.101.2/24")
         self._tg_ip_address_egress = ip_interface("192.168.100.3/24")
         self._tg_ip_address_ingress = ip_interface("192.168.101.3/24")
 
-    def _process_links(self) -> None:
-        """Construct links between SUT and TG ports."""
-        for sut_port in self.sut_node.ports:
-            for tg_port in self.tg_node.ports:
-                if (sut_port.identifier, sut_port.peer) == (
-                    tg_port.peer,
-                    tg_port.identifier,
-                ):
-                    self._port_links.append(PortLink(sut_port=sut_port, tg_port=tg_port))
+    @classmethod
+    def get_test_cases(
+        cls, test_case_sublist: Sequence[str] | None = None
+    ) -> tuple[set[type["TestCase"]], set[type["TestCase"]]]:
+        """Filter `test_case_subset` from this class.
+
+        Test cases are regular (or bound) methods decorated with :func:`func_test`
+        or :func:`perf_test`.
+
+        Args:
+            test_case_sublist: Test case names to filter from this class.
+                If empty or :data:`None`, return all test cases.
+
+        Returns:
+            The filtered test case functions. This method returns functions as opposed to methods,
+            as methods are bound to instances and this method only has access to the class.
+
+        Raises:
+            ConfigurationError: If a test case from `test_case_subset` is not found.
+        """
+
+        def is_test_case(function: Callable) -> bool:
+            if inspect.isfunction(function):
+                # TestCase is not used at runtime, so we can't use isinstance() with `function`.
+                # But function.test_type exists.
+                if hasattr(function, "test_type"):
+                    return isinstance(function.test_type, TestCaseType)
+            return False
+
+        if test_case_sublist is None:
+            test_case_sublist = []
+
+        # the copy is needed so that the condition "elif test_case_sublist" doesn't
+        # change mid-cycle
+        test_case_sublist_copy = list(test_case_sublist)
+        func_test_cases = set()
+        perf_test_cases = set()
+
+        for test_case_name, test_case_function in inspect.getmembers(cls, is_test_case):
+            if test_case_name in test_case_sublist_copy:
+                # if test_case_sublist_copy is non-empty, remove the found test case
+                # so that we can look at the remainder at the end
+                test_case_sublist_copy.remove(test_case_name)
+            elif test_case_sublist:
+                # the original list not being empty means we're filtering test cases
+                # since we didn't remove test_case_name in the previous branch,
+                # it doesn't match the filter and we don't want to remove it
+                continue
+
+            match test_case_function.test_type:
+                case TestCaseType.PERFORMANCE:
+                    perf_test_cases.add(test_case_function)
+                case TestCaseType.FUNCTIONAL:
+                    func_test_cases.add(test_case_function)
+
+        if test_case_sublist_copy:
+            raise ConfigurationError(
+                f"Test cases {test_case_sublist_copy} not found among functions of {cls.__name__}."
+            )
+
+        return func_test_cases, perf_test_cases
 
     def set_up_suite(self) -> None:
         """Set up test fixtures common to all test cases.
@@ -208,7 +233,12 @@ class TestSuite(object):
     def _configure_ipv4_forwarding(self, enable: bool) -> None:
         self.sut_node.configure_ipv4_forwarding(enable)
 
-    def send_packet_and_capture(self, packet: Packet, duration: float = 1) -> list[Packet]:
+    def send_packet_and_capture(
+        self,
+        packet: Packet,
+        filter_config: PacketFilteringConfig = PacketFilteringConfig(),
+        duration: float = 1,
+    ) -> list[Packet]:
         """Send and receive `packet` using the associated TG.
 
         Send `packet` through the appropriate interface and receive on the appropriate interface.
@@ -216,15 +246,57 @@ class TestSuite(object):
 
         Args:
             packet: The packet to send.
+            filter_config: The filter to use when capturing packets.
             duration: Capture traffic for this amount of time after sending `packet`.
 
         Returns:
             A list of received packets.
         """
-        packet = self._adjust_addresses(packet)
-        return self.tg_node.send_packet_and_capture(
-            packet, self._tg_port_egress, self._tg_port_ingress, duration
+        return self.send_packets_and_capture(
+            [packet],
+            filter_config,
+            duration,
         )
+
+    def send_packets_and_capture(
+        self,
+        packets: list[Packet],
+        filter_config: PacketFilteringConfig = PacketFilteringConfig(),
+        duration: float = 1,
+    ) -> list[Packet]:
+        """Send and receive `packets` using the associated TG.
+
+        Send `packets` through the appropriate interface and receive on the appropriate interface.
+        Modify the packets with l3/l2 addresses corresponding to the testbed and desired traffic.
+
+        Args:
+            packets: The packets to send.
+            filter_config: The filter to use when capturing packets.
+            duration: Capture traffic for this amount of time after sending `packet`.
+
+        Returns:
+            A list of received packets.
+        """
+        packets = self._adjust_addresses(packets)
+        return self.tg_node.send_packets_and_capture(
+            packets,
+            self._tg_port_egress,
+            self._tg_port_ingress,
+            filter_config,
+            duration,
+        )
+
+    def send_packets(
+        self,
+        packets: list[Packet],
+    ) -> None:
+        """Send packets using the traffic generator and do not capture received traffic.
+
+        Args:
+            packets: Packets to send.
+        """
+        packets = self._adjust_addresses(packets)
+        self.tg_node.send_packets(packets, self._tg_port_egress)
 
     def get_expected_packet(self, packet: Packet) -> Packet:
         """Inject the proper L2/L3 addresses into `packet`.
@@ -235,41 +307,66 @@ class TestSuite(object):
         Returns:
             `packet` with injected L2/L3 addresses.
         """
-        return self._adjust_addresses(packet, expected=True)
+        return self._adjust_addresses([packet], expected=True)[0]
 
-    def _adjust_addresses(self, packet: Packet, expected: bool = False) -> Packet:
+    def _adjust_addresses(self, packets: list[Packet], expected: bool = False) -> list[Packet]:
         """L2 and L3 address additions in both directions.
+
+        Packets in `packets` will be directly modified in this method. The returned list of packets
+        however will be copies of the modified packets.
+
+        Only missing addresses are added to packets, existing addresses will not be overridden. If
+        any packet in `packets` has multiple IP layers (using GRE, for example) only the inner-most
+        IP layer will have its addresses adjusted.
 
         Assumptions:
             Two links between SUT and TG, one link is TG -> SUT, the other SUT -> TG.
 
         Args:
-            packet: The packet to modify.
+            packets: The packets to modify.
             expected: If :data:`True`, the direction is SUT -> TG,
                 otherwise the direction is TG -> SUT.
+
+        Returns:
+            A list containing copies of all packets in `packets` after modification.
         """
-        if expected:
-            # The packet enters the TG from SUT
+        ret_packets = []
+        for packet in packets:
             # update l2 addresses
-            packet.src = self._sut_port_egress.mac_address
-            packet.dst = self._tg_port_ingress.mac_address
+            # If `expected` is :data:`True`, the packet enters the TG from SUT, otherwise the
+            # packet leaves the TG towards the SUT.
 
-            # The packet is routed from TG egress to TG ingress
+            # The fields parameter of a packet does not include fields of the payload, so this can
+            # only be the Ether src/dst.
+            if "src" not in packet.fields:
+                packet.src = (
+                    self._sut_port_egress.mac_address
+                    if expected
+                    else self._tg_port_egress.mac_address
+                )
+            if "dst" not in packet.fields:
+                packet.dst = (
+                    self._tg_port_ingress.mac_address
+                    if expected
+                    else self._sut_port_ingress.mac_address
+                )
+
             # update l3 addresses
-            packet.payload.src = self._tg_ip_address_egress.ip.exploded
-            packet.payload.dst = self._tg_ip_address_ingress.ip.exploded
-        else:
-            # The packet leaves TG towards SUT
-            # update l2 addresses
-            packet.src = self._tg_port_egress.mac_address
-            packet.dst = self._sut_port_ingress.mac_address
+            # The packet is routed from TG egress to TG ingress regardless of whether it is
+            # expected or not.
+            num_ip_layers = packet.layers().count(IP)
+            if num_ip_layers > 0:
+                # Update the last IP layer if there are multiple (the framework should be modifying
+                # the packet address instead of the tunnel address if there is one).
+                l3_to_use = packet.getlayer(IP, num_ip_layers)
+                if "src" not in l3_to_use.fields:
+                    l3_to_use.src = self._tg_ip_address_egress.ip.exploded
 
-            # The packet is routed from TG egress to TG ingress
-            # update l3 addresses
-            packet.payload.src = self._tg_ip_address_egress.ip.exploded
-            packet.payload.dst = self._tg_ip_address_ingress.ip.exploded
+                if "dst" not in l3_to_use.fields:
+                    l3_to_use.dst = self._tg_ip_address_ingress.ip.exploded
+            ret_packets.append(Ether(packet.build()))
 
-        return Ether(packet.build())
+        return ret_packets
 
     def verify(self, condition: bool, failure_description: str) -> None:
         """Verify `condition` and handle failures.
@@ -320,6 +417,40 @@ class TestSuite(object):
                 f"not found among received {get_packet_summaries(received_packets)}"
             )
             self._fail_test_case_verify("An expected packet not found among received packets.")
+
+    def match_all_packets(
+        self, expected_packets: list[Packet], received_packets: list[Packet]
+    ) -> None:
+        """Matches all the expected packets against the received ones.
+
+        Matching is performed by counting down the occurrences in a dictionary which keys are the
+        raw packet bytes. No deep packet comparison is performed. All the unexpected packets (noise)
+        are automatically ignored.
+
+        Args:
+            expected_packets: The packets we are expecting to receive.
+            received_packets: All the packets that were received.
+
+        Raises:
+            TestCaseVerifyError: if and not all the `expected_packets` were found in
+                `received_packets`.
+        """
+        expected_packets_counters = Counter(map(raw, expected_packets))
+        received_packets_counters = Counter(map(raw, received_packets))
+        # The number of expected packets is subtracted by the number of received packets, ignoring
+        # any unexpected packets and capping at zero.
+        missing_packets_counters = expected_packets_counters - received_packets_counters
+        missing_packets_count = missing_packets_counters.total()
+        self._logger.debug(
+            f"match_all_packets: expected {len(expected_packets)}, "
+            f"received {len(received_packets)}, missing {missing_packets_count}"
+        )
+
+        if missing_packets_count != 0:
+            self._fail_test_case_verify(
+                f"Not all packets were received, expected {len(expected_packets)} "
+                f"but {missing_packets_count} were missing."
+            )
 
     def _compare_packets(self, expected_packet: Packet, received_packet: Packet) -> bool:
         self._logger.debug(
@@ -384,179 +515,63 @@ class TestSuite(object):
             return False
         return True
 
-    def run(self) -> None:
-        """Set up, execute and tear down the whole suite.
 
-        Test suite execution consists of running all test cases scheduled to be executed.
-        A test case run consists of setup, execution and teardown of said test case.
-
-        Record the setup and the teardown and handle failures.
-
-        The list of scheduled test cases is constructed when creating the :class:`TestSuite` object.
-        """
-        test_suite_name = self.__class__.__name__
-
-        try:
-            self._logger.info(f"Starting test suite setup: {test_suite_name}")
-            self.set_up_suite()
-            self._result.update_setup(Result.PASS)
-            self._logger.info(f"Test suite setup successful: {test_suite_name}")
-        except Exception as e:
-            self._logger.exception(f"Test suite setup ERROR: {test_suite_name}")
-            self._result.update_setup(Result.ERROR, e)
-
-        else:
-            self._execute_test_suite()
-
-        finally:
-            try:
-                self.tear_down_suite()
-                self.sut_node.kill_cleanup_dpdk_apps()
-                self._result.update_teardown(Result.PASS)
-            except Exception as e:
-                self._logger.exception(f"Test suite teardown ERROR: {test_suite_name}")
-                self._logger.warning(
-                    f"Test suite '{test_suite_name}' teardown failed, "
-                    f"the next test suite may be affected."
-                )
-                self._result.update_setup(Result.ERROR, e)
-            if len(self._result.get_errors()) > 0 and self.is_blocking:
-                raise BlockingTestSuiteError(test_suite_name)
-
-    def _execute_test_suite(self) -> None:
-        """Execute all test cases scheduled to be executed in this suite."""
-        if self._func:
-            for test_case_method in self._get_functional_test_cases():
-                test_case_name = test_case_method.__name__
-                test_case_result = self._result.add_test_case(test_case_name)
-                all_attempts = SETTINGS.re_run + 1
-                attempt_nr = 1
-                self._run_test_case(test_case_method, test_case_result)
-                while not test_case_result and attempt_nr < all_attempts:
-                    attempt_nr += 1
-                    self._logger.info(
-                        f"Re-running FAILED test case '{test_case_name}'. "
-                        f"Attempt number {attempt_nr} out of {all_attempts}."
-                    )
-                    self._run_test_case(test_case_method, test_case_result)
-
-    def _get_functional_test_cases(self) -> list[MethodType]:
-        """Get all functional test cases defined in this TestSuite.
-
-        Returns:
-            The list of functional test cases of this TestSuite.
-        """
-        return self._get_test_cases(r"test_(?!perf_)")
-
-    def _get_test_cases(self, test_case_regex: str) -> list[MethodType]:
-        """Return a list of test cases matching test_case_regex.
-
-        Returns:
-            The list of test cases matching test_case_regex of this TestSuite.
-        """
-        self._logger.debug(f"Searching for test cases in {self.__class__.__name__}.")
-        filtered_test_cases = []
-        for test_case_name, test_case in inspect.getmembers(self, inspect.ismethod):
-            if self._should_be_executed(test_case_name, test_case_regex):
-                filtered_test_cases.append(test_case)
-        cases_str = ", ".join((x.__name__ for x in filtered_test_cases))
-        self._logger.debug(f"Found test cases '{cases_str}' in {self.__class__.__name__}.")
-        return filtered_test_cases
-
-    def _should_be_executed(self, test_case_name: str, test_case_regex: str) -> bool:
-        """Check whether the test case should be scheduled to be executed."""
-        match = bool(re.match(test_case_regex, test_case_name))
-        if self._test_cases_to_run:
-            return match and test_case_name in self._test_cases_to_run
-
-        return match
-
-    def _run_test_case(
-        self, test_case_method: MethodType, test_case_result: TestCaseResult
-    ) -> None:
-        """Setup, execute and teardown a test case in this suite.
-
-        Record the result of the setup and the teardown and handle failures.
-        """
-        test_case_name = test_case_method.__name__
-
-        try:
-            # run set_up function for each case
-            self.set_up_test_case()
-            test_case_result.update_setup(Result.PASS)
-        except SSHTimeoutError as e:
-            self._logger.exception(f"Test case setup FAILED: {test_case_name}")
-            test_case_result.update_setup(Result.FAIL, e)
-        except Exception as e:
-            self._logger.exception(f"Test case setup ERROR: {test_case_name}")
-            test_case_result.update_setup(Result.ERROR, e)
-
-        else:
-            # run test case if setup was successful
-            self._execute_test_case(test_case_method, test_case_result)
-
-        finally:
-            try:
-                self.tear_down_test_case()
-                test_case_result.update_teardown(Result.PASS)
-            except Exception as e:
-                self._logger.exception(f"Test case teardown ERROR: {test_case_name}")
-                self._logger.warning(
-                    f"Test case '{test_case_name}' teardown failed, "
-                    f"the next test case may be affected."
-                )
-                test_case_result.update_teardown(Result.ERROR, e)
-                test_case_result.update(Result.ERROR)
-
-    def _execute_test_case(
-        self, test_case_method: MethodType, test_case_result: TestCaseResult
-    ) -> None:
-        """Execute one test case, record the result and handle failures."""
-        test_case_name = test_case_method.__name__
-        try:
-            self._logger.info(f"Starting test case execution: {test_case_name}")
-            test_case_method()
-            test_case_result.update(Result.PASS)
-            self._logger.info(f"Test case execution PASSED: {test_case_name}")
-
-        except TestCaseVerifyError as e:
-            self._logger.exception(f"Test case execution FAILED: {test_case_name}")
-            test_case_result.update(Result.FAIL, e)
-        except Exception as e:
-            self._logger.exception(f"Test case execution ERROR: {test_case_name}")
-            test_case_result.update(Result.ERROR, e)
-        except KeyboardInterrupt:
-            self._logger.error(f"Test case execution INTERRUPTED by user: {test_case_name}")
-            test_case_result.update(Result.SKIP)
-            raise KeyboardInterrupt("Stop DTS")
+#: The generic type for a method of an instance of TestSuite
+TestSuiteMethodType = TypeVar("TestSuiteMethodType", bound=Callable[[TestSuite], None])
 
 
-def get_test_suites(testsuite_module_path: str) -> list[type[TestSuite]]:
-    r"""Find all :class:`TestSuite`\s in a Python module.
+class TestCaseType(Enum):
+    """The types of test cases."""
 
-    Args:
-        testsuite_module_path: The path to the Python module.
+    #:
+    FUNCTIONAL = auto()
+    #:
+    PERFORMANCE = auto()
 
-    Returns:
-        The list of :class:`TestSuite`\s found within the Python module.
 
-    Raises:
-        ConfigurationError: The test suite module was not found.
+class TestCase(TestProtocol, Protocol[TestSuiteMethodType]):
+    """Definition of the test case type for static type checking purposes.
+
+    The type is applied to test case functions through a decorator, which casts the decorated
+    test case function to :class:`TestCase` and sets common variables.
     """
 
-    def is_test_suite(object: Any) -> bool:
-        try:
-            if issubclass(object, TestSuite) and object is not TestSuite:
-                return True
-        except TypeError:
-            return False
-        return False
+    #:
+    test_type: ClassVar[TestCaseType]
+    #: necessary for mypy so that it can treat this class as the function it's shadowing
+    __call__: TestSuiteMethodType
 
-    try:
-        testcase_module = importlib.import_module(testsuite_module_path)
-    except ModuleNotFoundError as e:
-        raise ConfigurationError(f"Test suite '{testsuite_module_path}' not found.") from e
-    return [
-        test_suite_class
-        for _, test_suite_class in inspect.getmembers(testcase_module, is_test_suite)
-    ]
+    @classmethod
+    def make_decorator(
+        cls, test_case_type: TestCaseType
+    ) -> Callable[[TestSuiteMethodType], type["TestCase"]]:
+        """Create a decorator for test suites.
+
+        The decorator casts the decorated function as :class:`TestCase`,
+        sets it as `test_case_type`
+        and initializes common variables defined in :class:`RequiresCapabilities`.
+
+        Args:
+            test_case_type: Either a functional or performance test case.
+
+        Returns:
+            The decorator of a functional or performance test case.
+        """
+
+        def _decorator(func: TestSuiteMethodType) -> type[TestCase]:
+            test_case = cast(type[TestCase], func)
+            test_case.skip = cls.skip
+            test_case.skip_reason = cls.skip_reason
+            test_case.required_capabilities = set()
+            test_case.topology_type = cls.topology_type
+            test_case.topology_type.add_to_required(test_case)
+            test_case.test_type = test_case_type
+            return test_case
+
+        return _decorator
+
+
+#: The decorator for functional test cases.
+func_test: Callable = TestCase.make_decorator(TestCaseType.FUNCTIONAL)
+#: The decorator for performance test cases.
+perf_test: Callable = TestCase.make_decorator(TestCaseType.PERFORMANCE)

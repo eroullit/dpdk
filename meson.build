@@ -2,10 +2,7 @@
 # Copyright(c) 2017-2019 Intel Corporation
 
 project('DPDK', 'c',
-        # Get version number from file.
-        # Fallback to "more" for Windows compatibility.
-        version: run_command(find_program('cat', 'more'),
-            files('VERSION'), check: true).stdout().strip(),
+        version: files('VERSION'),
         license: 'BSD',
         default_options: [
             'buildtype=release',
@@ -13,7 +10,7 @@ project('DPDK', 'c',
             'default_library=static',
             'warning_level=2',
         ],
-        meson_version: '>= 0.53.2'
+        meson_version: '>= 0.57'
 )
 
 # check for developer mode
@@ -67,15 +64,19 @@ endif
 # configure the build, and make sure configs here and in config folder are
 # able to be included in any file. We also store a global array of include dirs
 # for passing to pmdinfogen scripts
-global_inc = include_directories('.', 'config',
+global_inc = [include_directories('.', 'config',
     'lib/eal/include',
     'lib/eal/@0@/include'.format(host_machine.system()),
     'lib/eal/@0@/include'.format(arch_subdir),
-)
+)]
 
 # do configuration and get tool paths
 subdir('buildtools')
 subdir('config')
+
+if is_linux
+    global_inc += include_directories('kernel/linux')
+endif
 
 # build libs and drivers
 subdir('lib')
@@ -164,17 +165,17 @@ message(output_message + '\n')
 output_message = '\n=================\nContent Skipped\n=================\n'
 output_message += '\napps:\n\t'
 foreach app:dpdk_apps_disabled
-    reason = get_variable(app.underscorify() + '_disable_reason')
+    reason = get_variable('app_' + app.underscorify() + '_disable_reason')
     output_message += app + ':\t' + reason + '\n\t'
 endforeach
 output_message += '\nlibs:\n\t'
 foreach lib:dpdk_libs_disabled
-    reason = get_variable(lib.underscorify() + '_disable_reason')
+    reason = get_variable('lib_' + lib.underscorify() + '_disable_reason')
     output_message += lib + ':\t' + reason + '\n\t'
 endforeach
 output_message += '\ndrivers:\n\t'
 foreach drv:dpdk_drvs_disabled
-    reason = get_variable(drv.underscorify() + '_disable_reason')
+    reason = get_variable('drv_' + drv.underscorify() + '_disable_reason')
     output_message += drv + ':\t' + reason + '\n\t'
 endforeach
 message(output_message + '\n')

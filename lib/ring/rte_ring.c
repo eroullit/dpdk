@@ -7,6 +7,7 @@
  * Used as BSD-3 Licensed with permission from Kip Macy.
  */
 
+#include <stdalign.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -22,6 +23,7 @@
 #include <rte_errno.h>
 #include <rte_string_fns.h>
 #include <rte_tailq.h>
+#include <rte_telemetry.h>
 
 #include "rte_ring.h"
 #include "rte_ring_elem.h"
@@ -288,7 +290,7 @@ rte_ring_create_elem(const char *name, unsigned int esize, unsigned int count,
 	 * rte_errno for us appropriately - hence no check in this function
 	 */
 	mz = rte_memzone_reserve_aligned(mz_name, ring_size, socket_id,
-					 mz_flags, __alignof__(*r));
+					 mz_flags, alignof(typeof(*r)));
 	if (mz != NULL) {
 		r = mz->addr;
 		/* no need to check return value here, we already checked the
@@ -422,4 +424,138 @@ rte_ring_lookup(const char *name)
 	}
 
 	return r;
+}
+
+static void
+ring_walk(void (*func)(struct rte_ring *, void *), void *arg)
+{
+	struct rte_ring_list *ring_list;
+	struct rte_tailq_entry *tailq_entry;
+
+	ring_list = RTE_TAILQ_CAST(rte_ring_tailq.head, rte_ring_list);
+	rte_mcfg_tailq_read_lock();
+
+	TAILQ_FOREACH(tailq_entry, ring_list, next) {
+		(*func)((struct rte_ring *) tailq_entry->data, arg);
+	}
+
+	rte_mcfg_tailq_read_unlock();
+}
+
+static void
+ring_list_cb(struct rte_ring *r, void *arg)
+{
+	struct rte_tel_data *d = (struct rte_tel_data *)arg;
+
+	rte_tel_data_add_array_string(d, r->name);
+}
+
+static int
+ring_handle_list(const char *cmd __rte_unused,
+		const char *params __rte_unused, struct rte_tel_data *d)
+{
+	rte_tel_data_start_array(d, RTE_TEL_STRING_VAL);
+	ring_walk(ring_list_cb, d);
+	return 0;
+}
+
+static const char *
+ring_prod_sync_type_to_name(struct rte_ring *r)
+{
+	switch (r->prod.sync_type) {
+	case RTE_RING_SYNC_MT:
+		return "MP";
+	case RTE_RING_SYNC_ST:
+		return "SP";
+	case RTE_RING_SYNC_MT_RTS:
+		return "MP_RTS";
+	case RTE_RING_SYNC_MT_HTS:
+		return "MP_HTS";
+	default:
+		return "Unknown";
+	}
+}
+
+static const char *
+ring_cons_sync_type_to_name(struct rte_ring *r)
+{
+	switch (r->cons.sync_type) {
+	case RTE_RING_SYNC_MT:
+		return "MC";
+	case RTE_RING_SYNC_ST:
+		return "SC";
+	case RTE_RING_SYNC_MT_RTS:
+		return "MC_RTS";
+	case RTE_RING_SYNC_MT_HTS:
+		return "MC_HTS";
+	default:
+		return "Unknown";
+	}
+}
+
+struct ring_info_cb_arg {
+	char *ring_name;
+	struct rte_tel_data *d;
+};
+
+static void
+ring_info_cb(struct rte_ring *r, void *arg)
+{
+	struct ring_info_cb_arg *ring_arg = (struct ring_info_cb_arg *)arg;
+	struct rte_tel_data *d = ring_arg->d;
+	const struct rte_memzone *mz;
+
+	if (strncmp(r->name, ring_arg->ring_name, RTE_RING_NAMESIZE))
+		return;
+
+	rte_tel_data_add_dict_string(d, "name", r->name);
+	rte_tel_data_add_dict_int(d, "socket", r->memzone->socket_id);
+	rte_tel_data_add_dict_int(d, "flags", r->flags);
+	rte_tel_data_add_dict_string(d, "producer_type",
+		ring_prod_sync_type_to_name(r));
+	rte_tel_data_add_dict_string(d, "consumer_type",
+		ring_cons_sync_type_to_name(r));
+	rte_tel_data_add_dict_uint(d, "size", r->size);
+	rte_tel_data_add_dict_uint_hex(d, "mask", r->mask, 0);
+	rte_tel_data_add_dict_uint(d, "capacity", r->capacity);
+	rte_tel_data_add_dict_uint(d, "used_count", rte_ring_count(r));
+
+	mz = r->memzone;
+	if (mz == NULL)
+		return;
+	rte_tel_data_add_dict_string(d, "mz_name", mz->name);
+	rte_tel_data_add_dict_uint(d, "mz_len", mz->len);
+	rte_tel_data_add_dict_uint(d, "mz_hugepage_sz", mz->hugepage_sz);
+	rte_tel_data_add_dict_int(d, "mz_socket_id", mz->socket_id);
+	rte_tel_data_add_dict_uint_hex(d, "mz_flags", mz->flags, 0);
+}
+
+static int
+ring_handle_info(const char *cmd __rte_unused, const char *params,
+		struct rte_tel_data *d)
+{
+	char name[RTE_RING_NAMESIZE] = {0};
+	struct ring_info_cb_arg ring_arg;
+
+	if (params == NULL || strlen(params) == 0 ||
+		strlen(params) >= RTE_RING_NAMESIZE)
+		return -EINVAL;
+
+	rte_strlcpy(name, params, RTE_RING_NAMESIZE);
+
+	ring_arg.ring_name = name;
+	ring_arg.d = d;
+
+	rte_tel_data_start_dict(d);
+	ring_walk(ring_info_cb, &ring_arg);
+
+	return 0;
+}
+
+RTE_INIT(ring_init_telemetry)
+{
+	rte_telemetry_register_cmd("/ring/list", ring_handle_list,
+		"Returns list of available rings. Takes no parameters");
+	rte_telemetry_register_cmd("/ring/info", ring_handle_info,
+		"Returns ring info. Parameters: ring_name.");
 }

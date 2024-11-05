@@ -29,6 +29,8 @@ struct hwrm_func_qstats_output;
 	(1 << HWRM_ASYNC_EVENT_CMPL_EVENT_ID_ERROR_RECOVERY)
 #define ASYNC_CMPL_EVENT_ID_PF_DRVR_UNLOAD	\
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD - 32))
+#define ASYNC_CMPL_EVENT_ID_VF_FLR \
+	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_FLR - 32))
 #define ASYNC_CMPL_EVENT_ID_VF_CFG_CHANGE	\
 	(1 << (HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE - 32))
 #define ASYNC_CMPL_EVENT_ID_DBG_NOTIFICATION	\
@@ -46,6 +48,9 @@ struct hwrm_func_qstats_output;
 #define HWRM_QUEUE_SERVICE_PROFILE_UNKNOWN \
 	HWRM_QUEUE_QPORTCFG_OUTPUT_QUEUE_ID0_SERVICE_PROFILE_UNKNOWN
 
+#define HWRM_QUEUE_SERVICE_PROFILE_TYPE_NIC \
+	HWRM_QUEUE_QPORTCFG_OUTPUT_QUEUE_ID0_SERVICE_PROFILE_TYPE_NIC
+
 #define HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MINIMAL_STATIC \
 	HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESERVATION_STRATEGY_MINIMAL_STATIC
 #define HWRM_FUNC_RESOURCE_QCAPS_OUTPUT_VF_RESV_STRATEGY_MAXIMAL \
@@ -57,6 +62,8 @@ struct hwrm_func_qstats_output;
 	HWRM_PORT_PHY_CFG_INPUT_ENABLES_AUTO_PAM4_LINK_SPEED_MASK
 #define HWRM_PORT_PHY_CFG_IN_EN_AUTO_LINK_SPEED_MASK \
 	HWRM_PORT_PHY_CFG_INPUT_ENABLES_AUTO_LINK_SPEED_MASK
+#define BACKING_STORE_CFG_V2_IN_FLG_CFG_ALL_DONE \
+	HWRM_FUNC_BACKING_STORE_CFG_V2_INPUT_FLAGS_BS_CFG_ALL_DONE
 
 #define HWRM_SPEC_CODE_1_8_4		0x10804
 #define HWRM_SPEC_CODE_1_9_0		0x10900
@@ -73,6 +80,10 @@ struct hwrm_func_qstats_output;
 	bp->tx_cos_queue[x].id = resp->queue_id##x; \
 	bp->tx_cos_queue[x].profile =	\
 		resp->queue_id##x##_service_profile
+
+#define GET_TX_QUEUE_TYPE_INFO(x) \
+	bp->tx_cos_queue[x].profile_type =	\
+		resp->queue_id##x##_service_profile_type
 
 #define GET_RX_QUEUE_INFO(x) \
 	bp->rx_cos_queue[x].id = resp->queue_id##x; \
@@ -134,6 +145,7 @@ struct bnxt_pf_resource_info {
 
 #define BNXT_SIG_MODE_NRZ	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_NRZ
 #define BNXT_SIG_MODE_PAM4	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_PAM4
+#define BNXT_SIG_MODE_PAM4_112	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_PAM4_112
 
 #define BNXT_TUNNELED_OFFLOADS_CAP_VXLAN_EN(bp)		\
 	(!((bp)->tunnel_disable_flag & HWRM_FUNC_QCAPS_OUTPUT_TUNNEL_DISABLE_FLAG_DISABLE_VXLAN))
@@ -155,8 +167,14 @@ struct bnxt_pf_resource_info {
 	 BNXT_TUNNELED_OFFLOADS_CAP_GRE_EN(bp)   &&		\
 	 BNXT_TUNNELED_OFFLOADS_CAP_IPINIP_EN(bp))
 
-#define BNXT_SIG_MODE_NRZ	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_NRZ
-#define BNXT_SIG_MODE_PAM4	HWRM_PORT_PHY_QCFG_OUTPUT_SIGNAL_MODE_PAM4
+/* Is this tpa_v2 and P7
+ * Just add P5 to this once we validate on Thor FW
+ */
+#define BNXT_TPA_V2_P7(bp) ((bp)->max_tpa_v2 && BNXT_CHIP_P7(bp))
+/* Get the size of the stat context size for DMA from HW */
+#define BNXT_HWRM_CTX_GET_SIZE(bp)  (BNXT_TPA_V2_P7(bp) ?	\
+	sizeof(struct ctx_hw_stats_ext) :			\
+	sizeof(struct ctx_hw_stats))
 
 int bnxt_hwrm_cfa_l2_clear_rx_mask(struct bnxt *bp,
 				   struct bnxt_vnic_info *vnic);
@@ -340,6 +358,8 @@ int bnxt_hwrm_poll_ver_get(struct bnxt *bp);
 int bnxt_hwrm_rx_ring_reset(struct bnxt *bp, int queue_index);
 int bnxt_hwrm_ring_stats(struct bnxt *bp, uint32_t cid, int idx,
 			 struct bnxt_ring_stats *stats, bool rx);
+int bnxt_hwrm_ring_stats_ext(struct bnxt *bp, uint32_t cid, int idx,
+			     struct bnxt_ring_stats_ext *ring_stats, bool rx);
 int bnxt_hwrm_read_sfp_module_eeprom_info(struct bnxt *bp, uint16_t i2c_addr,
 					  uint16_t page_number, uint16_t start_addr,
 					  uint16_t data_length, uint8_t *buf);
@@ -348,4 +368,11 @@ void bnxt_free_hwrm_tx_ring(struct bnxt *bp, int queue_index);
 int bnxt_alloc_hwrm_tx_ring(struct bnxt *bp, int queue_index);
 int bnxt_hwrm_config_host_mtu(struct bnxt *bp);
 int bnxt_vnic_rss_clear_p5(struct bnxt *bp, struct bnxt_vnic_info *vnic);
+int bnxt_vnic_rss_configure_p5(struct bnxt *bp, struct bnxt_vnic_info *vnic);
+int bnxt_hwrm_func_backing_store_qcaps_v2(struct bnxt *bp);
+int bnxt_hwrm_func_backing_store_cfg_v2(struct bnxt *bp,
+					struct bnxt_ctx_mem *ctxm);
+int bnxt_hwrm_func_backing_store_types_count(struct bnxt *bp);
+int bnxt_hwrm_func_backing_store_ctx_alloc(struct bnxt *bp, uint16_t types);
+int bnxt_alloc_ctx_pg_tbls(struct bnxt *bp);
 #endif

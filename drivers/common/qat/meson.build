@@ -17,13 +17,13 @@ qat_compress_relpath = '../../' + qat_compress_path
 if disable_drivers.contains(qat_crypto_path)
     qat_crypto = false
     dpdk_drvs_disabled += qat_crypto_path
-    set_variable(qat_crypto_path.underscorify() + '_disable_reason',
+    set_variable('drv_' + qat_crypto_path.underscorify() + '_disable_reason',
             'Explicitly disabled via build config')
 endif
 if disable_drivers.contains(qat_compress_path)
     qat_compress = false
     dpdk_drvs_disabled += qat_compress_path
-    set_variable(qat_compress_path.underscorify() + '_disable_reason',
+    set_variable('drv_' + qat_compress_path.underscorify() + '_disable_reason',
             'Explicitly disabled via build config')
 endif
 
@@ -36,14 +36,14 @@ if arch_subdir == 'arm'
     else
         qat_crypto = false
         dpdk_drvs_disabled += qat_crypto_path
-        set_variable(qat_crypto_path.underscorify() + '_disable_reason',
+        set_variable('drv_' + qat_crypto_path.underscorify() + '_disable_reason',
         'missing dependency for Arm, libcrypto')
     endif
 else
     IMB_required_ver = '1.4.0'
     IMB_header = '#include<intel-ipsec-mb.h>'
     libipsecmb = cc.find_library('IPSec_MB', required: false)
-    if libipsecmb.found() and meson.version().version_compare('>=0.60') and cc.links(
+    if libipsecmb.found() and cc.links(
             'int main(void) {return 0;}', dependencies: libipsecmb)
         # version comes with quotes, so we split based on " and take the middle
         imb_ver = cc.get_define('IMB_VERSION_STR',
@@ -57,7 +57,7 @@ else
         else
             qat_crypto = false
             dpdk_drvs_disabled += qat_crypto_path
-            set_variable(qat_crypto_path.underscorify() + '_disable_reason',
+            set_variable('drv_' + qat_crypto_path.underscorify() + '_disable_reason',
                 'missing dependency, libipsecmb or libcrypto')
         endif
     elif libcrypto.found()
@@ -66,7 +66,7 @@ else
     else
         qat_crypto = false
         dpdk_drvs_disabled += qat_crypto_path
-        set_variable(qat_crypto_path.underscorify() + '_disable_reason',
+        set_variable('drv_' + qat_crypto_path.underscorify() + '_disable_reason',
             'missing dependency, libipsecmb or libcrypto')
     endif
 endif
@@ -82,6 +82,8 @@ sources += files(
         'dev/qat_dev_gen2.c',
         'dev/qat_dev_gen3.c',
         'dev/qat_dev_gen4.c',
+        'dev/qat_dev_gen5.c',
+        'dev/qat_dev_gen_lce.c',
 )
 includes += include_directories(
         'qat_adf',
@@ -95,6 +97,7 @@ if qat_compress
             'dev/qat_comp_pmd_gen2.c',
             'dev/qat_comp_pmd_gen3.c',
             'dev/qat_comp_pmd_gen4.c',
+            'dev/qat_comp_pmd_gen5.c',
         ]
         sources += files(join_paths(qat_compress_relpath, f))
     endforeach
@@ -108,6 +111,8 @@ if qat_crypto
             'dev/qat_crypto_pmd_gen2.c',
             'dev/qat_crypto_pmd_gen3.c',
             'dev/qat_crypto_pmd_gen4.c',
+            'dev/qat_crypto_pmd_gen5.c',
+            'dev/qat_crypto_pmd_gen_lce.c',
         ]
         sources += files(join_paths(qat_crypto_relpath, f))
     endforeach

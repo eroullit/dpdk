@@ -42,14 +42,17 @@ sources = files(
         'mlx5_vlan.c',
         'mlx5_utils.c',
         'mlx5_devx.c',
+        'mlx5_nta_rss.c',
 )
 
 if is_linux
     sources += files(
+            'mlx5_flow_geneve.c',
             'mlx5_flow_hw.c',
             'mlx5_hws_cnt.c',
             'mlx5_flow_quota.c',
             'mlx5_flow_verbs.c',
+            'mlx5_nta_split.c',
     )
 endif
 

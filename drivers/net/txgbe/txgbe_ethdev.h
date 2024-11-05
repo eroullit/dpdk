@@ -56,7 +56,7 @@
 #define TXGBE_5TUPLE_MAX_PRI            7
 #define TXGBE_5TUPLE_MIN_PRI            1
 
-
+#define TXGBE_MAX_MTU			9414
 /* The overhead from MTU to max frame size. */
 #define TXGBE_ETH_OVERHEAD (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN)
 
@@ -364,6 +364,7 @@ struct txgbe_adapter {
 	struct txgbe_ipsec          ipsec;
 #endif
 	bool rx_bulk_alloc_allowed;
+	bool rx_vec_allowed;
 	struct rte_timecounter      systime_tc;
 	struct rte_timecounter      rx_tstamp_tc;
 	struct rte_timecounter      tx_tstamp_tc;
@@ -372,7 +373,7 @@ struct txgbe_adapter {
 	/* For RSS reta table update */
 	uint8_t rss_reta_updated;
 
-	uint32_t link_thread_running;
+	RTE_ATOMIC(uint32_t) link_thread_running;
 	rte_thread_t link_thread_tid;
 };
 
@@ -704,7 +705,8 @@ struct rte_txgbe_xstats_name_off {
 	unsigned int offset;
 };
 
-const uint32_t *txgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+const uint32_t *txgbe_dev_supported_ptypes_get(struct rte_eth_dev *dev,
+					       size_t *no_of_elements);
 int txgbe_dev_set_mc_addr_list(struct rte_eth_dev *dev,
 				      struct rte_ether_addr *mc_addr_set,
 				      uint32_t nb_mc_addr);

@@ -32,6 +32,9 @@ if is_ms_compiler
     # does not support inline assembly
     dpdk_conf.set('RTE_FORCE_INTRINSICS', 1)
 
+    # force the use of C++11 memory model in lib/ring
+    dpdk_conf.set('RTE_USE_C11_MEM_MODEL', true)
+
     # suppress warnings raised for using standard library functions
     # the MSVC compiler regards as unsafe but are used by DPDK
     dpdk_conf.set('_CRT_SECURE_NO_WARNINGS', 1)
@@ -39,13 +42,17 @@ if is_ms_compiler
     # temporarily disable msvc specific warnings
     # - 4244 compiler detected conversion of integer to smaller type
     # - 4267 compiler detected conversion of size_t to smaller type
-    add_project_arguments('/wd4244', '/wd4267', language: 'c')
+    # - 4146 unary minus applied to unsigned type
+    add_project_arguments('/wd4244', '/wd4267', '/wd4146', language: 'c')
 
     # enable non-locking atomic operations
     add_project_arguments('/experimental:c11atomics', language: 'c')
 
     # enable typeof operator
     add_project_arguments('/d1experimental:typeof', language: 'c')
+
+    # enable statement expressions extension
+    add_project_arguments('/experimental:statementExpressions', language: 'c')
 endif
 
 # set the major version, which might be used by drivers and libraries
@@ -90,8 +97,7 @@ eal_pmd_path = join_paths(get_option('prefix'), driver_install_path)
 if not is_windows
     meson.add_install_script('../buildtools/symlink-drivers-solibs.sh',
             get_option('libdir'), pmd_subdir_opt)
-elif meson.version().version_compare('>=0.55.0')
-    # 0.55.0 is required to use external program with add_install_script
+else
     meson.add_install_script(py3,
             files('../buildtools/symlink-drivers-solibs.py'),
             get_option('libdir'), pmd_subdir_opt, get_option('bindir'))
@@ -121,13 +127,14 @@ else
             cpu_instruction_set = 'generic'
         endif
     endif
+    if platform == 'native'
+        if cpu_instruction_set == 'auto'
+            cpu_instruction_set = 'native'
+        endif
+    endif
 endif
 
-if platform == 'native'
-    if cpu_instruction_set == 'auto'
-        cpu_instruction_set = 'native'
-    endif
-elif platform == 'generic'
+if platform == 'generic'
     if cpu_instruction_set == 'auto'
         cpu_instruction_set = 'generic'
     endif
@@ -180,14 +187,15 @@ if not is_ms_compiler
 endif
 
 toolchain = cc.get_id()
-dpdk_conf.set_quoted('RTE_TOOLCHAIN', toolchain)
-dpdk_conf.set('RTE_TOOLCHAIN_' + toolchain.to_upper().underscorify(), 1)
 
 dpdk_conf.set('RTE_ARCH_64', cc.sizeof('void *') == 8)
 dpdk_conf.set('RTE_ARCH_32', cc.sizeof('void *') == 4)
 
 if not is_windows
     add_project_link_arguments('-Wl,--no-as-needed', language: 'c')
+    if cc.has_link_argument('-Wl,--undefined-version')
+        add_project_link_arguments('-Wl,--undefined-version', language: 'c')
+    endif
 endif
 
 # use pthreads if available for the platform
@@ -218,7 +226,7 @@ endif
 # check for libraries used in multiple places in DPDK
 has_libnuma = false
 find_libnuma = true
-if meson.is_cross_build() and not meson.get_cross_property('numa', true)
+if meson.is_cross_build() and not meson.get_external_property('numa', true)
     # don't look for libnuma if explicitly disabled in cross build
     find_libnuma = false
 endif
@@ -317,14 +325,10 @@ warning_flags = [
         '-Wwrite-strings',
 
         # globally disabled warnings
-        '-Wno-address-of-packed-member',
         '-Wno-packed-not-aligned',
         '-Wno-missing-field-initializers',
 ]
-if cc.get_id() == 'gcc' and cc.version().version_compare('>=10.0')
-# FIXME: Bugzilla 396
-    warning_flags += '-Wno-zero-length-bounds'
-endif
+
 if not dpdk_conf.get('RTE_ARCH_64')
 # for 32-bit, don't warn about casting a 32-bit pointer to 64-bit int - it's fine!!
     warning_flags += '-Wno-pointer-to-int-cast'
@@ -346,6 +350,7 @@ dpdk_conf.set('RTE_MAX_ETHPORTS', get_option('max_ethports'))
 dpdk_conf.set('RTE_LIBEAL_USE_HPET', get_option('use_hpet'))
 dpdk_conf.set('RTE_ENABLE_STDATOMIC', get_option('enable_stdatomic'))
 dpdk_conf.set('RTE_ENABLE_TRACE_FP', get_option('enable_trace_fp'))
+dpdk_conf.set('RTE_PKTMBUF_HEADROOM', get_option('pkt_mbuf_headroom'))
 # values which have defaults which may be overridden
 dpdk_conf.set('RTE_MAX_VFIO_GROUPS', 64)
 dpdk_conf.set('RTE_DRIVER_MEMPOOL_BUCKET_SIZE_KB', 64)
@@ -367,12 +372,12 @@ dpdk_conf.set('RTE_COMPILE_TIME_CPUFLAGS', ','.join(compile_time_cpuflags))
 # apply cross-specific options
 if meson.is_cross_build()
     # configure RTE_MAX_LCORE and RTE_MAX_NUMA_NODES from cross file
-    cross_max_lcores = meson.get_cross_property('max_lcores', 0)
+    cross_max_lcores = meson.get_external_property('max_lcores', 0)
     if cross_max_lcores != 0
         message('Setting RTE_MAX_LCORE from cross file')
         dpdk_conf.set('RTE_MAX_LCORE', cross_max_lcores)
     endif
-    cross_max_numa_nodes = meson.get_cross_property('max_numa_nodes', 0)
+    cross_max_numa_nodes = meson.get_external_property('max_numa_nodes', 0)
     if cross_max_numa_nodes != 0
         message('Setting RTE_MAX_NUMA_NODES from cross file')
         dpdk_conf.set('RTE_MAX_NUMA_NODES', cross_max_numa_nodes)
