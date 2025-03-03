@@ -12,6 +12,7 @@
 
 #include "nfd3/nfp_nfd3.h"
 #include "nfdk/nfp_nfdk.h"
+#include "nfdk/nfp_nfdk_vec.h"
 #include "flower/nfp_flower.h"
 
 #include "nfp_ipsec.h"
@@ -416,6 +417,7 @@ nfp_net_recv_pkts(void *rx_queue,
 	struct nfp_net_hw *hw;
 	struct rte_mbuf *new_mb;
 	struct nfp_net_rxq *rxq;
+	struct nfp_pf_dev *pf_dev;
 	struct nfp_net_dp_buf *rxb;
 	struct nfp_net_rx_desc *rxds;
 	uint16_t avail_multiplexed = 0;
@@ -431,6 +433,7 @@ nfp_net_recv_pkts(void *rx_queue,
 	}
 
 	hw = rxq->hw;
+	pf_dev = rxq->hw_priv->pf_dev;
 
 	while (avail + avail_multiplexed < nb_pkts) {
 		rxb = &rxq->rxbufs[rxq->rd_p];
@@ -519,13 +522,15 @@ nfp_net_recv_pkts(void *rx_queue,
 		if (unlikely(rxq->rd_p == rxq->rx_count)) /* Wrapping */
 			rxq->rd_p = 0;
 
-		if (((meta.flags >> NFP_NET_META_PORTID) & 0x1) == 0) {
+		if (pf_dev->recv_pkt_meta_check_t(&meta)) {
 			rx_pkts[avail++] = mb;
-		} else if (nfp_flower_pf_dispatch_pkts(rxq, mb, meta.port_id)) {
-			avail_multiplexed++;
 		} else {
-			rte_pktmbuf_free(mb);
-			break;
+			if (nfp_flower_pf_dispatch_pkts(rxq, mb, meta.port_id)) {
+				avail_multiplexed++;
+			} else {
+				rte_pktmbuf_free(mb);
+				break;
+			}
 		}
 	}
 
@@ -858,6 +863,7 @@ nfp_net_rx_queue_info_get(struct rte_eth_dev *dev,
 	nfp_net_infos_get(dev, &dev_info);
 	info->conf.offloads = dev_info.rx_offload_capa &
 			dev->data->dev_conf.rxmode.offloads;
+	info->conf.rx_thresh = dev_info.default_rxconf.rx_thresh;
 }
 
 void
@@ -879,6 +885,7 @@ nfp_net_tx_queue_info_get(struct rte_eth_dev *dev,
 	nfp_net_infos_get(dev, &dev_info);
 	info->conf.offloads = dev_info.tx_offload_capa &
 			dev->data->dev_conf.txmode.offloads;
+	info->conf.tx_thresh = dev_info.default_txconf.tx_thresh;
 }
 
 void
@@ -888,4 +895,49 @@ nfp_net_recv_pkts_set(struct rte_eth_dev *eth_dev)
 		eth_dev->rx_pkt_burst = nfp_net_vec_avx2_recv_pkts;
 	else
 		eth_dev->rx_pkt_burst = nfp_net_recv_pkts;
+}
+
+int
+nfp_net_rx_burst_mode_get(struct rte_eth_dev *eth_dev,
+		uint16_t queue_id __rte_unused,
+		struct rte_eth_burst_mode *mode)
+{
+	eth_rx_burst_t pkt_burst;
+
+	pkt_burst = eth_dev->rx_pkt_burst;
+	if (pkt_burst == nfp_net_recv_pkts) {
+		strlcpy(mode->info, "Scalar",
+				RTE_ETH_BURST_MODE_INFO_SIZE);
+	} else if (pkt_burst == nfp_net_vec_avx2_recv_pkts) {
+		strlcpy(mode->info, "Vector AVX2",
+				RTE_ETH_BURST_MODE_INFO_SIZE);
+	} else {
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int
+nfp_net_tx_burst_mode_get(struct rte_eth_dev *eth_dev,
+		uint16_t queue_id __rte_unused,
+		struct rte_eth_burst_mode *mode)
+{
+	eth_tx_burst_t pkt_burst;
+
+	pkt_burst = eth_dev->tx_pkt_burst;
+	if (pkt_burst == nfp_net_nfd3_xmit_pkts) {
+		strlcpy(mode->info, "NFD3 Scalar",
+				RTE_ETH_BURST_MODE_INFO_SIZE);
+	} else if (pkt_burst == nfp_net_nfdk_xmit_pkts) {
+		strlcpy(mode->info, "NFDk Scalar",
+				RTE_ETH_BURST_MODE_INFO_SIZE);
+	} else if (pkt_burst == nfp_net_nfdk_vec_avx2_xmit_pkts) {
+		strlcpy(mode->info, "NFDk Vector AVX2",
+				RTE_ETH_BURST_MODE_INFO_SIZE);
+	} else {
+		return -EINVAL;
+	}
+
+	return 0;
 }

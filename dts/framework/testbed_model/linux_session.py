@@ -10,8 +10,7 @@ This intermediate module implements the common parts of mostly POSIX compliant d
 """
 
 import json
-from ipaddress import IPv4Interface, IPv6Interface
-from typing import TypedDict, Union
+from typing import TypedDict
 
 from typing_extensions import NotRequired
 
@@ -68,15 +67,12 @@ class LinuxSession(PosixSession):
     def _get_privileged_command(command: str) -> str:
         return f"sudo -- sh -c '{command}'"
 
-    def get_remote_cpus(self, use_first_core: bool) -> list[LogicalCore]:
+    def get_remote_cpus(self) -> list[LogicalCore]:
         """Overrides :meth:`~.os_session.OSSession.get_remote_cpus`."""
         cpu_info = self.send_command("lscpu -p=CPU,CORE,SOCKET,NODE|grep -v \\#").stdout
         lcores = []
         for cpu_line in cpu_info.splitlines():
             lcore, core, socket, node = map(int, cpu_line.split(","))
-            if core == 0 and socket == 0 and not use_first_core:
-                self._logger.info("Not using the first physical core.")
-                continue
             lcores.append(LogicalCore(lcore, core, socket, node))
         return lcores
 
@@ -85,14 +81,18 @@ class LinuxSession(PosixSession):
         return dpdk_prefix
 
     def setup_hugepages(self, number_of: int, hugepage_size: int, force_first_numa: bool) -> None:
-        """Overrides :meth:`~.os_session.OSSession.setup_hugepages`."""
+        """Overrides :meth:`~.os_session.OSSession.setup_hugepages`.
+
+        Raises:
+            ConfigurationError: If the given `hugepage_size` is not supported by the OS.
+        """
         self._logger.info("Getting Hugepage information.")
-        hugepages_total = self._get_hugepages_total(hugepage_size)
         if (
             f"hugepages-{hugepage_size}kB"
             not in self.send_command("ls /sys/kernel/mm/hugepages").stdout
         ):
             raise ConfigurationError("hugepage size not supported by operating system")
+        hugepages_total = self._get_hugepages_total(hugepage_size)
         self._numa_nodes = self._get_numa_nodes()
 
         if force_first_numa or hugepages_total < number_of:
@@ -166,6 +166,13 @@ class LinuxSession(PosixSession):
             else:
                 self._logger.warning(f"No port at pci address {port.pci} found.")
 
+    def bring_up_link(self, ports: list[Port]) -> None:
+        """Overrides :meth:`~.os_session.OSSession.bring_up_link`."""
+        for port in ports:
+            self.send_command(
+                f"ip link set dev {port.logical_name} up", privileged=True, verify=True
+            )
+
     def _get_lshw_info(self) -> list[LshwOutput]:
         output = self.send_command("lshw -quiet -json -C network", verify=True)
         return json.loads(output.stdout)
@@ -178,25 +185,6 @@ class LinuxSession(PosixSession):
             self._logger.warning(
                 f"Attempted to get '{attr_name}' of port {port.pci}, but it doesn't exist."
             )
-
-    def configure_port_state(self, port: Port, enable: bool) -> None:
-        """Overrides :meth:`~.os_session.OSSession.configure_port_state`."""
-        state = "up" if enable else "down"
-        self.send_command(f"ip link set dev {port.logical_name} {state}", privileged=True)
-
-    def configure_port_ip_address(
-        self,
-        address: Union[IPv4Interface, IPv6Interface],
-        port: Port,
-        delete: bool,
-    ) -> None:
-        """Overrides :meth:`~.os_session.OSSession.configure_port_ip_address`."""
-        command = "del" if delete else "add"
-        self.send_command(
-            f"ip address {command} {address} dev {port.logical_name}",
-            privileged=True,
-            verify=True,
-        )
 
     def configure_port_mtu(self, mtu: int, port: Port) -> None:
         """Overrides :meth:`~.os_session.OSSession.configure_port_mtu`."""

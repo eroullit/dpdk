@@ -2496,7 +2496,8 @@ test_queue_pair_descriptor_count(void)
 	int qp_depth = 0;
 	int i;
 
-	RTE_VERIFY(gbl_action_type != RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO);
+	if (gbl_action_type == RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO)
+		return TEST_SKIPPED;
 
 	/* Verify if the queue pair depth API is supported by driver */
 	qp_depth = rte_cryptodev_qp_depth_used(ts_params->valid_devs[0], 0);
@@ -2885,7 +2886,7 @@ create_wireless_algo_hash_session(uint8_t dev_id,
 	enum rte_crypto_auth_operation op,
 	enum rte_crypto_auth_algorithm algo)
 {
-	uint8_t hash_key[key_len];
+	uint8_t *hash_key = alloca(key_len);
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -2921,7 +2922,7 @@ create_wireless_algo_cipher_session(uint8_t dev_id,
 			const uint8_t *key, const uint8_t key_len,
 			uint8_t iv_len)
 {
-	uint8_t cipher_key[key_len];
+	uint8_t *cipher_key = alloca(key_len);
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
 
@@ -3073,7 +3074,7 @@ create_wireless_cipher_auth_session(uint8_t dev_id,
 		const struct wireless_test_data *tdata)
 {
 	const uint8_t key_len = tdata->key.len;
-	uint8_t cipher_auth_key[key_len];
+	uint8_t *cipher_auth_key = alloca(key_len);
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -9077,7 +9078,7 @@ create_aead_session(uint8_t dev_id, enum rte_crypto_aead_algorithm algo,
 		const uint16_t aad_len, const uint8_t auth_len,
 		uint8_t iv_len)
 {
-	uint8_t aead_key[key_len];
+	uint8_t *aead_key = alloca(key_len);
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -12252,10 +12253,7 @@ again:
 		if (flags->skip_sess_destroy && sec_session_outb == NULL)
 			sec_session_outb = ut_params->sec_session;
 
-		if (flags->zero_len &&
-		    ((flags->content_type == TLS_RECORD_TEST_CONTENT_TYPE_HANDSHAKE) ||
-		    (flags->content_type == TLS_RECORD_TEST_CONTENT_TYPE_HANDSHAKE) ||
-		    (flags->content_type == TLS_RECORD_TEST_CONTENT_TYPE_HANDSHAKE))) {
+		if (flags->zero_len && flags->content_type != TLS_RECORD_TEST_CONTENT_TYPE_APP) {
 			if (ret == TEST_SUCCESS)
 				return TEST_FAILED;
 			goto skip_decrypt;
@@ -12991,7 +12989,7 @@ test_cryptodev_error_recover_helper(uint8_t dev_id, const void *test_data, bool 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
 	const struct blockcipher_test_data *tdata = test_data;
-	uint8_t cipher_key[tdata->cipher_key.len];
+	uint8_t *cipher_key = alloca(tdata->cipher_key.len);
 	struct rte_crypto_sym_op *sym_op = NULL;
 	struct rte_crypto_op *op = NULL;
 	char *dst;
@@ -13008,6 +13006,8 @@ test_cryptodev_error_recover_helper(uint8_t dev_id, const void *test_data, bool 
 
 	ut_params->sess = rte_cryptodev_sym_session_create(dev_id, &ut_params->cipher_xform,
 							   ts_params->session_mpool);
+	if (ut_params->sess == NULL && rte_errno == ENOTSUP)
+		return TEST_SKIPPED;
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 
 	ut_params->op = rte_crypto_op_alloc(ts_params->op_mpool, RTE_CRYPTO_OP_TYPE_SYMMETRIC);
@@ -13345,7 +13345,7 @@ static int
 test_AES_GCM_auth_encryption_fail_aad_corrupt(void)
 {
 	struct aead_test_data tdata;
-	uint8_t aad[gcm_test_case_7.aad.len];
+	uint8_t *aad = alloca(gcm_test_case_7.aad.len);
 	int res;
 
 	RTE_LOG(INFO, USER1, "This is a negative test, errors are expected\n");
@@ -13734,7 +13734,7 @@ static int
 test_AES_GCM_auth_decryption_fail_aad_corrupt(void)
 {
 	struct aead_test_data tdata;
-	uint8_t aad[gcm_test_case_7.aad.len];
+	uint8_t *aad = alloca(gcm_test_case_7.aad.len);
 	int res;
 
 	memcpy(&tdata, &gcm_test_case_7, sizeof(struct aead_test_data));
@@ -13986,7 +13986,7 @@ test_authenticated_encryption_sessionless(
 	int retval;
 	uint8_t *ciphertext, *auth_tag;
 	uint16_t plaintext_pad_len;
-	uint8_t key[tdata->key.len + 1];
+	uint8_t *key = alloca(tdata->key.len + 1);
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
@@ -14088,7 +14088,7 @@ test_authenticated_decryption_sessionless(
 
 	int retval;
 	uint8_t *plaintext;
-	uint8_t key[tdata->key.len + 1];
+	uint8_t *key = alloca(tdata->key.len + 1);
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
@@ -14709,15 +14709,19 @@ test_multi_session(void)
 		sessions[i] = rte_cryptodev_sym_session_create(
 			ts_params->valid_devs[0], &ut_params->auth_xform,
 				ts_params->session_mpool);
-		if (sessions[i] == NULL && rte_errno == ENOTSUP) {
+		if (sessions[i] == NULL) {
 			nb_sess = i;
-			ret = TEST_SKIPPED;
+			if (rte_errno == ENOTSUP)
+				ret = TEST_SKIPPED;
+			else {
+				ret = TEST_FAILED;
+				printf("TestCase %s() line %d failed : "
+						"Session creation failed at session number %u",
+						__func__, __LINE__, i);
+			}
 			break;
 		}
 
-		TEST_ASSERT_NOT_NULL(sessions[i],
-				"Session creation failed at session number %u",
-				i);
 
 		/* Attempt to send a request on each session */
 		ret = test_AES_CBC_HMAC_SHA512_decrypt_perform(
@@ -14845,15 +14849,19 @@ test_multi_session_random_usage(void)
 				ts_params->valid_devs[0],
 				&ut_paramz[i].ut_params.auth_xform,
 				ts_params->session_mpool);
-		if (sessions[i] == NULL && rte_errno == ENOTSUP) {
+		if (sessions[i] == NULL) {
 			nb_sess = i;
-			ret = TEST_SKIPPED;
+			if (rte_errno == ENOTSUP)
+				ret = TEST_SKIPPED;
+			else {
+				ret = TEST_FAILED;
+				printf("TestCase %s() line %d failed : "
+						"Session creation failed at session number %u",
+						__func__, __LINE__, i);
+			}
 			goto session_clear;
 		}
 
-		TEST_ASSERT_NOT_NULL(sessions[i],
-				"Session creation failed at session number %u",
-				i);
 	}
 
 	nb_sess = i;
@@ -14936,6 +14944,8 @@ test_null_invalid_operation(void)
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->valid_devs[0], &ut_params->cipher_xform,
 			ts_params->session_mpool);
+	if (ut_params->sess == NULL && rte_errno == ENOTSUP)
+		return TEST_SKIPPED;
 	TEST_ASSERT(ut_params->sess == NULL,
 			"Session creation succeeded unexpectedly");
 
@@ -14950,6 +14960,8 @@ test_null_invalid_operation(void)
 	ut_params->sess = rte_cryptodev_sym_session_create(
 			ts_params->valid_devs[0], &ut_params->auth_xform,
 			ts_params->session_mpool);
+	if (ut_params->sess == NULL && rte_errno == ENOTSUP)
+		return TEST_SKIPPED;
 	TEST_ASSERT(ut_params->sess == NULL,
 			"Session creation succeeded unexpectedly");
 
@@ -15097,6 +15109,8 @@ test_enqdeq_callback_null_cipher(void)
 	/* Create Crypto session */
 	ut_params->sess = rte_cryptodev_sym_session_create(ts_params->valid_devs[0],
 				&ut_params->auth_xform, ts_params->session_mpool);
+	if (ut_params->sess == NULL && rte_errno == ENOTSUP)
+		return TEST_SKIPPED;
 	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 
 	ut_params->op = rte_crypto_op_alloc(ts_params->op_mpool, RTE_CRYPTO_OP_TYPE_SYMMETRIC);
@@ -15134,6 +15148,10 @@ test_enq_callback_setup(void)
 	struct rte_cryptodev_cb *cb;
 	uint16_t qp_id = 0;
 	int j = 0;
+
+	/* Skip test if synchronous API is used */
+	if (gbl_action_type == RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO)
+		return TEST_SKIPPED;
 
 	/* Verify the crypto capabilities for which enqueue/dequeue is done. */
 	cap_idx.type = RTE_CRYPTO_SYM_XFORM_AUTH;
@@ -15255,6 +15273,10 @@ test_deq_callback_setup(void)
 	struct rte_cryptodev_cb *cb;
 	uint16_t qp_id = 0;
 	int j = 0;
+
+	/* Skip test if synchronous API is used */
+	if (gbl_action_type == RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO)
+		return TEST_SKIPPED;
 
 	/* Verify the crypto capabilities for which enqueue/dequeue is done. */
 	cap_idx.type = RTE_CRYPTO_SYM_XFORM_AUTH;
@@ -15473,7 +15495,7 @@ static int create_gmac_session(uint8_t dev_id,
 		const struct gmac_test_data *tdata,
 		enum rte_crypto_auth_operation auth_op)
 {
-	uint8_t auth_key[tdata->key.len];
+	uint8_t *auth_key = alloca(tdata->key.len);
 
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
 	struct crypto_unittest_params *ut_params = &unittest_params;
@@ -16130,7 +16152,7 @@ create_auth_session(struct crypto_unittest_params *ut_params,
 		enum rte_crypto_auth_operation auth_op)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
-	uint8_t auth_key[reference->auth_key.len + 1];
+	uint8_t *auth_key = alloca(reference->auth_key.len + 1);
 
 	memcpy(auth_key, reference->auth_key.data, reference->auth_key.len);
 
@@ -16149,6 +16171,7 @@ create_auth_session(struct crypto_unittest_params *ut_params,
 				ts_params->session_mpool);
 	if (ut_params->sess == NULL && rte_errno == ENOTSUP)
 		return TEST_SKIPPED;
+	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 
 	return 0;
 }
@@ -16161,8 +16184,8 @@ create_auth_cipher_session(struct crypto_unittest_params *ut_params,
 		enum rte_crypto_cipher_operation cipher_op)
 {
 	struct crypto_testsuite_params *ts_params = &testsuite_params;
-	uint8_t cipher_key[reference->cipher_key.len + 1];
-	uint8_t auth_key[reference->auth_key.len + 1];
+	uint8_t *cipher_key = alloca(reference->cipher_key.len + 1);
+	uint8_t *auth_key = alloca(reference->auth_key.len + 1);
 
 	memcpy(cipher_key, reference->cipher_key.data,
 			reference->cipher_key.len);
@@ -16199,6 +16222,7 @@ create_auth_cipher_session(struct crypto_unittest_params *ut_params,
 				ts_params->session_mpool);
 	if (ut_params->sess == NULL && rte_errno == ENOTSUP)
 		return TEST_SKIPPED;
+	TEST_ASSERT_NOT_NULL(ut_params->sess, "Session creation failed");
 
 	return 0;
 }
@@ -16662,8 +16686,8 @@ test_authenticated_encrypt_with_esn(
 
 	uint8_t *authciphertext, *plaintext, *auth_tag;
 	uint16_t plaintext_pad_len;
-	uint8_t cipher_key[reference->cipher_key.len + 1];
-	uint8_t auth_key[reference->auth_key.len + 1];
+	uint8_t *cipher_key = alloca(reference->cipher_key.len + 1);
+	uint8_t *auth_key = alloca(reference->auth_key.len + 1);
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);
@@ -16794,8 +16818,8 @@ test_authenticated_decrypt_with_esn(
 	int retval;
 
 	uint8_t *ciphertext;
-	uint8_t cipher_key[reference->cipher_key.len + 1];
-	uint8_t auth_key[reference->auth_key.len + 1];
+	uint8_t *cipher_key = alloca(reference->cipher_key.len + 1);
+	uint8_t *auth_key = alloca(reference->auth_key.len + 1);
 	struct rte_cryptodev_info dev_info;
 
 	rte_cryptodev_info_get(ts_params->valid_devs[0], &dev_info);

@@ -168,6 +168,9 @@ struct mlx5_flow_action_copy_mreg {
 /* Matches on source queue. */
 struct mlx5_rte_flow_item_sq {
 	uint32_t queue; /* DevX SQ number */
+#ifdef RTE_ARCH_64
+	uint32_t reserved;
+#endif
 };
 
 /* Map from registers to modify fields. */
@@ -398,6 +401,7 @@ enum mlx5_feature_name {
 #define MLX5_FLOW_ACTION_IPV6_ROUTING_REMOVE (1ull << 48)
 #define MLX5_FLOW_ACTION_IPV6_ROUTING_PUSH (1ull << 49)
 #define MLX5_FLOW_ACTION_NAT64 (1ull << 50)
+#define MLX5_FLOW_ACTION_JUMP_TO_TABLE_INDEX (1ull << 51)
 
 #define MLX5_FLOW_DROP_INCLUSIVE_ACTIONS \
 	(MLX5_FLOW_ACTION_COUNT | MLX5_FLOW_ACTION_SAMPLE | MLX5_FLOW_ACTION_AGE)
@@ -408,12 +412,14 @@ enum mlx5_feature_name {
 	 MLX5_FLOW_ACTION_DEFAULT_MISS | \
 	 MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY | \
 	 MLX5_FLOW_ACTION_SEND_TO_KERNEL | \
-	 MLX5_FLOW_ACTION_PORT_REPRESENTOR)
+	 MLX5_FLOW_ACTION_PORT_REPRESENTOR | \
+	 MLX5_FLOW_ACTION_JUMP_TO_TABLE_INDEX)
 
 #define MLX5_FLOW_FATE_ESWITCH_ACTIONS \
 	(MLX5_FLOW_ACTION_DROP | MLX5_FLOW_ACTION_PORT_ID | \
 	 MLX5_FLOW_ACTION_SEND_TO_KERNEL | \
-	 MLX5_FLOW_ACTION_JUMP | MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY)
+	 MLX5_FLOW_ACTION_JUMP | MLX5_FLOW_ACTION_METER_WITH_TERMINATED_POLICY | \
+	 MLX5_FLOW_ACTION_JUMP_TO_TABLE_INDEX)
 
 #define MLX5_FLOW_MODIFY_HDR_ACTIONS (MLX5_FLOW_ACTION_SET_IPV4_SRC | \
 				      MLX5_FLOW_ACTION_SET_IPV4_DST | \
@@ -640,9 +646,6 @@ struct mlx5_flow_dv_matcher {
 	struct mlx5_flow_dv_match_params mask; /**< Matcher mask. */
 };
 
-#define MLX5_PUSH_MAX_LEN 128
-#define MLX5_ENCAP_MAX_LEN 132
-
 /* Encap/decap resource structure. */
 struct mlx5_flow_dv_encap_decap_resource {
 	struct mlx5_list_entry entry;
@@ -670,7 +673,7 @@ struct mlx5_flow_dv_tag_resource {
 };
 
 /* Modify resource structure */
-struct mlx5_flow_dv_modify_hdr_resource {
+struct __rte_packed_begin mlx5_flow_dv_modify_hdr_resource {
 	struct mlx5_list_entry entry;
 	void *action; /**< Modify header action object. */
 	uint32_t idx;
@@ -681,7 +684,7 @@ struct mlx5_flow_dv_modify_hdr_resource {
 	bool root; /**< Whether action is in root table. */
 	struct mlx5_modification_cmd actions[];
 	/**< Modification actions. */
-} __rte_packed;
+} __rte_packed_end;
 
 /* Modify resource key of the hash organization. */
 union mlx5_flow_modify_hdr_key {
@@ -828,7 +831,7 @@ struct mlx5_flow_dv_dest_array_resource {
 
 
 /** Device flow handle structure for DV mode only. */
-struct mlx5_flow_handle_dv {
+struct __rte_packed_begin mlx5_flow_handle_dv {
 	/* Flow DV api: */
 	struct mlx5_flow_dv_matcher *matcher; /**< Cache to matcher. */
 	struct mlx5_flow_dv_modify_hdr_resource *modify_hdr;
@@ -843,10 +846,10 @@ struct mlx5_flow_handle_dv {
 	/**< Index to sample action resource in cache. */
 	uint32_t rix_dest_array;
 	/**< Index to destination array resource in cache. */
-} __rte_packed;
+} __rte_packed_end;
 
 /** Device flow handle structure: used both for creating & destroying. */
-struct mlx5_flow_handle {
+struct __rte_packed_begin mlx5_flow_handle {
 	SILIST_ENTRY(uint32_t)next;
 	struct mlx5_vf_vlan vf_vlan; /**< Structure for VF VLAN workaround. */
 	/**< Index to next device flow handle. */
@@ -872,7 +875,7 @@ struct mlx5_flow_handle {
 	struct mlx5_flow_handle_dv dvh;
 #endif
 	uint8_t flex_item; /**< referenced Flex Item bitmask. */
-} __rte_packed;
+} __rte_packed_end;
 
 /*
  * Size for Verbs device flow handle structure only. Do not use the DV only
@@ -974,7 +977,7 @@ struct mlx5_flow_verbs_workspace {
 #define MLX5_SCALE_JUMP_FLOW_GROUP_BIT 1
 
 /** Maximal number of device sub-flows supported. */
-#define MLX5_NUM_MAX_DEV_FLOWS 32
+#define MLX5_NUM_MAX_DEV_FLOWS 64
 
 /**
  * tunnel offload rules type
@@ -1247,7 +1250,7 @@ struct mlx5_flow_attr {
 };
 
 /* Flow structure. */
-struct rte_flow {
+struct __rte_packed_begin rte_flow {
 	uint32_t dev_handles;
 	/**< Device flow handles that are part of the flow. */
 	uint32_t type:2;
@@ -1265,7 +1268,7 @@ struct rte_flow {
 		uint32_t ct; /**< Holds ASO CT index. */
 	};
 	uint32_t geneve_tlv_option; /**< Holds Geneve TLV option id. > */
-} __rte_packed;
+} __rte_packed_end;
 
 /*
  * HWS COUNTER ID's layout
@@ -1413,28 +1416,6 @@ typedef int
 			    const struct mlx5_action_construct_data *,
 			    const struct rte_flow_action *,
 			    struct mlx5dr_rule_action *);
-
-#define MLX5_MHDR_MAX_CMD ((MLX5_MAX_MODIFY_NUM) * 2 + 1)
-
-/** Container for flow action data constructed during flow rule creation. */
-struct mlx5_flow_hw_action_params {
-	/** Array of constructed modify header commands. */
-	struct mlx5_modification_cmd mhdr_cmd[MLX5_MHDR_MAX_CMD];
-	/** Constructed encap/decap data buffer. */
-	uint8_t encap_data[MLX5_ENCAP_MAX_LEN];
-	/** Constructed IPv6 routing data buffer. */
-	uint8_t ipv6_push_data[MLX5_PUSH_MAX_LEN];
-};
-
-/** Container for dynamically generated flow items used during flow rule creation. */
-struct mlx5_flow_hw_pattern_params {
-	/** Array of dynamically generated flow items. */
-	struct rte_flow_item items[MLX5_HW_MAX_ITEMS];
-	/** Temporary REPRESENTED_PORT item generated by PMD. */
-	struct rte_flow_item_ethdev port_spec;
-	/** Temporary TAG item generated by PMD. */
-	struct rte_flow_item_tag tag_spec;
-};
 
 /* rte flow action translate to DR action struct. */
 struct mlx5_action_construct_data {
@@ -1602,7 +1583,7 @@ struct mlx5_hw_modify_header_action {
 };
 
 /* The maximum actions support in the flow. */
-#define MLX5_HW_MAX_ACTS 16
+#define MLX5_HW_MAX_ACTS 32
 
 /* DR action set struct. */
 struct mlx5_hw_actions {
@@ -1704,6 +1685,7 @@ struct mlx5_flow_template_table_cfg {
 
 struct mlx5_matcher_info {
 	struct mlx5dr_matcher *matcher; /* Template matcher. */
+	struct mlx5dr_action *jump; /* Jump to matcher action. */
 	RTE_ATOMIC(uint32_t) refcnt;
 };
 
@@ -1937,6 +1919,9 @@ struct mlx5_flow_workspace {
 	/* The meter policy used by meter in flow. */
 	struct mlx5_flow_meter_policy *final_policy;
 	/* The final policy when meter policy is hierarchy. */
+#ifdef HAVE_MLX5_HWS_SUPPORT
+	struct rte_flow_template_table *table;
+#endif
 	uint32_t skip_matcher_reg:1;
 	/* Indicates if need to skip matcher register in translate. */
 	uint32_t mark:1; /* Indicates if flow contains mark action. */
@@ -2934,13 +2919,13 @@ enum mlx5_flow_ctrl_rx_eth_pattern_type {
 
 /* All types of RSS actions used in control flow rules. */
 enum mlx5_flow_ctrl_rx_expanded_rss_type {
-	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_NON_IP = 0,
-	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV4,
+	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV6_UDP = 0,
+	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV6_TCP,
 	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV4_UDP,
 	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV4_TCP,
 	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV6,
-	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV6_UDP,
-	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV6_TCP,
+	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_IPV4,
+	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_NON_IP,
 	MLX5_FLOW_HW_CTRL_RX_EXPANDED_RSS_MAX,
 };
 
@@ -2990,6 +2975,42 @@ struct mlx5_flow_hw_ctrl_fdb {
 #define MLX5_CTRL_VLAN_FILTER    (RTE_BIT32(6))
 
 int mlx5_flow_hw_ctrl_flows(struct rte_eth_dev *dev, uint32_t flags);
+
+/** Create a control flow rule for matching unicast DMAC with VLAN (Verbs and DV). */
+int mlx5_legacy_dmac_flow_create(struct rte_eth_dev *dev, const struct rte_ether_addr *addr);
+
+/** Destroy a control flow rule for matching unicast DMAC with VLAN (Verbs and DV). */
+int mlx5_legacy_dmac_flow_destroy(struct rte_eth_dev *dev, const struct rte_ether_addr *addr);
+
+/** Create a control flow rule for matching unicast DMAC with VLAN (Verbs and DV). */
+int mlx5_legacy_dmac_vlan_flow_create(struct rte_eth_dev *dev,
+				      const struct rte_ether_addr *addr,
+				      const uint16_t vid);
+
+/** Destroy a control flow rule for matching unicast DMAC with VLAN (Verbs and DV). */
+int mlx5_legacy_dmac_vlan_flow_destroy(struct rte_eth_dev *dev,
+				      const struct rte_ether_addr *addr,
+				      const uint16_t vid);
+
+/** Destroy a control flow rule registered on port level control flow rule type. */
+void mlx5_legacy_ctrl_flow_destroy(struct rte_eth_dev *dev, struct mlx5_ctrl_flow_entry *entry);
+
+/** Create a control flow rule for matching unicast DMAC (HWS). */
+int mlx5_flow_hw_ctrl_flow_dmac(struct rte_eth_dev *dev, const struct rte_ether_addr *addr);
+
+/** Destroy a control flow rule for matching unicast DMAC (HWS). */
+int mlx5_flow_hw_ctrl_flow_dmac_destroy(struct rte_eth_dev *dev, const struct rte_ether_addr *addr);
+
+/** Create a control flow rule for matching unicast DMAC with VLAN (HWS). */
+int mlx5_flow_hw_ctrl_flow_dmac_vlan(struct rte_eth_dev *dev,
+				     const struct rte_ether_addr *addr,
+				     const uint16_t vlan);
+
+/** Destroy a control flow rule for matching unicast DMAC with VLAN (HWS). */
+int mlx5_flow_hw_ctrl_flow_dmac_vlan_destroy(struct rte_eth_dev *dev,
+					     const struct rte_ether_addr *addr,
+					     const uint16_t vlan);
+
 void mlx5_flow_hw_cleanup_ctrl_rx_templates(struct rte_eth_dev *dev);
 
 int mlx5_flow_group_to_table(struct rte_eth_dev *dev,
@@ -3609,6 +3630,9 @@ flow_hw_get_ipv6_route_ext_mod_id_from_ctx(void *dr_ctx, uint8_t idx)
 void
 mlx5_indirect_list_handles_release(struct rte_eth_dev *dev);
 #ifdef HAVE_MLX5_HWS_SUPPORT
+
+#define MLX5_REPR_STC_MEMORY_LOG 11
+
 struct mlx5_mirror;
 void
 mlx5_hw_mirror_destroy(struct rte_eth_dev *dev, struct mlx5_mirror *mirror);

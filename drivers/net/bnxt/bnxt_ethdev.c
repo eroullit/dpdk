@@ -33,6 +33,7 @@
 #include "bnxt_tf_common.h"
 #include "ulp_flow_db.h"
 #include "rte_pmd_bnxt.h"
+#include "bnxt_ulp_utils.h"
 
 #define DRV_MODULE_NAME		"bnxt"
 static const char bnxt_version[] =
@@ -105,6 +106,7 @@ static const struct rte_pci_id bnxt_pci_id_map[] = {
 #define BNXT_DEVARG_APP_ID	"app-id"
 #define BNXT_DEVARG_IEEE_1588	"ieee-1588"
 #define BNXT_DEVARG_CQE_MODE	"cqe-mode"
+#define BNXT_DEVARG_MPC		"mpc"
 
 static const char *const bnxt_dev_args[] = {
 	BNXT_DEVARG_REPRESENTOR,
@@ -119,6 +121,7 @@ static const char *const bnxt_dev_args[] = {
 	BNXT_DEVARG_APP_ID,
 	BNXT_DEVARG_IEEE_1588,
 	BNXT_DEVARG_CQE_MODE,
+	BNXT_DEVARG_MPC,
 	NULL
 };
 
@@ -144,6 +147,11 @@ static const struct rte_eth_speed_lanes_capa speed_lanes_capa_tbl[] = {
  * cqe-mode = an non-negative 8-bit number
  */
 #define BNXT_DEVARG_CQE_MODE_INVALID(val)		((val) > 1)
+
+/*
+ * mpc = an non-negative 8-bit number
+ */
+#define BNXT_DEVARG_MPC_INVALID(val)			((val) > 1)
 
 /*
  * app-id = an non-negative 8-bit number
@@ -192,6 +200,7 @@ static const struct rte_eth_speed_lanes_capa speed_lanes_capa_tbl[] = {
 #define BNXT_DEVARG_REP_FC_F2R_INVALID(rep_fc_f2r)	((rep_fc_f2r) > 1)
 
 int bnxt_cfa_code_dynfield_offset = -1;
+unsigned long mpc;
 
 /*
  * max_num_kflows must be >= 32
@@ -910,6 +919,7 @@ skip_cosq_cfg:
 		struct bnxt_rx_queue *rxq = bp->rx_queues[j];
 
 		if (!rxq->rx_deferred_start) {
+			__rte_assume(j < RTE_MAX_QUEUES_PER_PORT);
 			bp->eth_dev->data->rx_queue_state[j] =
 				RTE_ETH_QUEUE_STATE_STARTED;
 			rxq->rx_started = true;
@@ -930,6 +940,7 @@ skip_cosq_cfg:
 		struct bnxt_tx_queue *txq = bp->tx_queues[j];
 
 		if (!txq->tx_deferred_start) {
+			__rte_assume(j < RTE_MAX_QUEUES_PER_PORT);
 			bp->eth_dev->data->tx_queue_state[j] =
 				RTE_ETH_QUEUE_STATE_STARTED;
 			txq->tx_started = true;
@@ -1258,6 +1269,11 @@ found:
 
 	dev_info->vmdq_pool_base = 0;
 	dev_info->vmdq_queue_base = 0;
+
+	dev_info->rx_seg_capa.max_nseg = BNXT_MAX_BUFFER_SPLIT_SEGS;
+	dev_info->rx_seg_capa.multi_pools = BNXT_MULTI_POOL_BUF_SPLIT_CAP;
+	dev_info->rx_seg_capa.offset_allowed = BNXT_BUF_SPLIT_OFFSET_CAP;
+	dev_info->rx_seg_capa.offset_align_log2 = BNXT_BUF_SPLIT_ALIGN_CAP;
 
 	dev_info->err_handle_mode = RTE_ETH_ERROR_HANDLE_MODE_PROACTIVE;
 
@@ -1733,6 +1749,10 @@ static int bnxt_dev_stop(struct rte_eth_dev *eth_dev)
 	bnxt_free_rx_mbufs(bp);
 	/* Process any remaining notifications in default completion queue */
 	bnxt_int_handler(eth_dev);
+
+	if (mpc != 0)
+		bnxt_mpc_close(bp);
+
 	bnxt_shutdown_nic(bp);
 	bnxt_hwrm_if_change(bp, false);
 
@@ -1810,6 +1830,12 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	if (rc)
 		goto error;
 
+	if (mpc != 0) {
+		rc = bnxt_mpc_open(bp);
+		if (rc != 0)
+			PMD_DRV_LOG_LINE(DEBUG, "MPC open failed");
+	}
+
 	rc = bnxt_alloc_prev_ring_stats(bp);
 	if (rc)
 		goto error;
@@ -1828,6 +1854,21 @@ int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 
 	/* Initialize bnxt ULP port details */
 	if (bnxt_enable_ulp(bp)) {
+		if (BNXT_CHIP_P7(bp)) {
+			/* Need to release the Fid from AFM control */
+			rc = bnxt_hwrm_release_afm_func(bp, bp->fw_fid,
+							bp->fw_fid,
+							HWRM_CFA_RELEASE_AFM_FUNC_INPUT_TYPE_RFID,
+							0);
+			if (rc) {
+				PMD_DRV_LOG_LINE(ERR,
+						 "Failed in hwrm release afm func:%u rc=%d",
+						 bp->fw_fid, rc);
+				goto error;
+			}
+			PMD_DRV_LOG_LINE(DEBUG, "Released RFID:%d", bp->fw_fid);
+		}
+
 		rc = bnxt_ulp_port_init(bp);
 		if (rc)
 			goto error;
@@ -2266,6 +2307,11 @@ static int bnxt_reta_update_op(struct rte_eth_dev *eth_dev,
 			continue;
 
 		rxq = bnxt_qid_to_rxq(bp, reta_conf[idx].reta[sft]);
+		if (!rxq) {
+			PMD_DRV_LOG_LINE(ERR, "Invalid ring in reta_conf");
+			return -EINVAL;
+		}
+
 		if (BNXT_CHIP_P5_P7(bp)) {
 			vnic->rss_table[i * 2] =
 				rxq->rx_ring->rx_ring_struct->fw_ring_id;
@@ -2925,7 +2971,7 @@ bnxt_vlan_offload_set_op(struct rte_eth_dev *dev, int mask)
 {
 	uint64_t rx_offloads = dev->data->dev_conf.rxmode.offloads;
 	struct bnxt *bp = dev->data->dev_private;
-	int rc;
+	int rc = 0;
 
 	rc = is_bnxt_in_error(bp);
 	if (rc)
@@ -2934,6 +2980,10 @@ bnxt_vlan_offload_set_op(struct rte_eth_dev *dev, int mask)
 	/* Filter settings will get applied when port is started */
 	if (!dev->data->dev_started)
 		return 0;
+
+	/* For P7 platform, cannot support if truflow is enabled */
+	if (BNXT_TRUFLOW_EN(bp) && BNXT_CHIP_P7(bp))
+		return rc;
 
 	if (mask & RTE_ETH_VLAN_FILTER_MASK) {
 		/* Enable or disable VLAN filtering */
@@ -3798,6 +3848,7 @@ bnxt_timesync_read_time(struct rte_eth_dev *dev, struct timespec *ts)
 	if (!ptp)
 		return -ENOTSUP;
 
+	/* TODO Revisit for Thor 2 */
 	if (BNXT_CHIP_P5(bp))
 		rc = bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_CURRENT_TIME,
 					     &systime_cycles);
@@ -3847,6 +3898,7 @@ bnxt_timesync_enable(struct rte_eth_dev *dev)
 	ptp->tx_tstamp_tc.cc_shift = shift;
 	ptp->tx_tstamp_tc.nsec_mask = (1ULL << shift) - 1;
 
+	/* TODO Revisit for Thor 2 */
 	if (!BNXT_CHIP_P5(bp))
 		bnxt_map_ptp_regs(bp);
 	else
@@ -3871,6 +3923,7 @@ bnxt_timesync_disable(struct rte_eth_dev *dev)
 
 	bnxt_hwrm_ptp_cfg(bp);
 
+	/* TODO Revisit for Thor 2 */
 	bp->ptp_all_rx_tstamp = 0;
 	if (!BNXT_CHIP_P5(bp))
 		bnxt_unmap_ptp_regs(bp);
@@ -3893,6 +3946,7 @@ bnxt_timesync_read_rx_timestamp(struct rte_eth_dev *dev,
 	if (!ptp)
 		return -ENOTSUP;
 
+	/* TODO Revisit for Thor 2 */
 	if (BNXT_CHIP_P5(bp))
 		rx_tstamp_cycles = ptp->rx_timestamp;
 	else
@@ -3916,6 +3970,7 @@ bnxt_timesync_read_tx_timestamp(struct rte_eth_dev *dev,
 	if (!ptp)
 		return -ENOTSUP;
 
+	/* TODO Revisit for Thor 2 */
 	if (BNXT_CHIP_P5(bp))
 		rc = bnxt_hwrm_port_ts_query(bp, BNXT_PTP_FLAGS_PATH_TX,
 					     &tx_tstamp_cycles);
@@ -4176,7 +4231,6 @@ static int bnxt_get_module_eeprom(struct rte_eth_dev *dev,
 
 	switch (module_info[0]) {
 	case SFF_MODULE_ID_SFP:
-		module_info[SFF_DIAG_SUPPORT_OFFSET] = 0;
 		if (module_info[SFF_DIAG_SUPPORT_OFFSET]) {
 			pg_addr[2] = I2C_DEV_ADDR_A2;
 			pg_addr[3] = I2C_DEV_ADDR_A2;
@@ -5731,6 +5785,11 @@ try_again:
 	if (rc)
 		return rc;
 
+	if (bnxt_compressed_rx_cqe_mode_enabled(bp)) {
+		PMD_DRV_LOG_LINE(INFO, "Compressed CQE is set. Truflow is disabled.");
+		bp->fw_cap &= ~BNXT_FW_CAP_TRUFLOW_EN;
+	}
+
 	rc = bnxt_hwrm_queue_qportcfg(bp);
 	if (rc)
 		return rc;
@@ -5767,31 +5826,12 @@ try_again:
 static int
 bnxt_init_locks(struct bnxt *bp)
 {
-	int err;
+	pthread_mutex_init(&bp->flow_lock, NULL);
+	pthread_mutex_init(&bp->def_cp_lock, NULL);
+	pthread_mutex_init(&bp->health_check_lock, NULL);
+	pthread_mutex_init(&bp->err_recovery_lock, NULL);
 
-	err = pthread_mutex_init(&bp->flow_lock, NULL);
-	if (err) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize flow_lock");
-		return err;
-	}
-
-	err = pthread_mutex_init(&bp->def_cp_lock, NULL);
-	if (err) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize def_cp_lock");
-		return err;
-	}
-
-	err = pthread_mutex_init(&bp->health_check_lock, NULL);
-	if (err) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize health_check_lock");
-		return err;
-	}
-
-	err = pthread_mutex_init(&bp->err_recovery_lock, NULL);
-	if (err)
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize err_recovery_lock");
-
-	return err;
+	return 0;
 }
 
 /* This should be called after we have queried trusted VF cap */
@@ -6034,6 +6074,37 @@ bnxt_parse_devarg_app_id(__rte_unused const char *key,
 	bp->app_id = app_id;
 	PMD_DRV_LOG_LINE(INFO, "app-id=%d feature enabled.", (uint16_t)app_id);
 
+	return 0;
+}
+
+static int
+bnxt_parse_devarg_mpc(__rte_unused const char *key,
+		      const char *value, __rte_unused void *opaque_arg)
+{
+	char *end = NULL;
+
+	if (!value || !opaque_arg) {
+		PMD_DRV_LOG_LINE(ERR,
+				 "Invalid parameter passed to app-id "
+				 "devargs");
+		return -EINVAL;
+	}
+
+	mpc = strtoul(value, &end, 10);
+	if (end == NULL || *end != '\0' ||
+	    (mpc == ULONG_MAX && errno == ERANGE)) {
+		PMD_DRV_LOG_LINE(ERR, "Invalid parameter passed to mpc "
+				 "devargs");
+		return -EINVAL;
+	}
+
+	if (BNXT_DEVARG_MPC_INVALID(mpc)) {
+		PMD_DRV_LOG_LINE(ERR, "Invalid mpc(%d) devargs",
+				 (uint16_t)mpc);
+		return -EINVAL;
+	}
+
+	PMD_DRV_LOG_LINE(INFO, "MPC%d feature enabled", (uint16_t)mpc);
 	return 0;
 }
 
@@ -6343,6 +6414,13 @@ err:
 			   bnxt_parse_devarg_ieee_1588, bp);
 
 	/*
+	 * Handler for "mpc" devarg.
+	 * Invoked as for ex: "-a 000:00:0d.0,mpc=1"
+	 */
+	rte_kvargs_process(kvlist, BNXT_DEVARG_MPC,
+			   bnxt_parse_devarg_mpc, bp);
+
+	/*
 	 * Handler for "cqe-mode" devarg.
 	 * Invoked as for ex: "-a 000:00:0d.0,cqe-mode=1"
 	 */
@@ -6454,8 +6532,8 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev, void *params __rte_unused)
 	eth_dev->rx_queue_count = bnxt_rx_queue_count_op;
 	eth_dev->rx_descriptor_status = bnxt_rx_descriptor_status_op;
 	eth_dev->tx_descriptor_status = bnxt_tx_descriptor_status_op;
-	eth_dev->rx_pkt_burst = &bnxt_recv_pkts;
-	eth_dev->tx_pkt_burst = &bnxt_xmit_pkts;
+	eth_dev->rx_pkt_burst = bnxt_receive_function(eth_dev);
+	eth_dev->tx_pkt_burst = bnxt_transmit_function(eth_dev);
 
 	/*
 	 * For secondary processes, we don't initialise any further
@@ -6654,7 +6732,7 @@ static void bnxt_free_rep_info(struct bnxt *bp)
 
 static int bnxt_init_rep_info(struct bnxt *bp)
 {
-	int i = 0, rc;
+	int i = 0;
 
 	if (bp->rep_info)
 		return 0;
@@ -6678,14 +6756,7 @@ static int bnxt_init_rep_info(struct bnxt *bp)
 	for (i = 0; i < BNXT_MAX_CFA_CODE; i++)
 		bp->cfa_code_map[i] = BNXT_VF_IDX_INVALID;
 
-	rc = pthread_mutex_init(&bp->rep_info->vfr_start_lock, NULL);
-	if (rc) {
-		PMD_DRV_LOG_LINE(ERR, "Unable to initialize vfr_start_lock");
-		bnxt_free_rep_info(bp);
-		return rc;
-	}
-
-	return rc;
+	return pthread_mutex_init(&bp->rep_info->vfr_start_lock, NULL);
 }
 
 static int bnxt_rep_port_probe(struct rte_pci_device *pci_dev,
@@ -6922,6 +6993,8 @@ static int bnxt_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 static int bnxt_pci_remove(struct rte_pci_device *pci_dev)
 {
 	struct rte_eth_dev *eth_dev;
+	uint16_t port_id;
+	int rc = 0;
 
 	eth_dev = rte_eth_dev_allocated(pci_dev->device.name);
 	if (!eth_dev)
@@ -6931,14 +7004,20 @@ static int bnxt_pci_remove(struct rte_pci_device *pci_dev)
 			   * +ve value will at least help in proper cleanup
 			   */
 
-	PMD_DRV_LOG_LINE(DEBUG, "BNXT Port:%d pci remove", eth_dev->data->port_id);
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (rte_eth_dev_is_repr(eth_dev))
-			return rte_eth_dev_destroy(eth_dev,
-						   bnxt_representor_uninit);
-		else
-			return rte_eth_dev_destroy(eth_dev,
-						   bnxt_dev_uninit);
+		RTE_ETH_FOREACH_DEV_OF(port_id, &pci_dev->device) {
+			PMD_DRV_LOG_LINE(DEBUG, "BNXT Port:%d pci remove", port_id);
+			eth_dev = &rte_eth_devices[port_id];
+			if (eth_dev->data->dev_flags & RTE_ETH_DEV_REPRESENTOR)
+				rc = rte_eth_dev_destroy(eth_dev,
+							 bnxt_representor_uninit);
+			else
+				rc = rte_eth_dev_destroy(eth_dev,
+							 bnxt_dev_uninit);
+			if (rc != 0)
+				return rc;
+		}
+		return rc;
 	} else {
 		return rte_eth_dev_pci_generic_remove(pci_dev, NULL);
 	}
@@ -6969,10 +7048,30 @@ bool is_bnxt_supported(struct rte_eth_dev *dev)
 	return is_device_supported(dev, &bnxt_rte_pmd);
 }
 
-struct tf *bnxt_get_tfp_session(struct bnxt *bp, enum bnxt_session_type type)
+struct bnxt *
+bnxt_pmd_get_bp(uint16_t port)
 {
-	return (type >= BNXT_SESSION_TYPE_LAST) ?
-		&bp->tfp[BNXT_SESSION_TYPE_REGULAR] : &bp->tfp[type];
+	struct bnxt *bp;
+	struct rte_eth_dev *dev;
+
+	if (!rte_eth_dev_is_valid_port(port)) {
+		PMD_DRV_LOG_LINE(ERR, "Invalid port %d", port);
+		return NULL;
+	}
+
+	dev = &rte_eth_devices[port];
+	if (!is_bnxt_supported(dev)) {
+		PMD_DRV_LOG_LINE(ERR, "Device %d not supported", port);
+		return NULL;
+	}
+
+	bp = (struct bnxt *)dev->data->dev_private;
+	if (!BNXT_TRUFLOW_EN(bp)) {
+		PMD_DRV_LOG_LINE(ERR, "TRUFLOW not enabled");
+		return NULL;
+	}
+
+	return bp;
 }
 
 /* check if ULP should be enabled or not */
@@ -6982,7 +7081,7 @@ static bool bnxt_enable_ulp(struct bnxt *bp)
 	/* not enabling ulp for cli and no truflow apps */
 	if (BNXT_TRUFLOW_EN(bp) && bp->app_id != 254 &&
 	    bp->app_id != 255) {
-		if (BNXT_CHIP_P7(bp))
+		if (BNXT_CHIP_P7(bp) && !mpc)
 			return false;
 		return true;
 	}

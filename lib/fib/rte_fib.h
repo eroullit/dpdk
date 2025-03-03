@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 
+#include <rte_common.h>
 #include <rte_rcu_qsbr.h>
 
 #ifdef __cplusplus
@@ -88,8 +89,8 @@ enum rte_fib_lookup_type {
 };
 
 /** If set, fib lookup is expecting IPv4 address in network byte order */
-#define RTE_FIB_F_NETWORK_ORDER	1
-#define RTE_FIB_ALLOWED_FLAGS	(RTE_FIB_F_NETWORK_ORDER)
+#define RTE_FIB_F_LOOKUP_NETWORK_ORDER 1
+#define RTE_FIB_ALLOWED_FLAGS (RTE_FIB_F_LOOKUP_NETWORK_ORDER)
 
 /** FIB configuration structure */
 struct rte_fib_conf {
@@ -129,6 +130,16 @@ struct rte_fib_rcu_config {
 };
 
 /**
+ * Free an FIB object.
+ *
+ * @param fib
+ *   FIB object handle created by rte_fib_create().
+ *   If fib is NULL, no operation is performed.
+ */
+void
+rte_fib_free(struct rte_fib *fib);
+
+/**
  * Create FIB
  *
  * @param name
@@ -142,7 +153,8 @@ struct rte_fib_rcu_config {
  *  NULL otherwise with rte_errno set to an appropriate values.
  */
 struct rte_fib *
-rte_fib_create(const char *name, int socket_id, struct rte_fib_conf *conf);
+rte_fib_create(const char *name, int socket_id, struct rte_fib_conf *conf)
+	__rte_malloc __rte_dealloc(rte_fib_free, 1);
 
 /**
  * Find an existing FIB object and return a pointer to it.
@@ -156,16 +168,6 @@ rte_fib_create(const char *name, int socket_id, struct rte_fib_conf *conf);
  */
 struct rte_fib *
 rte_fib_find_existing(const char *name);
-
-/**
- * Free an FIB object.
- *
- * @param fib
- *   FIB object handle created by rte_fib_create().
- *   If fib is NULL, no operation is performed.
- */
-void
-rte_fib_free(struct rte_fib *fib);
 
 /**
  * Add a route to the FIB.

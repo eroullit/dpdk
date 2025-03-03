@@ -24,6 +24,20 @@
 #define CTRL_VNIC_NB_DESC 512
 
 int
+nfp_flower_pf_stop(struct rte_eth_dev *dev)
+{
+	struct nfp_net_hw_priv *hw_priv;
+	struct nfp_flower_representor *repr;
+
+	repr = dev->data->dev_private;
+	hw_priv = dev->process_private;
+	nfp_flower_cmsg_port_mod(repr->app_fw_flower, repr->port_id, false);
+	(void)nfp_eth_set_configured(hw_priv->pf_dev->cpp, repr->nfp_idx, 0);
+
+	return nfp_net_stop(dev);
+}
+
+int
 nfp_flower_pf_start(struct rte_eth_dev *dev)
 {
 	int ret;
@@ -34,6 +48,7 @@ nfp_flower_pf_start(struct rte_eth_dev *dev)
 	struct nfp_net_hw *net_hw;
 	struct rte_eth_conf *dev_conf;
 	struct rte_eth_rxmode *rxmode;
+	struct nfp_net_hw_priv *hw_priv;
 	struct nfp_flower_representor *repr;
 
 	repr = dev->data->dev_private;
@@ -82,6 +97,12 @@ nfp_flower_pf_start(struct rte_eth_dev *dev)
 	if (ret != 0) {
 		PMD_INIT_LOG(ERR, "Error with flower PF vNIC freelist setup.");
 		return -EIO;
+	}
+
+	hw_priv = dev->process_private;
+	if (hw_priv->pf_dev->multi_pf.enabled) {
+		(void)nfp_eth_set_configured(hw_priv->pf_dev->cpp, repr->nfp_idx, 1);
+		nfp_flower_cmsg_port_mod(repr->app_fw_flower, repr->port_id, true);
 	}
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++)
@@ -192,6 +213,76 @@ nfp_flower_pf_xmit_pkts(void *tx_queue,
 	app_fw_flower = txq->hw_priv->pf_dev->app_fw_priv;
 
 	return app_fw_flower->nfd_func.pf_xmit_t(tx_queue, tx_pkts, nb_pkts);
+}
+
+uint16_t
+nfp_flower_multiple_pf_recv_pkts(void *rx_queue,
+		struct rte_mbuf **rx_pkts,
+		uint16_t nb_pkts)
+{
+	int i;
+	uint16_t recv;
+	uint32_t data_len;
+	struct nfp_net_rxq *rxq;
+	struct rte_eth_dev *repr_dev;
+	struct nfp_flower_representor *repr;
+
+	recv = nfp_net_recv_pkts(rx_queue, rx_pkts, nb_pkts);
+	if (recv != 0) {
+		/* Grab a handle to the representor struct */
+		rxq = rx_queue;
+		repr_dev = &rte_eth_devices[rxq->port_id];
+		repr = repr_dev->data->dev_private;
+
+		data_len = 0;
+		for (i = 0; i < recv; i++)
+			data_len += rx_pkts[i]->data_len;
+
+		repr->repr_stats.ipackets += recv;
+		repr->repr_stats.q_ipackets[rxq->qidx] += recv;
+		repr->repr_stats.q_ibytes[rxq->qidx] += data_len;
+	}
+
+	return recv;
+}
+
+uint16_t
+nfp_flower_multiple_pf_xmit_pkts(void *tx_queue,
+		struct rte_mbuf **tx_pkts,
+		uint16_t nb_pkts)
+{
+	int i;
+	uint16_t sent;
+	uint32_t data_len;
+	struct nfp_net_txq *txq;
+	struct rte_eth_dev *repr_dev;
+	struct nfp_flower_representor *repr;
+
+	txq = tx_queue;
+	if (unlikely(txq == NULL)) {
+		PMD_TX_LOG(ERR, "TX Bad queue.");
+		return 0;
+	}
+
+	/* Grab a handle to the representor struct */
+	repr_dev = &rte_eth_devices[txq->port_id];
+	repr = repr_dev->data->dev_private;
+	for (i = 0; i < nb_pkts; i++)
+		nfp_flower_pkt_add_metadata(repr->app_fw_flower,
+				tx_pkts[i], repr->port_id);
+
+	sent = nfp_flower_pf_xmit_pkts(tx_queue, tx_pkts, nb_pkts);
+	if (sent != 0) {
+		data_len = 0;
+		for (i = 0; i < sent; i++)
+			data_len += tx_pkts[i]->data_len;
+
+		repr->repr_stats.opackets += sent;
+		repr->repr_stats.q_opackets[txq->qidx] += sent;
+		repr->repr_stats.q_obytes[txq->qidx] += data_len;
+	}
+
+	return sent;
 }
 
 static int

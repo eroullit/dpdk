@@ -677,7 +677,7 @@ openssl_set_session_auth_parameters(struct openssl_session *sess,
 		else
 			return -EINVAL;
 
-		rte_memcpy(algo_name, algo, strlen(algo) + 1);
+		strlcpy(algo_name, algo, sizeof(algo_name));
 		params[0] = OSSL_PARAM_construct_utf8_string(
 				OSSL_MAC_PARAM_CIPHER, algo_name, 0);
 		params[1] = OSSL_PARAM_construct_end();
@@ -1595,9 +1595,6 @@ process_openssl_auth_cmac(struct rte_mbuf *mbuf_src, uint8_t *dst, int offset,
 process_auth_final:
 	if (CMAC_Final(ctx, dst, (size_t *)&dstlen) != 1)
 		goto process_auth_err;
-
-	CMAC_CTX_cleanup(ctx);
-
 	return 0;
 
 process_auth_err:
@@ -3244,14 +3241,11 @@ process_openssl_eddsa_op_evp(struct rte_crypto_op *cop,
 err_eddsa:
 	OSSL_PARAM_BLD_free(iparam_bld);
 
-	if (sctx)
-		EVP_PKEY_CTX_free(sctx);
+	EVP_PKEY_CTX_free(sctx);
 
-	if (cctx)
-		EVP_PKEY_CTX_free(cctx);
+	EVP_PKEY_CTX_free(cctx);
 
-	if (pkey)
-		EVP_PKEY_free(pkey);
+	EVP_PKEY_free(pkey);
 
 	return ret;
 }

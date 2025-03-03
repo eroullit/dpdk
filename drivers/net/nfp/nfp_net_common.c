@@ -9,6 +9,7 @@
 
 #include <rte_alarm.h>
 
+#include "flower/nfp_flower_cmsg.h"
 #include "flower/nfp_flower_representor.h"
 #include "nfd3/nfp_nfd3.h"
 #include "nfdk/nfp_nfdk.h"
@@ -157,6 +158,15 @@ static const uint32_t nfp_net_link_speed_nfp2rte[] = {
 	[NFP_NET_CFG_STS_LINK_RATE_50G]         = RTE_ETH_SPEED_NUM_50G,
 	[NFP_NET_CFG_STS_LINK_RATE_100G]        = RTE_ETH_SPEED_NUM_100G,
 };
+
+static bool
+nfp_net_is_pf(struct rte_eth_dev *dev)
+{
+	if (rte_eth_dev_is_repr(dev))
+		return nfp_flower_repr_is_pf(dev);
+
+	return ((struct nfp_net_hw_priv *)dev->process_private)->is_pf;
+}
 
 static size_t
 nfp_net_link_speed_rte2nfp(uint32_t speed)
@@ -825,7 +835,7 @@ nfp_net_link_update_common(struct rte_eth_dev *dev,
 
 	hw_priv = dev->process_private;
 	if (link->link_status == RTE_ETH_LINK_UP) {
-		if (hw_priv->is_pf)
+		if (nfp_net_is_pf(dev))
 			nfp_net_pf_speed_update(dev, hw_priv, link);
 		else
 			nfp_net_vf_speed_update(link, link_status);
@@ -1039,7 +1049,7 @@ nfp_net_xstats_size(const struct rte_eth_dev *dev)
 
 	if (rte_eth_dev_is_repr(dev)) {
 		repr = dev->data->dev_private;
-		if (repr->mac_stats == NULL)
+		if (nfp_flower_repr_is_vf(repr))
 			vf_flag = true;
 	} else {
 		hw = dev->data->dev_private;
@@ -2876,4 +2886,339 @@ nfp_net_vf_config_app_init(struct nfp_net_hw *net_hw,
 	}
 
 	return 0;
+}
+
+static inline bool
+nfp_net_meta_has_no_port_type(__rte_unused struct nfp_net_meta_parsed *meta)
+{
+	return true;
+}
+
+static inline bool
+nfp_net_meta_is_not_pf_port(__rte_unused struct nfp_net_meta_parsed *meta)
+{
+	return false;
+}
+
+static inline bool
+nfp_net_meta_is_pf_port(struct nfp_net_meta_parsed *meta)
+{
+	return nfp_flower_port_is_phy_port(meta->port_id);
+}
+
+bool
+nfp_net_recv_pkt_meta_check_register(struct nfp_net_hw_priv *hw_priv)
+{
+	struct nfp_pf_dev *pf_dev;
+
+	pf_dev = hw_priv->pf_dev;
+	if (!hw_priv->is_pf) {
+		pf_dev->recv_pkt_meta_check_t = nfp_net_meta_has_no_port_type;
+		return true;
+	}
+
+	switch (pf_dev->app_fw_id) {
+	case NFP_APP_FW_CORE_NIC:
+		pf_dev->recv_pkt_meta_check_t = nfp_net_meta_has_no_port_type;
+		break;
+	case NFP_APP_FW_FLOWER_NIC:
+		if (pf_dev->multi_pf.enabled)
+			pf_dev->recv_pkt_meta_check_t = nfp_net_meta_is_pf_port;
+		else
+			pf_dev->recv_pkt_meta_check_t = nfp_net_meta_is_not_pf_port;
+		break;
+	default:
+		PMD_INIT_LOG(ERR, "Unsupported Firmware loaded.");
+		return false;
+	}
+
+	return true;
+}
+
+static int
+nfp_net_get_nfp_index(struct rte_eth_dev *dev)
+{
+	int nfp_idx;
+
+	if (rte_eth_dev_is_repr(dev)) {
+		struct nfp_flower_representor *repr;
+		repr = dev->data->dev_private;
+		nfp_idx = repr->nfp_idx;
+	} else {
+		struct nfp_net_hw *net_hw;
+		net_hw = dev->data->dev_private;
+		nfp_idx = net_hw->nfp_idx;
+	}
+
+	return nfp_idx;
+}
+
+int
+nfp_net_get_eeprom_len(__rte_unused struct rte_eth_dev *dev)
+{
+	return RTE_ETHER_ADDR_LEN;
+}
+
+static int
+nfp_net_get_port_mac_hwinfo(struct nfp_net_hw_priv *hw_priv,
+		uint32_t index,
+		struct rte_ether_addr *mac_addr)
+{
+	int ret;
+	char hwinfo[32];
+	struct nfp_nsp *nsp;
+
+	snprintf(hwinfo, sizeof(hwinfo), "eth%u.mac", index);
+
+	nsp = nfp_nsp_open(hw_priv->pf_dev->cpp);
+	if (nsp == NULL)
+		return -EOPNOTSUPP;
+
+	ret = nfp_nsp_hwinfo_lookup(nsp, hwinfo, sizeof(hwinfo));
+	nfp_nsp_close(nsp);
+
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "Read persistent MAC address failed for eth_index %u.", index);
+		return ret;
+	}
+
+	ret = rte_ether_unformat_addr(hwinfo, mac_addr);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "Can not parse persistent MAC address.");
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static int
+nfp_net_set_port_mac_hwinfo(struct nfp_net_hw_priv *hw_priv,
+		uint32_t index,
+		struct rte_ether_addr *mac_addr)
+{
+	int ret;
+	char hwinfo_mac[32];
+	struct nfp_nsp *nsp;
+	char buf[RTE_ETHER_ADDR_FMT_SIZE];
+
+	rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, mac_addr);
+	snprintf(hwinfo_mac, sizeof(hwinfo_mac), "eth%u.mac=%s", index, buf);
+
+	nsp = nfp_nsp_open(hw_priv->pf_dev->cpp);
+	if (nsp == NULL)
+		return -EOPNOTSUPP;
+
+	ret = nfp_nsp_hwinfo_set(nsp, hwinfo_mac, sizeof(hwinfo_mac));
+	nfp_nsp_close(nsp);
+
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "HWinfo set failed: %d.", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+int
+nfp_net_get_eeprom(struct rte_eth_dev *dev,
+		struct rte_dev_eeprom_info *eeprom)
+{
+	int ret;
+	uint32_t nfp_idx;
+	struct nfp_net_hw *net_hw;
+	struct rte_ether_addr mac_addr;
+	struct nfp_net_hw_priv *hw_priv;
+
+	if (eeprom->length == 0)
+		return -EINVAL;
+
+	hw_priv = dev->process_private;
+	nfp_idx = nfp_net_get_nfp_index(dev);
+
+	ret = nfp_net_get_port_mac_hwinfo(hw_priv, nfp_idx, &mac_addr);
+	if (ret != 0)
+		return -EOPNOTSUPP;
+
+	net_hw = nfp_net_get_hw(dev);
+	eeprom->magic = net_hw->vendor_id | (net_hw->device_id << 16);
+	memcpy(eeprom->data, mac_addr.addr_bytes + eeprom->offset, eeprom->length);
+
+	return 0;
+}
+
+int
+nfp_net_set_eeprom(struct rte_eth_dev *dev,
+		struct rte_dev_eeprom_info *eeprom)
+{
+	int ret;
+	uint32_t nfp_idx;
+	struct nfp_net_hw *net_hw;
+	struct rte_ether_addr mac_addr;
+	struct nfp_net_hw_priv *hw_priv;
+
+	if (eeprom->length == 0)
+		return -EINVAL;
+
+	net_hw = nfp_net_get_hw(dev);
+	if (eeprom->magic != (uint32_t)(net_hw->vendor_id | (net_hw->device_id << 16)))
+		return -EINVAL;
+
+	hw_priv = dev->process_private;
+	nfp_idx = nfp_net_get_nfp_index(dev);
+	ret = nfp_net_get_port_mac_hwinfo(hw_priv, nfp_idx, &mac_addr);
+	if (ret != 0)
+		return -EOPNOTSUPP;
+
+	memcpy(mac_addr.addr_bytes + eeprom->offset, eeprom->data, eeprom->length);
+	ret = nfp_net_set_port_mac_hwinfo(hw_priv, nfp_idx, &mac_addr);
+	if (ret != 0)
+		return -EOPNOTSUPP;
+
+	return 0;
+}
+
+int
+nfp_net_get_module_info(struct rte_eth_dev *dev,
+		struct rte_eth_dev_module_info *info)
+{
+	int ret = 0;
+	uint8_t data;
+	uint32_t idx;
+	uint32_t read_len;
+	struct nfp_nsp *nsp;
+	struct nfp_net_hw_priv *hw_priv;
+	struct nfp_eth_table_port *eth_port;
+
+	hw_priv = dev->process_private;
+	nsp = nfp_nsp_open(hw_priv->pf_dev->cpp);
+	if (nsp == NULL) {
+		PMD_DRV_LOG(ERR, "Unable to open NSP.");
+		return -EIO;
+	}
+
+	if (!nfp_nsp_has_read_module_eeprom(nsp)) {
+		PMD_DRV_LOG(ERR, "Read module eeprom not supported. Please update flash.");
+		ret = -EOPNOTSUPP;
+		goto exit_close_nsp;
+	}
+
+	idx = nfp_net_get_idx(dev);
+	eth_port = &hw_priv->pf_dev->nfp_eth_table->ports[idx];
+	switch (eth_port->interface) {
+	case NFP_INTERFACE_SFP:
+		/* FALLTHROUGH */
+	case NFP_INTERFACE_SFP28:
+		/* Read which revision the transceiver compiles with */
+		ret = nfp_nsp_read_module_eeprom(nsp, eth_port->eth_index,
+				SFP_SFF8472_COMPLIANCE, &data, 1, &read_len);
+		if (ret != 0)
+			goto exit_close_nsp;
+
+		if (data == 0) {
+			info->type = RTE_ETH_MODULE_SFF_8079;
+			info->eeprom_len = RTE_ETH_MODULE_SFF_8079_LEN;
+		} else {
+			info->type = RTE_ETH_MODULE_SFF_8472;
+			info->eeprom_len = RTE_ETH_MODULE_SFF_8472_LEN;
+		}
+		break;
+	case NFP_INTERFACE_QSFP:
+		/* Read which revision the transceiver compiles with */
+		ret = nfp_nsp_read_module_eeprom(nsp, eth_port->eth_index,
+				SFP_SFF_REV_COMPLIANCE, &data, 1, &read_len);
+		if (ret != 0)
+			goto exit_close_nsp;
+
+		if (data == 0) {
+			info->type = RTE_ETH_MODULE_SFF_8436;
+			info->eeprom_len = RTE_ETH_MODULE_SFF_8436_MAX_LEN;
+		} else {
+			info->type = RTE_ETH_MODULE_SFF_8636;
+			info->eeprom_len = RTE_ETH_MODULE_SFF_8636_MAX_LEN;
+		}
+		break;
+	case NFP_INTERFACE_QSFP28:
+		info->type = RTE_ETH_MODULE_SFF_8636;
+		info->eeprom_len = RTE_ETH_MODULE_SFF_8636_MAX_LEN;
+		break;
+	default:
+		PMD_DRV_LOG(ERR, "Unsupported module %#x detected.",
+				eth_port->interface);
+		ret = -EINVAL;
+	}
+
+exit_close_nsp:
+	nfp_nsp_close(nsp);
+	return ret;
+}
+
+int
+nfp_net_get_module_eeprom(struct rte_eth_dev *dev,
+		struct rte_dev_eeprom_info *info)
+{
+	int ret = 0;
+	uint32_t idx;
+	struct nfp_nsp *nsp;
+	struct nfp_net_hw_priv *hw_priv;
+	struct nfp_eth_table_port *eth_port;
+
+	hw_priv = dev->process_private;
+	nsp = nfp_nsp_open(hw_priv->pf_dev->cpp);
+	if (nsp == NULL) {
+		PMD_DRV_LOG(ERR, "Unable to open NSP.");
+		return -EIO;
+	}
+
+	if (!nfp_nsp_has_read_module_eeprom(nsp)) {
+		PMD_DRV_LOG(ERR, "Read module eeprom not supported. Please update flash.");
+		ret = -EOPNOTSUPP;
+		goto exit_close_nsp;
+	}
+
+	idx = nfp_net_get_idx(dev);
+	eth_port = &hw_priv->pf_dev->nfp_eth_table->ports[idx];
+	ret = nfp_nsp_read_module_eeprom(nsp, eth_port->eth_index, info->offset,
+			info->data, info->length, &info->length);
+	if (ret != 0) {
+		if (info->length)
+			PMD_DRV_LOG(ERR, "Incomplete read from module EEPROM: %d.", ret);
+		else
+			PMD_DRV_LOG(ERR, "Read from module EEPROM failed: %d.", ret);
+	}
+
+exit_close_nsp:
+	nfp_nsp_close(nsp);
+	return ret;
+}
+
+static int
+nfp_net_led_control(struct rte_eth_dev *dev,
+		bool is_on)
+{
+	int ret;
+	uint32_t nfp_idx;
+	struct nfp_net_hw_priv *hw_priv;
+
+	hw_priv = dev->process_private;
+	nfp_idx = nfp_net_get_nfp_index(dev);
+
+	ret = nfp_eth_set_idmode(hw_priv->pf_dev->cpp, nfp_idx, is_on);
+	if (ret < 0) {
+		PMD_DRV_LOG(ERR, "Set nfp idmode failed.");
+		return ret;
+	}
+
+	return 0;
+}
+
+int
+nfp_net_led_on(struct rte_eth_dev *dev)
+{
+	return nfp_net_led_control(dev, true);
+}
+
+int
+nfp_net_led_off(struct rte_eth_dev *dev)
+{
+	return nfp_net_led_control(dev, false);
 }

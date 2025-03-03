@@ -393,6 +393,7 @@ nic_xstats_display(portid_t port_id)
 	struct rte_eth_xstat *xstats;
 	int cnt_xstats, idx_xstat;
 	struct rte_eth_xstat_name *xstats_names;
+	int state;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
 		print_valid_ports();
@@ -442,6 +443,17 @@ nic_xstats_display(portid_t port_id)
 	for (idx_xstat = 0; idx_xstat < cnt_xstats; idx_xstat++) {
 		if (xstats_hide_zero && !xstats[idx_xstat].value)
 			continue;
+		if (xstats_hide_disabled) {
+			state = rte_eth_xstats_query_state(port_id, idx_xstat);
+			if (state == 0)
+				continue;
+		}
+		if (xstats_show_state) {
+			char opt[3] = {'D', 'E', '-'};
+			state = rte_eth_xstats_query_state(port_id, idx_xstat);
+			printf("state: %c	", state < 0 ? opt[2] : opt[state]);
+		}
+
 		printf("%s: %"PRIu64"\n",
 			xstats_names[idx_xstat].name,
 			xstats[idx_xstat].value);
@@ -1802,7 +1814,8 @@ port_flow_configure(portid_t port_id,
 {
 	struct rte_port *port;
 	struct rte_flow_error error;
-	const struct rte_flow_queue_attr *attr_list[nb_queue];
+	const struct rte_flow_queue_attr **attr_list =
+	    alloca(sizeof(struct rte_flow_queue_attr *) * nb_queue);
 	int std_queue;
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
@@ -2288,7 +2301,7 @@ port_meter_policy_add(portid_t port_id, uint32_t policy_id,
 		for (act_n = 0, start = act;
 			act->type != RTE_FLOW_ACTION_TYPE_END; act++)
 			act_n++;
-		if (act_n && act->type == RTE_FLOW_ACTION_TYPE_END)
+		if (act_n > 0)
 			policy.actions[i] = start;
 		else
 			policy.actions[i] = NULL;
@@ -2616,10 +2629,10 @@ port_flow_template_table_create(portid_t port_id, uint32_t id,
 	int ret;
 	uint32_t i;
 	struct rte_flow_error error;
-	struct rte_flow_pattern_template
-			*flow_pattern_templates[nb_pattern_templates];
-	struct rte_flow_actions_template
-			*flow_actions_templates[nb_actions_templates];
+	struct rte_flow_pattern_template **flow_pattern_templates =
+	    alloca(sizeof(struct rte_flow_pattern_template *) * nb_pattern_templates);
+	struct rte_flow_actions_template **flow_actions_templates =
+	    alloca(sizeof(struct rte_flow_actions_template *) * nb_actions_templates);
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 	    port_id == (portid_t)RTE_PORT_ALL)
@@ -3882,7 +3895,8 @@ port_flow_update(portid_t port_id, uint32_t rule_id,
 		 const struct rte_flow_action *actions, bool is_user_id)
 {
 	struct rte_port *port;
-	struct port_flow **flow_list;
+	struct port_flow **flow_list, *uf;
+	struct rte_flow_action_age *age = age_action_get(actions);
 
 	if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 	    port_id == (portid_t)RTE_PORT_ALL)
@@ -3897,6 +3911,16 @@ port_flow_update(portid_t port_id, uint32_t rule_id,
 			flow_list = &flow->next;
 			continue;
 		}
+
+		/* Update flow action(s) with new action(s) */
+		uf = port_flow_new(flow->rule.attr_ro, flow->rule.pattern_ro, actions, &error);
+		if (!uf)
+			return port_flow_complain(&error);
+		if (age) {
+			flow->age_type = ACTION_AGE_CONTEXT_TYPE_FLOW;
+			age->context = &flow->age_type;
+		}
+
 		/*
 		 * Poisoning to make sure PMDs update it in case
 		 * of error.
@@ -3913,6 +3937,14 @@ port_flow_update(portid_t port_id, uint32_t rule_id,
 			printf("Flow rule #%"PRIu64
 			       " updated with new actions\n",
 			       flow->id);
+
+		uf->next = flow->next;
+		uf->id = flow->id;
+		uf->user_id = flow->user_id;
+		uf->flow = flow->flow;
+		*flow_list = uf;
+
+		free(flow);
 		return 0;
 	}
 	printf("Failed to find flow %"PRIu32"\n", rule_id);
@@ -4141,8 +4173,10 @@ port_flow_aged(portid_t port_id, uint8_t destroy)
 		}
 		type = (enum age_action_context_type *)contexts[idx];
 		switch (*type) {
-		case ACTION_AGE_CONTEXT_TYPE_FLOW:
+		case ACTION_AGE_CONTEXT_TYPE_FLOW: {
+			uint64_t flow_id;
 			ctx.pf = container_of(type, struct port_flow, age_type);
+			flow_id = ctx.pf->id;
 			printf("%-20s\t%" PRIu64 "\t%" PRIu32 "\t%" PRIu32
 								 "\t%c%c%c\t\n",
 			       "Flow",
@@ -4153,9 +4187,10 @@ port_flow_aged(portid_t port_id, uint8_t destroy)
 			       ctx.pf->rule.attr->egress ? 'e' : '-',
 			       ctx.pf->rule.attr->transfer ? 't' : '-');
 			if (destroy && !port_flow_destroy(port_id, 1,
-							  &ctx.pf->id, false))
+							  &flow_id, false))
 				total++;
 			break;
+		}
 		case ACTION_AGE_CONTEXT_TYPE_INDIRECT_ACTION:
 			ctx.pia = container_of(type,
 					struct port_indirect_action, age_type);
@@ -5529,7 +5564,7 @@ parse_port_list(const char *list, unsigned int *values, unsigned int maxsize)
 	char *end = NULL;
 	int min, max;
 	int value, i;
-	unsigned int marked[maxsize];
+	unsigned int *marked = alloca(sizeof(unsigned int) * maxsize);
 
 	if (list == NULL || values == NULL)
 		return 0;
@@ -6416,6 +6451,78 @@ rx_vlan_strip_set_on_queue(portid_t port_id, uint16_t queue_id, int on)
 }
 
 void
+nic_xstats_set_counter(portid_t port_id, char *counter_name, int on)
+{
+	struct rte_eth_xstat_name *xstats_names;
+	int cnt_xstats;
+	int ret;
+	uint64_t id;
+
+	if (port_id_is_invalid(port_id, ENABLED_WARN)) {
+		print_valid_ports();
+		return;
+	}
+	if (!rte_eth_dev_is_valid_port(port_id)) {
+		fprintf(stderr, "Error: Invalid port number %i\n", port_id);
+		return;
+	}
+
+	if (counter_name == NULL) {
+		fprintf(stderr, "Error: Invalid counter name\n");
+		return;
+	}
+
+	/* Get count */
+	cnt_xstats = rte_eth_xstats_get_names(port_id, NULL, 0);
+	if (cnt_xstats  < 0) {
+		fprintf(stderr, "Error: Cannot get count of xstats\n");
+		return;
+	}
+
+	/* Get id-name lookup table */
+	xstats_names = malloc(sizeof(struct rte_eth_xstat_name) * cnt_xstats);
+	if (xstats_names == NULL) {
+		fprintf(stderr, "Cannot allocate memory for xstats lookup\n");
+		return;
+	}
+	if (cnt_xstats != rte_eth_xstats_get_names(
+			port_id, xstats_names, cnt_xstats)) {
+		fprintf(stderr, "Error: Cannot get xstats lookup\n");
+		free(xstats_names);
+		return;
+	}
+
+	if (rte_eth_xstats_get_id_by_name(port_id, counter_name, &id) < 0) {
+		fprintf(stderr, "Cannot find xstats with a given name\n");
+		free(xstats_names);
+		return;
+	}
+
+	/* set counter */
+	ret = rte_eth_xstats_set_counter(port_id, id, on);
+	if (ret < 0) {
+		switch (ret) {
+		case -EINVAL:
+			fprintf(stderr, "failed to find %s\n", counter_name);
+			break;
+		case -ENOTSUP:
+			fprintf(stderr, "operation not supported by device\n");
+			break;
+		case -ENOSPC:
+			fprintf(stderr, "there were not enough available counters\n");
+			break;
+		case -EPERM:
+			fprintf(stderr, "operation not premitted\n");
+			break;
+		default:
+			fprintf(stderr, "operation failed - diag=%d\n", ret);
+			break;
+		}
+	}
+	free(xstats_names);
+}
+
+void
 rx_vlan_filter_set(portid_t port_id, int on)
 {
 	int diag;
@@ -6641,6 +6748,18 @@ void
 set_xstats_hide_zero(uint8_t on_off)
 {
 	xstats_hide_zero = on_off;
+}
+
+void
+set_xstats_show_state(uint8_t on_off)
+{
+	xstats_show_state = on_off;
+}
+
+void
+set_xstats_hide_disabled(uint8_t on_off)
+{
+	xstats_hide_disabled = on_off;
 }
 
 void
@@ -7270,7 +7389,8 @@ show_macs(portid_t port_id)
 	if (eth_dev_info_get_print_err(port_id, &dev_info))
 		return;
 
-	struct rte_ether_addr addr[dev_info.max_mac_addrs];
+	struct rte_ether_addr *addr =
+	    alloca(sizeof(struct rte_ether_addr) * dev_info.max_mac_addrs);
 	rc = rte_eth_macaddrs_get(port_id, addr, dev_info.max_mac_addrs);
 	if (rc < 0)
 		return;
@@ -7316,4 +7436,3 @@ show_mcast_macs(portid_t port_id)
 		printf("  %s\n", buf);
 	}
 }
-

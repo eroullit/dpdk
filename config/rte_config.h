@@ -41,6 +41,7 @@
 /* EAL defines */
 #define RTE_CACHE_GUARD_LINES 1
 #define RTE_MAX_HEAPS 32
+#define RTE_MAX_LCORE_VAR 131072
 #define RTE_MAX_MEMSEG_LISTS 128
 #define RTE_MAX_MEMSEG_PER_LIST 8192
 #define RTE_MAX_MEM_MB_PER_LIST 32768
@@ -117,6 +118,10 @@
 #define RTE_PMD_QAT_MAX_PCI_DEVICES 48
 #define RTE_PMD_QAT_COMP_SGL_MAX_SEGMENTS 16
 #define RTE_PMD_QAT_COMP_IM_BUFFER_SIZE 65536
+
+/* ZSDA device */
+/* Max. number of ZSDA devices which can be attached */
+#define RTE_PMD_ZSDA_MAX_PCI_DEVICES 256
 
 /* virtio crypto defines */
 #define RTE_MAX_VIRTIO_CRYPTO 32

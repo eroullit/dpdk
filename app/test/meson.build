@@ -20,7 +20,6 @@ test_cryptodev_deps = ['bus_vdev', 'net', 'cryptodev', 'security']
 source_file_deps = {
     # The C files providing functionality to other test cases
     'packet_burst_generator.c': packet_burst_generator_deps,
-#    'resource.c': [],          # unused currently.
     'sample_packet_forward.c': sample_packet_forward_deps,
     'virtual_pmd.c': virtual_pmd_deps,
 
@@ -37,7 +36,7 @@ source_file_deps = {
     'test_bitratestats.c': ['metrics', 'bitratestats', 'ethdev'] + sample_packet_forward_deps,
     'test_bpf.c': ['bpf', 'net'],
     'test_byteorder.c': [],
-#    'test_cfgfile.c': ['cfgfile'],
+    'test_cfgfile.c': ['cfgfile'],
     'test_cksum.c': ['net'],
     'test_cksum_perf.c': ['net'],
     'test_cmdline.c': [],
@@ -104,6 +103,8 @@ source_file_deps = {
     'test_ipsec_sad.c': ['ipsec'],
     'test_kvargs.c': ['kvargs'],
     'test_latencystats.c': ['ethdev', 'latencystats', 'metrics'] + sample_packet_forward_deps,
+    'test_lcore_var.c': [],
+    'test_lcore_var_perf.c': [],
     'test_lcores.c': [],
     'test_link_bonding.c': ['ethdev', 'net_bond',
         'net'] + packet_burst_generator_deps + virtual_pmd_deps,
@@ -156,7 +157,6 @@ source_file_deps = {
     'test_reciprocal_division_perf.c': [],
     'test_red.c': ['sched'],
     'test_reorder.c': ['reorder'],
-#    'test_resource.c': [],
     'test_rib.c': ['net', 'rib'],
     'test_rib6.c': ['net', 'rib'],
     'test_ring.c': ['ptr_compress'],
@@ -177,6 +177,9 @@ source_file_deps = {
     'test_security_proto.c' : ['cryptodev', 'security'],
     'test_seqlock.c': [],
     'test_service_cores.c': [],
+    'test_soring.c': [],
+    'test_soring_mt_stress.c': [],
+    'test_soring_stress.c': [],
     'test_spinlock.c': [],
     'test_stack.c': ['stack'],
     'test_stack_perf.c': ['stack'],
@@ -247,12 +250,19 @@ foreach d:optional_deps
     endif
 endforeach
 
-if cc.has_argument('-Wno-format-truncation')
-    cflags += '-Wno-format-truncation'
-endif
+cflags += no_wvla_cflag
 
-# Strict-aliasing rules are violated by uint8_t[] to context size casts.
-cflags += '-fno-strict-aliasing'
+extra_flags = [
+        # Strict-aliasing rules are violated by uint8_t[] to context size casts.
+        '-fno-strict-aliasing',
+        '-Wno-format-truncation',
+]
+
+foreach arg: extra_flags
+    if cc.has_argument(arg)
+        cflags += arg
+    endif
+endforeach
 
 # Enable using internal APIs in unit tests
 cflags += '-DALLOW_INTERNAL_API'
@@ -265,3 +275,7 @@ if not is_windows
             build_by_default: true,
             install: false)
 endif
+
+subdir('test_cfgfiles')
+
+resources += test_cfgfile_h

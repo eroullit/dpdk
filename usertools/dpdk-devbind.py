@@ -62,6 +62,10 @@ intel_ioat_icx = {'Class': '08', 'Vendor': '8086', 'Device': '0b00',
                   'SVendor': None, 'SDevice': None}
 intel_idxd_spr = {'Class': '08', 'Vendor': '8086', 'Device': '0b25',
                   'SVendor': None, 'SDevice': None}
+intel_idxd_gnrd = {'Class': '08', 'Vendor': '8086', 'Device': '11fb',
+                  'SVendor': None, 'SDevice': None}
+intel_idxd_dmr = {'Class': '08', 'Vendor': '8086', 'Device': '1212',
+                  'SVendor': None, 'SDevice': None}
 intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
                  'SVendor': None, 'SDevice': None}
 intel_ntb_icx = {'Class': '06', 'Vendor': '8086', 'Device': '347e',
@@ -84,7 +88,8 @@ network_devices = [network_class, cavium_pkx, avp_vnic, ifpga_class]
 baseband_devices = [acceleration_class]
 crypto_devices = [encryption_class, intel_processor_class]
 dma_devices = [cnxk_dma, hisilicon_dma,
-               intel_idxd_spr, intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx,
+               intel_idxd_gnrd, intel_idxd_dmr, intel_idxd_spr,
+               intel_ioat_bdw, intel_ioat_icx, intel_ioat_skx,
                odm_dma]
 eventdev_devices = [cavium_sso, cavium_tim, intel_dlb, cnxk_sso]
 mempool_devices = [cavium_fpa, cnxk_npa]
@@ -490,7 +495,8 @@ def check_noiommu_mode():
 
     try:
         with open(filename, "r") as f:
-            if f.read(1) == "1":
+            value = f.read(1)
+            if value in ("1", "y" ,"Y"):
                 return
     except OSError as err:
         sys.exit(f"Error: failed to check unsafe noiommu mode - Cannot open {filename}: {err}")
@@ -589,9 +595,12 @@ def show_device_status(devices_type, device_name, if_field=False):
     dpdk_drv = []
     no_drv = []
 
+    print_numa = True  # by default, assume we can print NUMA information
+
     # split our list of network devices into the three categories above
     for d in devices.keys():
         if device_type_match(devices[d], devices_type):
+            print_numa &= "NUMANode" in devices[d]
             if not has_driver(d):
                 no_drv.append(devices[d])
                 continue
@@ -612,18 +621,25 @@ def show_device_status(devices_type, device_name, if_field=False):
 
     # print each category separately, so we can clearly see what's used by DPDK
     if dpdk_drv:
+        extra_param = "drv=%(Driver_str)s unused=%(Module_str)s"
+        if print_numa:
+            extra_param = "numa_node=%(NUMANode)s " + extra_param
         display_devices("%s devices using DPDK-compatible driver" % device_name,
-                        dpdk_drv, "drv=%(Driver_str)s unused=%(Module_str)s")
+                        dpdk_drv, extra_param)
     if kernel_drv:
-        if_text = ""
+        extra_param = "drv=%(Driver_str)s unused=%(Module_str)s"
         if if_field:
-            if_text = "if=%(Interface)s "
-        display_devices("%s devices using kernel driver" % device_name, kernel_drv,
-                        if_text + "drv=%(Driver_str)s "
-                        "unused=%(Module_str)s %(Active)s")
+            extra_param = "if=%(Interface)s " + extra_param
+        if print_numa:
+            extra_param = "numa_node=%(NUMANode)s " + extra_param
+        extra_param += " %(Active)s"
+        display_devices("%s devices using kernel driver" % device_name,
+                        kernel_drv, extra_param)
     if no_drv:
-        display_devices("Other %s devices" % device_name, no_drv,
-                        "unused=%(Module_str)s")
+        extra_param = "unused=%(Module_str)s"
+        if print_numa:
+            extra_param = "numa_node=%(NUMANode)s " + extra_param
+        display_devices("Other %s devices" % device_name, no_drv, extra_param)
 
 
 def show_status():

@@ -127,6 +127,16 @@ enum noisy_fwd_mode {
 };
 
 /**
+ * Command line arguments parser sets `hairpin_multiport_mode` to True
+ * if explicit hairpin map configuration mode was used.
+ */
+extern bool hairpin_multiport_mode;
+
+/** Hairpin maps list. */
+struct hairpin_map;
+extern void hairpin_add_multiport_map(struct hairpin_map *map);
+
+/**
  * The data structure associated with RX and TX packet burst statistics
  * that are recorded for each forwarding stream.
  */
@@ -488,6 +498,8 @@ enum dcb_mode_enable
 };
 
 extern uint8_t xstats_hide_zero; /**< Hide zero values for xstats display */
+extern uint8_t xstats_hide_disabled; /**< Hide disabled xstat for xstats display */
+extern uint8_t xstats_show_state; /**< Show xstat state in xstats display */
 
 /* globals used for configuration */
 extern uint8_t record_core_cycles; /**< Enables measurement of CPU cycles */
@@ -923,6 +935,7 @@ void nic_stats_display(portid_t port_id);
 void nic_stats_clear(portid_t port_id);
 void nic_xstats_display(portid_t port_id);
 void nic_xstats_clear(portid_t port_id);
+void nic_xstats_set_counter(portid_t port_id, char *counter_name, int on);
 void device_infos_display(const char *identifier);
 void port_infos_display(portid_t port_id);
 void port_summary_display(portid_t port_id);
@@ -1101,6 +1114,8 @@ void tx_vlan_pvid_set(portid_t port_id, uint16_t vlan_id, int on);
 void set_qmap(portid_t port_id, uint8_t is_rx, uint16_t queue_id, uint8_t map_value);
 
 void set_xstats_hide_zero(uint8_t on_off);
+void set_xstats_show_state(uint8_t on_off);
+void set_xstats_hide_disabled(uint8_t on_off);
 
 void set_record_core_cycles(uint8_t on_off);
 void set_record_burst_stats(uint8_t on_off);
@@ -1255,6 +1270,10 @@ extern int flow_parse(const char *src, void *result, unsigned int size,
 		      struct rte_flow_attr **attr,
 		      struct rte_flow_item **pattern,
 		      struct rte_flow_action **actions);
+int setup_hairpin_queues(portid_t pi, portid_t p_pi, uint16_t cnt_pi);
+int hairpin_bind(uint16_t cfg_pi, portid_t *pl, portid_t *peer_pl);
+void hairpin_map_usage(void);
+int parse_hairpin_map(const char *hpmap);
 
 uint64_t str_to_rsstypes(const char *str);
 const char *rsstypes_to_str(uint64_t rss_type);
@@ -1278,26 +1297,10 @@ RTE_INIT(__##c) \
 	testpmd_add_driver_commands(&c); \
 }
 
-/*
- * Work-around of a compilation error with ICC on invocations of the
- * rte_be_to_cpu_16() function.
- */
-#ifdef __GCC__
 #define RTE_BE_TO_CPU_16(be_16_v)  rte_be_to_cpu_16((be_16_v))
 #define RTE_CPU_TO_BE_16(cpu_16_v) rte_cpu_to_be_16((cpu_16_v))
-#else
-#if RTE_BYTE_ORDER == RTE_BIG_ENDIAN
-#define RTE_BE_TO_CPU_16(be_16_v)  (be_16_v)
-#define RTE_CPU_TO_BE_16(cpu_16_v) (cpu_16_v)
-#else
-#define RTE_BE_TO_CPU_16(be_16_v) \
-	(uint16_t) ((((be_16_v) & 0xFF) << 8) | ((be_16_v) >> 8))
-#define RTE_CPU_TO_BE_16(cpu_16_v) \
-	(uint16_t) ((((cpu_16_v) & 0xFF) << 8) | ((cpu_16_v) >> 8))
-#endif
-#endif /* __GCC__ */
 
-#define TESTPMD_LOG(level, fmt, args...) \
-	rte_log(RTE_LOG_ ## level, testpmd_logtype, "testpmd: " fmt, ## args)
+#define TESTPMD_LOG(level, fmt, ...) \
+	rte_log(RTE_LOG_ ## level, testpmd_logtype, "testpmd: " fmt, ## __VA_ARGS__)
 
 #endif /* _TESTPMD_H_ */

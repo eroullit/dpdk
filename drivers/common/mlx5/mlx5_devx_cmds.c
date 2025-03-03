@@ -284,10 +284,9 @@ mlx5_devx_cmd_flow_counter_query(struct mlx5_devx_obj *dcs,
 				 void *cmd_comp,
 				 uint64_t async_id)
 {
-	int out_len = MLX5_ST_SZ_BYTES(query_flow_counter_out) +
-			MLX5_ST_SZ_BYTES(traffic_counter);
-	uint32_t out[out_len];
+	uint32_t out[MLX5_ST_SZ_BYTES(query_flow_counter_out) + MLX5_ST_SZ_BYTES(traffic_counter)];
 	uint32_t in[MLX5_ST_SZ_DW(query_flow_counter_in)] = {0};
+	const int out_len = RTE_DIM(out);
 	void *stats;
 	int rc;
 
@@ -346,7 +345,7 @@ mlx5_devx_cmd_mkey_create(void *ctx,
 	int klm_num = attr->klm_num;
 	int in_size_dw = MLX5_ST_SZ_DW(create_mkey_in) +
 		     (klm_num ? RTE_ALIGN(klm_num, 4) : 0) * MLX5_ST_SZ_DW(klm);
-	uint32_t in[in_size_dw];
+	uint32_t *in = alloca(sizeof(uint32_t) * in_size_dw);
 	uint32_t out[MLX5_ST_SZ_DW(create_mkey_out)] = {0};
 	void *mkc;
 	struct mlx5_devx_obj *mkey = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*mkey),
@@ -1027,6 +1026,7 @@ mlx5_devx_cmd_query_hca_attr(void *ctx,
 	attr->log_max_qp = MLX5_GET(cmd_hca_cap, hcattr, log_max_qp);
 	attr->log_max_cq_sz = MLX5_GET(cmd_hca_cap, hcattr, log_max_cq_sz);
 	attr->log_max_qp_sz = MLX5_GET(cmd_hca_cap, hcattr, log_max_qp_sz);
+	attr->log_max_wq_sz = MLX5_GET(cmd_hca_cap, hcattr, log_max_wq_sz);
 	attr->log_max_mrw_sz = MLX5_GET(cmd_hca_cap, hcattr, log_max_mrw_sz);
 	attr->log_max_pd = MLX5_GET(cmd_hca_cap, hcattr, log_max_pd);
 	attr->log_max_srq = MLX5_GET(cmd_hca_cap, hcattr, log_max_srq);
@@ -1589,6 +1589,7 @@ mlx5_devx_cmd_modify_rq(struct mlx5_devx_obj *rq,
 	}
 	ret = mlx5_glue->devx_obj_modify(rq->obj, in, sizeof(in),
 					 out, sizeof(out));
+
 	if (ret) {
 		DRV_LOG(ERR, "Failed to modify RQ using DevX");
 		rte_errno = errno;
@@ -3090,14 +3091,17 @@ mlx5_devx_cmd_wq_query(void *wq, uint32_t *counter_set_id)
  *
  * @param[in] ctx
  *   Context returned from mlx5 open_device() glue function.
+ * @param[out] syndrome
+ *   Get syndrome of devx command response.
  *
  * @return
  *   Pointer to counter object on success, a NULL value otherwise and
  *   rte_errno is set.
  */
 struct mlx5_devx_obj *
-mlx5_devx_cmd_queue_counter_alloc(void *ctx)
+mlx5_devx_cmd_queue_counter_alloc(void *ctx, int *syndrome)
 {
+	int status;
 	struct mlx5_devx_obj *dcs = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*dcs), 0,
 						SOCKET_ID_ANY);
 	uint32_t in[MLX5_ST_SZ_DW(alloc_q_counter_in)]   = {0};
@@ -3112,6 +3116,9 @@ mlx5_devx_cmd_queue_counter_alloc(void *ctx)
 					      sizeof(out));
 	if (!dcs->obj) {
 		DEVX_DRV_LOG(DEBUG, out, "create q counter set", NULL, 0);
+		status = MLX5_GET(alloc_q_counter_out, out, status);
+		if (status && syndrome)
+			*syndrome = MLX5_GET(alloc_q_counter_out, out, syndrome);
 		mlx5_free(dcs);
 		return NULL;
 	}

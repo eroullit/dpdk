@@ -232,6 +232,8 @@ static const struct eth_dev_ops nfp_netvf_eth_dev_ops = {
 	.tx_queue_release       = nfp_net_tx_queue_release,
 	.rx_queue_intr_enable   = nfp_rx_queue_intr_enable,
 	.rx_queue_intr_disable  = nfp_rx_queue_intr_disable,
+	.rx_burst_mode_get      = nfp_net_rx_burst_mode_get,
+	.tx_burst_mode_get      = nfp_net_tx_burst_mode_get,
 };
 
 static inline void
@@ -315,6 +317,12 @@ nfp_netvf_init(struct rte_eth_dev *eth_dev)
 
 	hw_priv->dev_info = dev_info;
 	hw_priv->pf_dev = pf_dev;
+
+	if (!nfp_net_recv_pkt_meta_check_register(hw_priv)) {
+		PMD_INIT_LOG(ERR, "VF register meta check function failed.");
+		err = -EINVAL;
+		goto hw_priv_free;
+	}
 
 	eth_dev->process_private = hw_priv;
 

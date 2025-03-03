@@ -8,10 +8,9 @@ Basic port information, such as location (the port are identified by their PCI a
 drivers and address.
 """
 
-
 from dataclasses import dataclass
 
-from framework.config import PortConfig
+from framework.config.node import PortConfig
 
 
 @dataclass(slots=True, frozen=True)
@@ -54,7 +53,7 @@ class Port:
     mac_address: str = ""
     logical_name: str = ""
 
-    def __init__(self, config: PortConfig):
+    def __init__(self, node_name: str, config: PortConfig):
         """Initialize the port from `node_name` and `config`.
 
         Args:
@@ -62,7 +61,7 @@ class Port:
             config: The test run configuration of the port.
         """
         self.identifier = PortIdentifier(
-            node=config.node,
+            node=node_name,
             pci=config.pci,
         )
         self.os_driver = config.os_driver

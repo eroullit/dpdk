@@ -255,7 +255,7 @@ roc_npa_batch_alloc_wait(uint64_t *cache_line, unsigned int wait_us)
 	/* Batch alloc status code is updated in bits [5:6] of the first word
 	 * of the 128 byte cache line.
 	 */
-	while (((__atomic_load_n(cache_line, __ATOMIC_RELAXED) >> 5) & 0x3) ==
+	while (((__atomic_load_n(cache_line, __ATOMIC_ACQUIRE) >> 5) & 0x3) ==
 	       ALLOC_CCODE_INVAL)
 		if (wait_us && (plt_tsc_cycles() - start) >= ticks)
 			break;
@@ -819,6 +819,9 @@ int __roc_api roc_npa_aura_bp_configure(uint64_t aura_id, uint16_t bpid, uint8_t
 /* Init callbacks */
 typedef int (*roc_npa_lf_init_cb_t)(struct plt_pci_device *pci_dev);
 int __roc_api roc_npa_lf_init_cb_register(roc_npa_lf_init_cb_t cb);
+
+/* Utility functions */
+uint16_t __roc_api roc_npa_pf_func_get(void);
 
 /* Debug */
 int __roc_api roc_npa_ctx_dump(void);

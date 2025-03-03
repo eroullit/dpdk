@@ -191,6 +191,14 @@ Limitations
     - IPv4/TCP with CVLAN filtering
     - L4 steering rules for port RSS of UDP, TCP and IP
 
+- PCI Virtual Function MTU:
+
+  MTU settings on PCI Virtual Functions have no effect.
+  The maximum receivable packet size for a VF is determined by the MTU
+  configured on its associated Physical Function.
+  DPDK applications using VFs must be prepared to handle packets
+  up to the maximum size of this PF port.
+
 - For secondary process:
 
   - Forked secondary process not supported.
@@ -453,6 +461,11 @@ Limitations
   - Only supported in HW steering(``dv_flow_en`` = 2) mode.
   - Only single flow is supported to the flow table.
   - Only single item is supported per pattern template.
+  - In switch mode, when the ``repr_matching_en`` flag is enabled in the devargs
+    (which is the default setting),
+    the match with compare result item is not supported for ``ingress`` rules.
+    This is because an implicit ``REPRESENTED_PORT`` needs to be added to the matcher,
+    which conflicts with the single item limitation.
   - Only 32-bit comparison is supported or 16-bit for random field.
   - Only supported for ``RTE_FLOW_FIELD_META``, ``RTE_FLOW_FIELD_TAG``,
     ``RTE_FLOW_FIELD_ESP_SEQ_NUM``,
@@ -484,9 +497,18 @@ Limitations
   cannot be used in conjunction with MPRQ
   since packets may be already attached to PMD-managed external buffers.
 
-- If Multi-Packet Rx queue is configured (``mprq_en``) and Rx CQE compression is
-  enabled (``rxq_cqe_comp_en``) at the same time, RSS hash result is not fully
-  supported. Some Rx packets may not have RTE_MBUF_F_RX_RSS_HASH.
+- RSS hash result limitations:
+
+  Full support is only available when hash RSS format is selected
+  as the current CQE compression format on the Rx side (``rxq_cqe_comp_en``).
+
+  Using any other format may result in some Rx packets
+  not having the ``RTE_MBUF_F_RX_RSS_HASH`` flag set.
+
+  When multi-packet Rx queue is enabled (``mprq_en``)
+  and Rx CQE compression is enabled (``rxq_cqe_comp_en``) simultaneously,
+  RSS hash result is not fully supported.
+  This is because the checksum format is selected by default in this configuration.
 
 - IPv6 Multicast messages are not supported on VM, while promiscuous mode
   and allmulticast mode are both set to off.
@@ -955,6 +977,74 @@ Extended statistics can be queried using ``rte_eth_xstats_get()``. The extended 
 Finally per-flow statistics can by queried using ``rte_flow_query`` when attaching a count action for specific flow. The flow counter counts the number of packets received successfully by the port and match the specific flow.
 
 
+Extended Statistics Counters
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Send Scheduling Counters
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+The mlx5 PMD provides a comprehensive set of counters designed for
+debugging and diagnostics related to packet scheduling during transmission.
+These counters are applicable only if the port was configured with the ``tx_pp`` devarg
+and reflect the status of the PMD scheduling infrastructure
+based on Clock and Rearm Queues, used as a workaround on ConnectX-6 DX NICs.
+
+``tx_pp_missed_interrupt_errors``
+  Indicates that the Rearm Queue interrupt was not serviced on time.
+  The EAL manages interrupts in a dedicated thread,
+  and it is possible that other time-consuming actions were being processed concurrently.
+
+``tx_pp_rearm_queue_errors``
+  Signifies hardware errors that occurred on the Rearm Queue,
+  typically caused by delays in servicing interrupts.
+
+``tx_pp_clock_queue_errors``
+  Reflects hardware errors on the Clock Queue,
+  which usually indicate configuration issues
+  or problems with the internal NIC hardware or firmware.
+
+``tx_pp_timestamp_past_errors``
+  Tracks the application attempted to send packets with timestamps set in the past.
+  It is useful for debugging application code
+  and does not indicate a malfunction of the PMD.
+
+``tx_pp_timestamp_future_errors``
+  Records attempts by the application to send packets
+  with timestamps set too far into the future,
+  exceeding the hardware’s scheduling capabilities.
+  Like the previous counter, it aids in application debugging
+  without suggesting a PMD malfunction.
+
+``tx_pp_jitter``
+  Measures the internal NIC real-time clock jitter estimation
+  between two consecutive Clock Queue completions, expressed in nanoseconds.
+  Significant jitter may signal potential clock synchronization issues,
+  possibly due to inappropriate adjustments
+  made by a system PTP (Precision Time Protocol) agent.
+
+``tx_pp_wander``
+  Indicates the long-term stability of the internal NIC real-time clock
+  over 2^24 completions, measured in nanoseconds.
+  Significant wander may also suggest clock synchronization problems.
+
+``tx_pp_sync_lost``
+  A general operational indicator;
+  a non-zero value indicates that the driver has lost synchronization with the Clock Queue,
+  resulting in improper scheduling operations.
+  To restore correct scheduling functionality, it is necessary to restart the port.
+
+The following counters are particularly valuable for verifying and debugging application code.
+They do not indicate driver or hardware malfunctions
+and are applicable to newer hardware with direct on-time scheduling capabilities
+(such as ConnectX-7 and above):
+
+``tx_pp_timestamp_order_errors``
+  Indicates attempts by the application to send packets
+  with timestamps that are not in strictly ascending order.
+  Since the PMD does not reorder packets within hardware queues,
+  violations of timestamp order can lead to packets being sent at incorrect times.
+
+
 Compilation
 -----------
 
@@ -979,6 +1069,20 @@ Runtime Configuration
 
 Please refer to :ref:`mlx5 common options <mlx5_common_driver_options>`
 for an additional list of options shared with other mlx5 drivers.
+
+- ``probe_opt_en`` parameter [int]
+
+  A non-zero value optimizes the probing process, especially for large scale.
+  The PMD will hold the IB device information internally and reuse it.
+
+  By default, the PMD will set this value to 0.
+
+  .. note::
+
+    There is a race condition in probing port if ``probe_opt_en`` is enabled.
+    Port probing may fail with a wrong ifindex in cache
+    while the interrupt thread is updating the cache.
+    Please try again if port probing failed.
 
 - ``rxq_cqe_comp_en`` parameter [int]
 
@@ -2019,6 +2123,77 @@ All references to these flows held by the application should be discarded
 directly but neither destroyed nor flushed.
 
 The application should re-create the flows as required after the port restart.
+
+
+Notes for flow counters
+-----------------------
+
+mlx5 PMD supports the ``COUNT`` flow action,
+which provides an ability to count packets (and bytes)
+matched against a given flow rule.
+This section describes the high level overview of
+how this support is implemented and limitations.
+
+HW steering flow engine
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Flow counters are allocated from HW in bulks.
+A set of bulks forms a flow counter pool managed by PMD.
+When flow counters are queried from HW,
+each counter is identified by an offset in a given bulk.
+Querying HW flow counter requires sending a request to HW,
+which will request a read of counter values for given offsets.
+HW will asynchronously provide these values through a DMA write.
+
+In order to optimize HW to SW communication,
+these requests are handled in a separate counter service thread
+spawned by mlx5 PMD.
+This service thread will refresh the counter values stored in memory,
+in cycles, each spanning ``svc_cycle_time`` milliseconds.
+By default, ``svc_cycle_time`` is set to 500.
+When applications query the ``COUNT`` flow action,
+PMD returns the values stored in host memory.
+
+mlx5 PMD manages 3 global rings of allocated counter offsets:
+
+- ``free`` ring - Counters which were not used at all.
+- ``wait_reset`` ring - Counters which were used in some flow rules,
+  but were recently freed (flow rule was destroyed
+  or an indirect action was destroyed).
+  Since the count value might have changed
+  between the last counter service thread cycle and the moment it was freed,
+  the value in host memory might be stale.
+  During the next service thread cycle,
+  such counters will be moved to ``reuse`` ring.
+- ``reuse`` ring - Counters which were used at least once
+  and can be reused in new flow rules.
+
+When counters are assigned to a flow rule (or allocated to indirect action),
+the PMD first tries to fetch a counter from ``reuse`` ring.
+If it's empty, the PMD fetches a counter from ``free`` ring.
+
+The counter service thread works as follows:
+
+#. Record counters stored in ``wait_reset`` ring.
+#. Read values of all counters which were used at least once
+   or are currently in use.
+#. Move recorded counters from ``wait_reset`` to ``reuse`` ring.
+#. Sleep for ``(query time) - svc_cycle_time`` milliseconds
+#. Repeat.
+
+Because freeing a counter (by destroying a flow rule or destroying indirect action)
+does not immediately make it available for the application,
+the PMD might return:
+
+- ``ENOENT`` if no counter is available in ``free``, ``reuse``
+  or ``wait_reset`` rings.
+  No counter will be available until the application releases some of them.
+- ``EAGAIN`` if no counter is available in ``free`` and ``reuse`` rings,
+  but there are counters in ``wait_reset`` ring.
+  This means that after the next service thread cycle new counters will be available.
+
+The application has to be aware that flow rule create or indirect action create
+might need be retried.
 
 
 Notes for hairpin

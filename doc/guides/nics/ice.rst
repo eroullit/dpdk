@@ -79,6 +79,10 @@ are listed in the Tested Platforms section of the Release Notes for each release
    +-----------+---------------+-----------------+-----------+--------------+-----------+
    |    24.03  |     1.13.7    |      1.3.35     |  1.3.45   |    1.3.13    |    4.4    |
    +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    24.07  |     1.14.11   |      1.3.36     |  1.3.46   |    1.3.14    |    4.5    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
+   |    24.11  |     1.15.4    |      1.3.36     |  1.3.46   |    1.3.14    |    4.6    |
+   +-----------+---------------+-----------------+-----------+--------------+-----------+
 
 Dynamic Device Personalization (DDP) package loading
 ----------------------------------------------------
@@ -146,6 +150,17 @@ Runtime Configuration
   For example::
 
     -a 80:00.0,ddp_pkg_file=/path/to/ice-version.pkg
+
+- ``Traffic Management Scheduling Levels``
+
+  The DPDK Traffic Management (rte_tm) APIs can be used to configure the Tx scheduler on the NIC.
+  From 24.11 release, all available hardware layers are available to software.
+  Earlier versions of DPDK only supported 3 levels in the scheduling hierarchy.
+  To help with backward compatibility the ``tm_sched_levels`` parameter
+  can be used to limit the scheduler levels to the provided value.
+  The provided value must be between 3 and 8.
+  If the value provided is greater than the number of levels provided by the HW,
+  SW will use the hardware maximum value.
 
 - ``Protocol extraction for per queue``
 
@@ -276,7 +291,7 @@ Runtime Configuration
 
     -a 0000:88:00.0,hw_debug_mask=0x80 --log-level=pmd.net.ice.driver:8
 
-  These ICE_DBG_XXX are defined in ``drivers/net/ice/base/ice_type.h``.
+  These ICE_DBG_XXX are defined in ``drivers/net/intel/ice/base/ice_type.h``.
 
 - ``1PPS out support``
 
@@ -297,6 +312,21 @@ Runtime Configuration
 
   As a trade-off, this configuration may cause the packet processing performance
   degradation due to the PCI bandwidth limitation.
+
+- ``Tx Scheduler Topology Download``
+
+  The default Tx scheduler topology exposed by the NIC,
+  generally a 9-level topology of which 8 levels are SW configurable,
+  may be updated by a new topology loaded from a DDP package file.
+  The ``ddp_load_sched_topo`` option can be used to specify that the scheduler topology,
+  if any, in the DDP package file being used should be loaded into the NIC.
+  For example::
+
+    -a 0000:88:00.0,ddp_load_sched_topo=1
+
+  or::
+
+    -a 0000:88:00.0,ddp_pkg_file=/path/to/pkg.file,ddp_load_sched_topo=1
 
 - ``Tx diagnostics`` (default ``not enabled``)
 
@@ -432,21 +462,27 @@ Traffic Management Support
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The ice PMD provides support for the Traffic Management API (RTE_TM),
-allow users to offload a 3-layers Tx scheduler on the E810 NIC:
+enabling users to configure and manage the traffic shaping and scheduling of transmitted packets.
+By default, all available transmit scheduler layers are available for configuration,
+allowing up to 2000 queues to be configured in a hierarchy of up to 8 levels.
+The number of levels in the hierarchy can be adjusted via driver parameters:
 
-- ``Port Layer``
+* the default 9-level topology (8 levels usable) can be replaced by a new topology downloaded from a DDP file,
+  using the driver parameter ``ddp_load_sched_topo=1``.
+  Using this mechanism, if the number of levels is reduced,
+  the possible fan-out of child-nodes from each level may be increased.
+  The default topology is a 9-level tree with a fan-out of 8 at each level.
+  Released DDP package files contain a 5-level hierarchy (4-levels usable),
+  with increased fan-out at the lower 3 levels
+  e.g. 64 at levels 2 and 3, and 256 or more at the leaf-node level.
 
-  This is the root layer, support peak bandwidth configuration,
-  max to 32 children.
+* the number of levels can be reduced
+  by setting the driver parameter ``tm_sched_levels`` to a lower value.
+  This scheme will reduce in software the number of editable levels,
+  but will not affect the fan-out from each level.
 
-- ``Queue Group Layer``
-
-  The middle layer, support peak / committed bandwidth, weight, priority configurations,
-  max to 8 children.
-
-- ``Queue Layer``
-
-  The leaf layer, support peak / committed bandwidth, weight, priority configurations.
+For more details on how to configure a Tx scheduling hierarchy,
+please refer to the ``rte_tm`` `API documentation <https://doc.dpdk.org/api/rte__tm_8h.html>`_.
 
 Additional Options
 ++++++++++++++++++

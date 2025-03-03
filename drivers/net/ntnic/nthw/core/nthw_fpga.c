@@ -13,6 +13,8 @@
 #include "nthw_fpga_instances.h"
 #include "nthw_fpga_mod_str_map.h"
 
+#include "nthw_tsm.h"
+
 #include <arpa/inet.h>
 
 int nthw_fpga_get_param_info(struct fpga_info_s *p_fpga_info, nthw_fpga_t *p_fpga)
@@ -179,6 +181,7 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 	nthw_hif_t *p_nthw_hif = NULL;
 	nthw_pcie3_t *p_nthw_pcie3 = NULL;
 	nthw_rac_t *p_nthw_rac = NULL;
+	nthw_tsm_t *p_nthw_tsm = NULL;
 
 	mcu_info_t *p_mcu_info = &p_fpga_info->mcu_info;
 	uint64_t n_fpga_ident = 0;
@@ -227,6 +230,8 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 		if (p_fpga == NULL) {
 			NT_LOG(ERR, NTHW, "%s: Unsupported FPGA: %s (%08X)", p_adapter_id_str,
 				s_fpga_prod_ver_rev_str, p_fpga_info->n_fpga_build_time);
+			nthw_fpga_mgr_delete(p_fpga_mgr);
+			p_fpga_mgr = NULL;
 			return -1;
 		}
 
@@ -260,29 +265,19 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 	nthw_rac_rab_flush(p_nthw_rac);
 	p_fpga_info->mp_nthw_rac = p_nthw_rac;
 
-	bool included = true;
 	struct nt200a0x_ops *nt200a0x_ops = get_nt200a0x_ops();
 
 	switch (p_fpga_info->n_nthw_adapter_id) {
 	case NT_HW_ADAPTER_ID_NT200A02:
 		if (nt200a0x_ops != NULL)
 			res = nt200a0x_ops->nthw_fpga_nt200a0x_init(p_fpga_info);
-
-		else
-			included = false;
-
 		break;
+
 	default:
 		NT_LOG(ERR, NTHW, "%s: Unsupported HW product id: %d", p_adapter_id_str,
 			p_fpga_info->n_nthw_adapter_id);
 		res = -1;
 		break;
-	}
-
-	if (!included) {
-		NT_LOG(ERR, NTHW, "%s: NOT INCLUDED HW product: %d", p_adapter_id_str,
-			p_fpga_info->n_nthw_adapter_id);
-		res = -1;
 	}
 
 	if (res) {
@@ -330,6 +325,50 @@ int nthw_fpga_init(struct fpga_info_s *p_fpga_info)
 
 	p_fpga_info->mp_nthw_hif = p_nthw_hif;
 
+
+	p_nthw_tsm = nthw_tsm_new();
+
+	if (p_nthw_tsm) {
+		nthw_tsm_init(p_nthw_tsm, p_fpga, 0);
+
+		nthw_tsm_set_config_ts_format(p_nthw_tsm, 1);	/* 1 = TSM: TS format native */
+
+		/* Timer T0 - stat toggle timer */
+		nthw_tsm_set_timer_t0_enable(p_nthw_tsm, false);
+		nthw_tsm_set_timer_t0_max_count(p_nthw_tsm, 50 * 1000 * 1000);	/* ns */
+		nthw_tsm_set_timer_t0_enable(p_nthw_tsm, true);
+
+		/* Timer T1 - keep alive timer */
+		nthw_tsm_set_timer_t1_enable(p_nthw_tsm, false);
+		nthw_tsm_set_timer_t1_max_count(p_nthw_tsm, 100 * 1000 * 1000);	/* ns */
+		nthw_tsm_set_timer_t1_enable(p_nthw_tsm, true);
+	}
+
+	p_fpga_info->mp_nthw_tsm = p_nthw_tsm;
+
+	/* TSM sample triggering: test validation... */
+#if defined(DEBUG) && (1)
+	{
+		uint64_t n_time, n_ts;
+		int i;
+
+		for (i = 0; i < 4; i++) {
+			if (p_nthw_hif)
+				nthw_hif_trigger_sample_time(p_nthw_hif);
+
+			else if (p_nthw_pcie3)
+				nthw_pcie3_trigger_sample_time(p_nthw_pcie3);
+
+			nthw_tsm_get_time(p_nthw_tsm, &n_time);
+			nthw_tsm_get_ts(p_nthw_tsm, &n_ts);
+
+			NT_LOG(DBG, NTHW, "%s: TSM time: %016" PRIX64 " %016" PRIX64 "\n",
+				p_adapter_id_str, n_time, n_ts);
+
+			nt_os_wait_usec(1000);
+		}
+	}
+#endif
 
 	return res;
 }

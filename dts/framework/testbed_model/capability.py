@@ -47,9 +47,9 @@ Examples:
 
 import inspect
 from abc import ABC, abstractmethod
-from collections.abc import MutableSet, Sequence
+from collections.abc import MutableSet
 from dataclasses import dataclass
-from typing import Callable, ClassVar, Protocol
+from typing import TYPE_CHECKING, Callable, ClassVar, Protocol
 
 from typing_extensions import Self
 
@@ -65,6 +65,9 @@ from framework.remote_session.testpmd_shell import (
 
 from .sut_node import SutNode
 from .topology import Topology, TopologyType
+
+if TYPE_CHECKING:
+    from framework.test_suite import TestCase
 
 
 class Capability(ABC):
@@ -166,7 +169,7 @@ class DecoratedNicCapability(Capability):
     _unique_capabilities: ClassVar[dict[NicCapability, Self]] = {}
 
     @classmethod
-    def get_unique(cls, nic_capability: NicCapability) -> "DecoratedNicCapability":
+    def get_unique(cls, nic_capability: NicCapability) -> Self:
         """Get the capability uniquely identified by `nic_capability`.
 
         This is a factory method that implements a quasi-enum pattern.
@@ -183,11 +186,7 @@ class DecoratedNicCapability(Capability):
         Returns:
             The capability uniquely identified by `nic_capability`.
         """
-        decorator_fn = None
-        if isinstance(nic_capability.value, tuple):
-            capability_fn, decorator_fn = nic_capability.value
-        else:
-            capability_fn = nic_capability.value
+        capability_fn, decorator_fn = nic_capability.value
 
         if nic_capability not in cls._unique_capabilities:
             cls._unique_capabilities[nic_capability] = cls(
@@ -221,7 +220,10 @@ class DecoratedNicCapability(Capability):
             with TestPmdShell(
                 sut_node, privileged=True, disable_device_start=True
             ) as testpmd_shell:
-                for conditional_capability_fn, capabilities in capabilities_to_check_map.items():
+                for (
+                    conditional_capability_fn,
+                    capabilities,
+                ) in capabilities_to_check_map.items():
                     supported_capabilities: set[NicCapability] = set()
                     unsupported_capabilities: set[NicCapability] = set()
                     capability_fn = cls._reduce_capabilities(
@@ -308,7 +310,7 @@ class TopologyCapability(Capability):
         test_case_or_suite.topology_type = self
 
     @classmethod
-    def get_unique(cls, topology_type: TopologyType) -> "TopologyCapability":
+    def get_unique(cls, topology_type: TopologyType) -> Self:
         """Get the capability uniquely identified by `topology_type`.
 
         This is a factory method that implements a quasi-enum pattern.
@@ -350,12 +352,15 @@ class TopologyCapability(Capability):
         At that point, the test case topologies have been set by the :func:`requires` decorator.
         The test suite topology only affects the test case topologies
         if not :attr:`~.topology.TopologyType.default`.
+
+        Raises:
+            ConfigurationError: If the topology type requested by the test case is more complex than
+                the test suite's.
         """
         if inspect.isclass(test_case_or_suite):
             if self.topology_type is not TopologyType.default:
                 self.add_to_required(test_case_or_suite)
-                func_test_cases, perf_test_cases = test_case_or_suite.get_test_cases()
-                for test_case in func_test_cases | perf_test_cases:
+                for test_case in test_case_or_suite.get_test_cases():
                     if test_case.topology_type.topology_type is TopologyType.default:
                         # test case topology has not been set, use the one set by the test suite
                         self.add_to_required(test_case)
@@ -446,7 +451,7 @@ class TestProtocol(Protocol):
     required_capabilities: ClassVar[set[Capability]] = set()
 
     @classmethod
-    def get_test_cases(cls, test_case_sublist: Sequence[str] | None = None) -> tuple[set, set]:
+    def get_test_cases(cls) -> list[type["TestCase"]]:
         """Get test cases. Should be implemented by subclasses containing test cases.
 
         Raises:
@@ -469,7 +474,9 @@ def requires(
         The decorated test case or test suite.
     """
 
-    def add_required_capability(test_case_or_suite: type[TestProtocol]) -> type[TestProtocol]:
+    def add_required_capability(
+        test_case_or_suite: type[TestProtocol],
+    ) -> type[TestProtocol]:
         for nic_capability in nic_capabilities:
             decorated_nic_capability = DecoratedNicCapability.get_unique(nic_capability)
             decorated_nic_capability.add_to_required(test_case_or_suite)

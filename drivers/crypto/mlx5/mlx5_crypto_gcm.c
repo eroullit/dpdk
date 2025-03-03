@@ -62,10 +62,10 @@ struct mlx5_crypto_gcm_data {
 	uint32_t dst_mkey;
 };
 
-struct mlx5_crypto_gcm_tag_cpy_info {
+struct __rte_packed_begin mlx5_crypto_gcm_tag_cpy_info {
 	void *digest;
 	uint8_t tag_len;
-} __rte_packed;
+} __rte_packed_end;
 
 static struct rte_cryptodev_capabilities mlx5_crypto_gcm_caps[] = {
 	{
@@ -877,7 +877,7 @@ mlx5_crypto_gcm_cqe_err_handle(struct mlx5_crypto_qp *qp, struct rte_crypto_op *
 {
 	uint8_t op_code;
 	const uint32_t idx = qp->cq_ci & (qp->entries_n - 1);
-	volatile struct mlx5_err_cqe *cqe = (volatile struct mlx5_err_cqe *)
+	volatile struct mlx5_error_cqe *cqe = (volatile struct mlx5_error_cqe *)
 							&qp->cq_obj.cqes[idx];
 
 	op_code = rte_be_to_cpu_32(cqe->s_wqe_opcode_qpn) >> MLX5_CQ_INDEX_WIDTH;

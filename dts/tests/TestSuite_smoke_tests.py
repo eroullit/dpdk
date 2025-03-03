@@ -14,7 +14,7 @@ in the infrastructure (a faulty link between NICs or a misconfiguration).
 
 import re
 
-from framework.config import PortConfig
+from framework.config.node import PortConfig
 from framework.remote_session.testpmd_shell import TestPmdShell
 from framework.settings import SETTINGS
 from framework.test_suite import TestSuite, func_test
@@ -31,7 +31,7 @@ class TestSmokeTests(TestSuite):
 
     Attributes:
         is_blocking: This test suite will block the execution of all other test suites
-            in the build target after it.
+            in the test run after it.
         nics_in_node: The NICs present on the SUT node.
     """
 
@@ -127,7 +127,7 @@ class TestSmokeTests(TestSuite):
         path_to_devbind = self.sut_node.path_to_devbind_script
 
         all_nics_in_dpdk_devbind = self.sut_node.main_session.send_command(
-            f"{path_to_devbind} --status | awk '{REGEX_FOR_PCI_ADDRESS}'",
+            f"{path_to_devbind} --status | awk '/{REGEX_FOR_PCI_ADDRESS}/'",
             SETTINGS.timeout,
         ).stdout
 
@@ -136,7 +136,7 @@ class TestSmokeTests(TestSuite):
             # with the address for the nic we are on in the loop and then captures the
             # name of the driver in a group
             devbind_info_for_nic = re.search(
-                f"{nic.pci}[^\\n]*drv=([\\d\\w-]*) [^\\n]*",
+                rf"{nic.pci}[^\\n]*drv=([\\d\\w-]*) [^\\n]*",
                 all_nics_in_dpdk_devbind,
             )
             self.verify(

@@ -1479,8 +1479,8 @@ mlx5_flow_item_acceptable(const struct rte_eth_dev *dev,
 					  "mask/last without a spec is not"
 					  " supported");
 	if (item->spec && item->last && !range_accepted) {
-		uint8_t spec[size];
-		uint8_t last[size];
+		uint8_t *spec = alloca(size);
+		uint8_t *last = alloca(size);
 		unsigned int i;
 		int ret;
 
@@ -1648,13 +1648,13 @@ flow_rxq_mark_flag_set(struct rte_eth_dev *dev)
 			    opriv->domain_id != priv->domain_id ||
 			    opriv->mark_enabled)
 				continue;
-			LIST_FOREACH(rxq_ctrl, &opriv->rxqsctrl, next) {
+			LIST_FOREACH(rxq_ctrl, &opriv->sh->shared_rxqs, share_entry) {
 				rxq_ctrl->rxq.mark = 1;
 			}
 			opriv->mark_enabled = 1;
 		}
 	} else {
-		LIST_FOREACH(rxq_ctrl, &priv->rxqsctrl, next) {
+		LIST_FOREACH(rxq_ctrl, &priv->sh->shared_rxqs, share_entry) {
 			rxq_ctrl->rxq.mark = 1;
 		}
 		priv->mark_enabled = 1;
@@ -7287,10 +7287,7 @@ flow_tunnel_from_rule(const struct mlx5_flow *flow)
 {
 	struct mlx5_flow_tunnel *tunnel;
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wcast-qual"
-	tunnel = (typeof(tunnel))flow->tunnel;
-#pragma GCC diagnostic pop
+	tunnel = RTE_PTR_UNQUAL(flow->tunnel);
 
 	return tunnel;
 }
@@ -8118,7 +8115,9 @@ mlx5_flow_list_flush(struct rte_eth_dev *dev, enum mlx5_flow_type type,
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
 	if (priv->sh->config.dv_flow_en == 2 &&
 	    type == MLX5_FLOW_TYPE_GEN) {
+		priv->hws_rule_flushing = true;
 		flow_hw_q_flow_flush(dev, NULL);
+		priv->hws_rule_flushing = false;
 	}
 #endif
 	MLX5_IPOOL_FOREACH(priv->flows[type], fidx, flow) {
@@ -8267,14 +8266,21 @@ flow_alloc_thread_workspace(void)
 {
 	size_t data_size = RTE_ALIGN(sizeof(struct mlx5_flow_workspace), sizeof(long));
 	size_t rss_queue_array_size = sizeof(uint16_t) * RTE_ETH_RSS_RETA_SIZE_512;
-	struct mlx5_flow_workspace *data = calloc(1, data_size +
-						     rss_queue_array_size);
+	size_t alloc_size = data_size + rss_queue_array_size;
+#ifdef HAVE_MLX5_HWS_SUPPORT
+	/* Dummy table size for the non-template API. */
+	alloc_size += sizeof(struct rte_flow_template_table);
+#endif
+	struct mlx5_flow_workspace *data = calloc(1, alloc_size);
 
 	if (!data) {
 		DRV_LOG(ERR, "Failed to allocate flow workspace memory.");
 		return NULL;
 	}
 	data->rss_desc.queue = RTE_PTR_ADD(data, data_size);
+#ifdef HAVE_MLX5_HWS_SUPPORT
+	data->table = RTE_PTR_ADD(data->rss_desc.queue, rss_queue_array_size);
+#endif
 	return data;
 }
 
@@ -8474,7 +8480,7 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
 			.type = RTE_FLOW_ITEM_TYPE_END,
 		},
 	};
-	uint16_t queue[priv->reta_idx_n];
+	uint16_t *queue = alloca(sizeof(uint16_t) * priv->reta_idx_n);
 	struct rte_flow_action_rss action_rss = {
 		.func = RTE_ETH_HASH_FUNCTION_DEFAULT,
 		.level = 0,
@@ -8493,8 +8499,9 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
 			.type = RTE_FLOW_ACTION_TYPE_END,
 		},
 	};
-	uint32_t flow_idx;
+	uintptr_t flow_idx;
 	struct rte_flow_error error;
+	struct mlx5_ctrl_flow_entry *entry;
 	unsigned int i;
 
 	if (!priv->reta_idx_n || !priv->rxqs_n) {
@@ -8504,11 +8511,36 @@ mlx5_ctrl_flow_vlan(struct rte_eth_dev *dev,
 		action_rss.types = 0;
 	for (i = 0; i != priv->reta_idx_n; ++i)
 		queue[i] = (*priv->reta_idx)[i];
+
+	entry = mlx5_malloc(MLX5_MEM_ZERO, sizeof(*entry), alignof(typeof(*entry)), SOCKET_ID_ANY);
+	if (entry == NULL) {
+		rte_errno = ENOMEM;
+		goto err;
+	}
+
+	entry->owner_dev = dev;
+	if (vlan_spec == NULL) {
+		entry->info.type = MLX5_CTRL_FLOW_TYPE_DEFAULT_RX_RSS_UNICAST_DMAC;
+	} else {
+		entry->info.type = MLX5_CTRL_FLOW_TYPE_DEFAULT_RX_RSS_UNICAST_DMAC_VLAN;
+		entry->info.uc.vlan = rte_be_to_cpu_16(vlan_spec->hdr.vlan_tci);
+	}
+	entry->info.uc.dmac = eth_spec->hdr.dst_addr;
+
 	flow_idx = mlx5_flow_list_create(dev, MLX5_FLOW_TYPE_CTL,
 				    &attr, items, actions, false, &error);
-	if (!flow_idx)
-		return -rte_errno;
+	if (!flow_idx) {
+		mlx5_free(entry);
+		goto err;
+	}
+
+	entry->flow = (struct rte_flow *)flow_idx;
+	LIST_INSERT_HEAD(&priv->hw_ctrl_flows, entry, next);
+
 	return 0;
+
+err:
+	return -rte_errno;
 }
 
 /**
@@ -8530,6 +8562,86 @@ mlx5_ctrl_flow(struct rte_eth_dev *dev,
 	       struct rte_flow_item_eth *eth_mask)
 {
 	return mlx5_ctrl_flow_vlan(dev, eth_spec, eth_mask, NULL, NULL);
+}
+
+int
+mlx5_legacy_dmac_flow_create(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct rte_flow_item_eth unicast = {
+		.hdr.dst_addr = *addr,
+	};
+	struct rte_flow_item_eth unicast_mask = {
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
+	};
+
+	return mlx5_ctrl_flow(dev, &unicast, &unicast_mask);
+}
+
+int
+mlx5_legacy_dmac_vlan_flow_create(struct rte_eth_dev *dev,
+				  const struct rte_ether_addr *addr,
+				  const uint16_t vid)
+{
+	struct rte_flow_item_eth unicast_spec = {
+		.hdr.dst_addr = *addr,
+	};
+	struct rte_flow_item_eth unicast_mask = {
+		.hdr.dst_addr.addr_bytes = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff },
+	};
+	struct rte_flow_item_vlan vlan_spec = {
+		.hdr.vlan_tci = rte_cpu_to_be_16(vid),
+	};
+	struct rte_flow_item_vlan vlan_mask = rte_flow_item_vlan_mask;
+
+	return mlx5_ctrl_flow_vlan(dev, &unicast_spec, &unicast_mask, &vlan_spec, &vlan_mask);
+}
+
+void
+mlx5_legacy_ctrl_flow_destroy(struct rte_eth_dev *dev, struct mlx5_ctrl_flow_entry *entry)
+{
+	uintptr_t flow_idx;
+
+	flow_idx = (uintptr_t)entry->flow;
+	mlx5_flow_list_destroy(dev, MLX5_FLOW_TYPE_CTL, flow_idx);
+	LIST_REMOVE(entry, next);
+	mlx5_free(entry);
+}
+
+int
+mlx5_legacy_dmac_flow_destroy(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_ctrl_flow_entry *entry;
+
+	LIST_FOREACH(entry, &priv->hw_ctrl_flows, next) {
+		if (entry->info.type != MLX5_CTRL_FLOW_TYPE_DEFAULT_RX_RSS_UNICAST_DMAC ||
+		    !rte_is_same_ether_addr(addr, &entry->info.uc.dmac))
+			continue;
+
+		mlx5_legacy_ctrl_flow_destroy(dev, entry);
+		return 0;
+	}
+	return 0;
+}
+
+int
+mlx5_legacy_dmac_vlan_flow_destroy(struct rte_eth_dev *dev,
+				   const struct rte_ether_addr *addr,
+				   const uint16_t vid)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_ctrl_flow_entry *entry;
+
+	LIST_FOREACH(entry, &priv->hw_ctrl_flows, next) {
+		if (entry->info.type != MLX5_CTRL_FLOW_TYPE_DEFAULT_RX_RSS_UNICAST_DMAC_VLAN ||
+		    !rte_is_same_ether_addr(addr, &entry->info.uc.dmac) ||
+		    vid != entry->info.uc.vlan)
+			continue;
+
+		mlx5_legacy_ctrl_flow_destroy(dev, entry);
+		return 0;
+	}
+	return 0;
 }
 
 /**
@@ -12177,4 +12289,41 @@ rte_pmd_mlx5_destroy_geneve_tlv_parser(void *handle)
 	rte_errno = ENOTSUP;
 	return -rte_errno;
 #endif
+}
+
+bool
+mlx5_ctrl_flow_uc_dmac_exists(struct rte_eth_dev *dev, const struct rte_ether_addr *addr)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_ctrl_flow_entry *entry;
+	bool exists = false;
+
+	LIST_FOREACH(entry, &priv->hw_ctrl_flows, next) {
+		if (entry->info.type == MLX5_CTRL_FLOW_TYPE_DEFAULT_RX_RSS_UNICAST_DMAC &&
+		    rte_is_same_ether_addr(addr, &entry->info.uc.dmac)) {
+			exists = true;
+			break;
+		}
+	}
+	return exists;
+}
+
+bool
+mlx5_ctrl_flow_uc_dmac_vlan_exists(struct rte_eth_dev *dev,
+				   const struct rte_ether_addr *addr,
+				   const uint16_t vid)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_ctrl_flow_entry *entry;
+	bool exists = false;
+
+	LIST_FOREACH(entry, &priv->hw_ctrl_flows, next) {
+		if (entry->info.type == MLX5_CTRL_FLOW_TYPE_DEFAULT_RX_RSS_UNICAST_DMAC_VLAN &&
+		    rte_is_same_ether_addr(addr, &entry->info.uc.dmac) &&
+		    vid == entry->info.uc.vlan) {
+			exists = true;
+			break;
+		}
+	}
+	return exists;
 }

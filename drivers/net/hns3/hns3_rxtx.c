@@ -1309,6 +1309,7 @@ hns3_start_tqps(struct hns3_hw *hw)
 	hns3_enable_all_queues(hw, true);
 
 	for (i = 0; i < hw->data->nb_tx_queues; i++) {
+		__rte_assume(i < RTE_MAX_QUEUES_PER_PORT);
 		txq = hw->data->tx_queues[i];
 		if (txq->enabled)
 			hw->data->tx_queue_state[i] =
@@ -1316,6 +1317,7 @@ hns3_start_tqps(struct hns3_hw *hw)
 	}
 
 	for (i = 0; i < hw->data->nb_rx_queues; i++) {
+		__rte_assume(i < RTE_MAX_QUEUES_PER_PORT);
 		rxq = hw->data->rx_queues[i];
 		if (rxq->enabled)
 			hw->data->rx_queue_state[i] =
@@ -2785,32 +2787,36 @@ pkt_err:
 	return nb_rx;
 }
 
-void __rte_weak
+#ifndef RTE_ARCH_ARM64
+void
 hns3_rxq_vec_setup(__rte_unused struct hns3_rx_queue *rxq)
 {
 }
 
-int __rte_weak
+int
 hns3_rx_check_vec_support(__rte_unused struct rte_eth_dev *dev)
 {
 	return -ENOTSUP;
 }
 
-uint16_t __rte_weak
+uint16_t
 hns3_recv_pkts_vec(__rte_unused void *rx_queue,
 		   __rte_unused struct rte_mbuf **rx_pkts,
 		   __rte_unused uint16_t nb_pkts)
 {
 	return 0;
 }
+#endif /* RTE_ARCH_ARM64 */
 
-uint16_t __rte_weak
+#ifndef RTE_HAS_SVE_ACLE
+uint16_t
 hns3_recv_pkts_vec_sve(__rte_unused void *rx_queue,
 		       __rte_unused struct rte_mbuf **rx_pkts,
 		       __rte_unused uint16_t nb_pkts)
 {
 	return 0;
 }
+#endif /* RTE_HAS_SVE_ACLE */
 
 int
 hns3_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
@@ -4004,7 +4010,7 @@ hns3_tx_free_buffer_simple(struct hns3_tx_queue *txq)
 		for (i = 0; i < txq->tx_rs_thresh; i++)
 			rte_prefetch0((tx_entry + i)->mbuf);
 		for (i = 0; i < txq->tx_rs_thresh; i++, tx_entry++) {
-			rte_mempool_put(tx_entry->mbuf->pool, tx_entry->mbuf);
+			rte_pktmbuf_free_seg(tx_entry->mbuf);
 			tx_entry->mbuf = NULL;
 		}
 
@@ -4254,27 +4260,31 @@ end_of_tx:
 	return nb_tx;
 }
 
-int __rte_weak
+#ifndef RTE_ARCH_ARM64
+int
 hns3_tx_check_vec_support(__rte_unused struct rte_eth_dev *dev)
 {
 	return -ENOTSUP;
 }
 
-uint16_t __rte_weak
+uint16_t
 hns3_xmit_pkts_vec(__rte_unused void *tx_queue,
 		   __rte_unused struct rte_mbuf **tx_pkts,
 		   __rte_unused uint16_t nb_pkts)
 {
 	return 0;
 }
+#endif /* RTE_ARCH_ARM64 */
 
-uint16_t __rte_weak
+#ifndef RTE_HAS_SVE_ACLE
+uint16_t
 hns3_xmit_pkts_vec_sve(void __rte_unused * tx_queue,
 		       struct rte_mbuf __rte_unused **tx_pkts,
 		       uint16_t __rte_unused nb_pkts)
 {
 	return 0;
 }
+#endif /* RTE_HAS_SVE_ACLE */
 
 int
 hns3_tx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,

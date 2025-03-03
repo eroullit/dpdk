@@ -3,6 +3,7 @@
  * Copyright(c) 2023 Napatech A/S
  */
 
+#include <rte_common.h>
 #include <unistd.h>
 
 #include "ntos_drv.h"
@@ -67,24 +68,24 @@
 	} \
 } while (0)
 
-struct __rte_aligned(8) virtq_avail {
+struct __rte_packed_begin virtq_avail {
 	uint16_t flags;
 	uint16_t idx;
 	uint16_t ring[];	/* Queue Size */
-};
+} __rte_packed_end;
 
-struct __rte_aligned(8) virtq_used_elem {
+struct __rte_packed_begin virtq_used_elem {
 	/* Index of start of used descriptor chain. */
 	uint32_t id;
 	/* Total length of the descriptor chain which was used (written to) */
 	uint32_t len;
-};
+} __rte_packed_end;
 
-struct __rte_aligned(8) virtq_used {
+struct __rte_packed_begin virtq_used {
 	uint16_t flags;
 	uint16_t idx;
 	struct virtq_used_elem ring[];	/* Queue Size */
-};
+} __rte_packed_end;
 
 struct virtq_struct_layout_s {
 	size_t used_offset;
@@ -344,9 +345,9 @@ dbs_initialize_virt_queue_structs(void *avail_struct_addr, void *used_struct_add
 		flgs);
 }
 
-static uint16_t dbs_qsize_log2(uint16_t qsize)
+static uint8_t dbs_qsize_log2(uint16_t qsize)
 {
-	uint32_t qs = 0;
+	uint8_t qs = 0;
 
 	while (qsize) {
 		qsize = qsize >> 1;
@@ -414,7 +415,7 @@ static struct nthw_virt_queue *nthw_setup_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	if (irq_vector < 0) {
 		if (set_rx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr,
 				RX_AM_DISABLE, host_id, 0,
-				irq_vector >= 0 ? 1 : 0) != 0) {
+				0) != 0) {
 			return NULL;
 		}
 	}
@@ -509,10 +510,10 @@ static int dbs_wait_hw_queue_shutdown(struct nthw_virt_queue *vq, int rx)
 
 static int dbs_internal_release_rx_virt_queue(struct nthw_virt_queue *rxvq)
 {
-	nthw_dbs_t *p_nthw_dbs = rxvq->mp_nthw_dbs;
-
 	if (rxvq == NULL)
 		return -1;
+
+	nthw_dbs_t *p_nthw_dbs = rxvq->mp_nthw_dbs;
 
 	/* Clear UW */
 	rxvq->used_struct_phys_addr = NULL;

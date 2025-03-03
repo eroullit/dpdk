@@ -12,16 +12,15 @@ The traffic generator extends :class:`framework.remote_session.python_shell.Pyth
 implement the methods for handling packets by sending commands into the interactive shell.
 """
 
-
 import re
 import time
 from typing import ClassVar
 
-from scapy.compat import base64_bytes  # type: ignore[import-untyped]
-from scapy.layers.l2 import Ether  # type: ignore[import-untyped]
-from scapy.packet import Packet  # type: ignore[import-untyped]
+from scapy.compat import base64_bytes
+from scapy.layers.l2 import Ether
+from scapy.packet import Packet
 
-from framework.config import OS, ScapyTrafficGeneratorConfig
+from framework.config.node import OS, ScapyTrafficGeneratorConfig
 from framework.remote_session.python_shell import PythonShell
 from framework.testbed_model.node import Node
 from framework.testbed_model.port import Port
@@ -81,7 +80,7 @@ class ScapyTrafficGenerator(PythonShell, CapturingTrafficGenerator):
             tg_node.config.os == OS.linux
         ), "Linux is the only supported OS for scapy traffic generation"
 
-        super().__init__(tg_node, config=config, **kwargs)
+        super().__init__(node=tg_node, config=config, tg_node=tg_node, **kwargs)
         self.start_application()
 
     def start_application(self) -> None:
@@ -173,7 +172,11 @@ class ScapyTrafficGenerator(PythonShell, CapturingTrafficGenerator):
         return " && ".join(bpf_filter)
 
     def _shell_create_sniffer(
-        self, packets_to_send: list[Packet], send_port: Port, recv_port: Port, filter_config: str
+        self,
+        packets_to_send: list[Packet],
+        send_port: Port,
+        recv_port: Port,
+        filter_config: str,
     ) -> None:
         """Create an asynchronous sniffer in the shell.
 
@@ -188,17 +191,19 @@ class ScapyTrafficGenerator(PythonShell, CapturingTrafficGenerator):
                 when set to an empty string.
         """
         self._shell_set_packet_list(packets_to_send)
+
+        self.send_command("import time")
         sniffer_commands = [
             f"{self._sniffer_name} = AsyncSniffer(",
             f"iface='{recv_port.logical_name}',",
             "store=True,",
             # *args is used in the arguments of the lambda since Scapy sends parameters to the
             # callback function which we do not need for our purposes.
-            "started_callback=lambda *args: sendp(",
+            "started_callback=lambda *args: (time.sleep(1), sendp(",
             (
                 # Additional indentation is added to this line only for readability of the logs.
                 f"{self._python_indentation}{self._send_packet_list_name},"
-                f" iface='{send_port.logical_name}'),"
+                f" iface='{send_port.logical_name}')),"
             ),
             ")",
         ]
@@ -223,7 +228,8 @@ class ScapyTrafficGenerator(PythonShell, CapturingTrafficGenerator):
         """
         sniffed_packets_name = "gathered_packets"
         self.send_command(f"{self._sniffer_name}.start()")
-        time.sleep(duration)
+        # Insert a one second delay to prevent timeout errors from occurring
+        time.sleep(duration + 1)
         self.send_command(f"{sniffed_packets_name} = {self._sniffer_name}.stop(join=True)")
         # An extra newline is required here due to the nature of interactive Python shells
         packet_strs = self.send_command(
@@ -231,6 +237,6 @@ class ScapyTrafficGenerator(PythonShell, CapturingTrafficGenerator):
         )
         # In the string of bytes "b'XXXX'", we only want the contents ("XXXX")
         list_of_packets_base64 = re.findall(
-            f"^b'({REGEX_FOR_BASE64_ENCODING})'", packet_strs, re.MULTILINE
+            rf"^b'({REGEX_FOR_BASE64_ENCODING})'", packet_strs, re.MULTILINE
         )
         return [Ether(base64_bytes(pakt)) for pakt in list_of_packets_base64]

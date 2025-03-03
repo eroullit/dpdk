@@ -59,8 +59,6 @@ extern "C" {
 #define RTE_CC_IS_GNU 0
 #if defined __clang__
 #define RTE_CC_CLANG
-#elif defined __INTEL_COMPILER
-#define RTE_CC_ICC
 #elif defined __GNUC__
 #define RTE_CC_GCC
 #undef RTE_CC_IS_GNU
@@ -100,12 +98,31 @@ typedef uint16_t unaligned_uint16_t;
 #endif
 
 /**
+ * @deprecated
+ * @see __rte_packed_begin
+ * @see __rte_packed_end
+ *
  * Force a structure to be packed
  */
 #ifdef RTE_TOOLCHAIN_MSVC
-#define __rte_packed
+#define __rte_packed RTE_DEPRECATED(__rte_packed)
 #else
-#define __rte_packed __attribute__((__packed__))
+#define __rte_packed (RTE_DEPRECATED(__rte_packed) __attribute__((__packed__)))
+#endif
+
+/**
+ * Force a structure to be packed
+ * Usage:
+ *     struct __rte_packed_begin mystruct { ... } __rte_packed_end;
+ *     union __rte_packed_begin myunion { ... } __rte_packed_end;
+ * Note: alignment attributes when present should precede __rte_packed_begin.
+ */
+#ifdef RTE_TOOLCHAIN_MSVC
+#define __rte_packed_begin __pragma(pack(push, 1))
+#define __rte_packed_end __pragma(pack(pop))
+#else
+#define __rte_packed_begin
+#define __rte_packed_end __attribute__((__packed__))
 #endif
 
 /**
@@ -138,9 +155,35 @@ typedef uint16_t unaligned_uint16_t;
 #endif
 
 /**
+ * Macros to cause the compiler to remember the state of the diagnostics as of
+ * each push, and restore to that point at each pop.
+ */
+#if !defined(RTE_TOOLCHAIN_MSVC)
+#define __rte_diagnostic_push _Pragma("GCC diagnostic push")
+#define __rte_diagnostic_pop  _Pragma("GCC diagnostic pop")
+#else
+#define __rte_diagnostic_push
+#define __rte_diagnostic_pop
+#endif
+
+/**
+ * Macro to disable compiler warnings about removing a type
+ * qualifier from the target type.
+ */
+#if !defined(RTE_TOOLCHAIN_MSVC)
+#define __rte_diagnostic_ignored_wcast_qual _Pragma("GCC diagnostic ignored \"-Wcast-qual\"")
+#else
+#define __rte_diagnostic_ignored_wcast_qual
+#endif
+
+/**
  * Mark a function or variable to a weak reference.
  */
-#define __rte_weak __attribute__((__weak__))
+#ifdef RTE_TOOLCHAIN_MSVC
+#define __rte_weak RTE_DEPRECATED(__rte_weak)
+#else
+#define __rte_weak RTE_DEPRECATED(__rte_weak) __attribute__((__weak__))
+#endif
 
 /**
  * Mark a function to be pure.
@@ -367,6 +410,15 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 #endif
 
 /**
+ * Hint point in program never reached
+ */
+#if defined(RTE_TOOLCHAIN_GCC) || defined(RTE_TOOLCHAIN_CLANG)
+#define __rte_unreachable() __extension__(__builtin_unreachable())
+#else
+#define __rte_unreachable() __assume(0)
+#endif
+
+/**
  * Issue a warning in case the function's return value is ignored.
  *
  * The use of this attribute should be restricted to cases where
@@ -399,7 +451,7 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
  * Force a function to be inlined
  */
 #ifdef RTE_TOOLCHAIN_MSVC
-#define __rte_always_inline
+#define __rte_always_inline __forceinline
 #else
 #define __rte_always_inline inline __attribute__((always_inline))
 #endif
@@ -407,12 +459,20 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 /**
  * Force a function to be noinlined
  */
+#ifdef RTE_TOOLCHAIN_MSVC
+#define __rte_noinline __declspec(noinline)
+#else
 #define __rte_noinline __attribute__((noinline))
+#endif
 
 /**
  * Hint function in the hot path
  */
+#ifdef RTE_TOOLCHAIN_MSVC
+#define __rte_hot
+#else
 #define __rte_hot __attribute__((hot))
+#endif
 
 /**
  * Hint function in the cold path
@@ -421,6 +481,22 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
 #define __rte_cold
 #else
 #define __rte_cold __attribute__((cold))
+#endif
+
+/**
+ * Hint precondition
+ *
+ * @warning Depending on the compiler, any code in ``condition`` might be executed.
+ * This currently only occurs with GCC prior to version 13.
+ */
+#if defined(RTE_TOOLCHAIN_GCC) && (GCC_VERSION >= 130000)
+#define __rte_assume(condition) __attribute__((assume(condition)))
+#elif defined(RTE_TOOLCHAIN_GCC)
+#define __rte_assume(condition) do { if (!(condition)) __rte_unreachable(); } while (0)
+#elif defined(RTE_TOOLCHAIN_CLANG)
+#define __rte_assume(condition) __extension__(__builtin_assume(condition))
+#else
+#define __rte_assume(condition) __assume(condition)
 #endif
 
 /**
@@ -454,6 +530,33 @@ static void __attribute__((destructor(RTE_PRIO(prio)), used)) func(void)
  * ptr1 is greater than ptr2.
  */
 #define RTE_PTR_DIFF(ptr1, ptr2) ((uintptr_t)(ptr1) - (uintptr_t)(ptr2))
+
+/*********** Macros for casting pointers ********/
+
+/**
+ * Macro to discard qualifiers (such as const, volatile, restrict) from a pointer,
+ * without the compiler emitting a warning.
+ */
+#define RTE_PTR_UNQUAL(X) ((void *)(uintptr_t)(X))
+
+/**
+ * Macro to cast a pointer to a specific type,
+ * without the compiler emitting a warning about discarding qualifiers.
+ *
+ * @warning
+ * When casting a pointer to point to a larger type, the resulting pointer may
+ * be misaligned, which results in undefined behavior.
+ * E.g.:
+ *
+ * struct s {
+ *       uint16_t a;
+ *       uint8_t  b;
+ *       uint8_t  c;
+ *       uint8_t  d;
+ *   } v;
+ *   uint16_t * p = RTE_CAST_PTR(uint16_t *, &v.c); // "p" is not 16 bit aligned!
+ */
+#define RTE_CAST_PTR(type, ptr) ((type)(uintptr_t)(ptr))
 
 /**
  * Workaround to cast a const field of a structure to non-const type.

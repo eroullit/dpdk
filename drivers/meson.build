@@ -17,6 +17,7 @@ subdirs = [
         'common/nitrox',  # depends on bus.
         'common/qat',     # depends on bus.
         'common/sfc_efx', # depends on bus.
+        'common/zsda',    # depends on bus.
         'mempool',        # depends on common and bus.
         'dma',            # depends on common and bus.
         'net',            # depends on common, bus, mempool
@@ -29,6 +30,7 @@ subdirs = [
         'event',          # depends on common, bus, mempool and net.
         'baseband',       # depends on common and bus.
         'gpu',            # depends on common and bus.
+        'power',
 ]
 
 if meson.is_cross_build()
@@ -46,7 +48,7 @@ enable_drivers = run_command(list_dir_globs, enable_drivers, check: true).stdout
 require_drivers = true
 if enable_drivers.length() == 0
     require_drivers = false
-    enable_drivers = run_command(list_dir_globs, '*/*', check: true).stdout().split()
+    enable_drivers = run_command(list_dir_globs, '*/*,*/*/*', check: true).stdout().split()
 endif
 
 # these drivers must always be enabled, otherwise the build breaks
@@ -141,6 +143,10 @@ foreach subpath:subdirs
         pkgconfig_extra_libs = []
         testpmd_sources = []
         require_iova_in_mbuf = true
+
+        if name.contains('/')
+            name = name.split('/')[1]
+        endif
 
         if not enable_drivers.contains(drv_path)
             build = false

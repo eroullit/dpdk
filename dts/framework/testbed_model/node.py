@@ -14,21 +14,19 @@ The :func:`~Node.skip_setup` decorator can be used without subclassing.
 """
 
 from abc import ABC
-from ipaddress import IPv4Interface, IPv6Interface
-from typing import Any, Callable, Union
 
-from framework.config import OS, NodeConfiguration, TestRunConfiguration
+from framework.config.node import (
+    OS,
+    NodeConfiguration,
+)
+from framework.config.test_run import (
+    DPDKBuildConfiguration,
+    TestRunConfiguration,
+)
 from framework.exception import ConfigurationError
 from framework.logger import DTSLogger, get_dts_logger
-from framework.settings import SETTINGS
 
-from .cpu import (
-    LogicalCore,
-    LogicalCoreCount,
-    LogicalCoreList,
-    LogicalCoreListFilter,
-    lcore_filter,
-)
+from .cpu import Architecture, LogicalCore, LogicalCoreCount, LogicalCoreList, lcore_filter
 from .linux_session import LinuxSession
 from .os_session import OSSession
 from .port import Port
@@ -55,6 +53,7 @@ class Node(ABC):
     main_session: OSSession
     config: NodeConfiguration
     name: str
+    arch: Architecture
     lcores: list[LogicalCore]
     ports: list[Port]
     _logger: DTSLogger
@@ -77,25 +76,21 @@ class Node(ABC):
         self.name = node_config.name
         self._logger = get_dts_logger(self.name)
         self.main_session = create_session(self.config, self.name, self._logger)
-
+        self.arch = Architecture(self.main_session.get_arch_info())
         self._logger.info(f"Connected to node: {self.name}")
-
         self._get_remote_cpus()
-        # filter the node lcores according to the test run configuration
-        self.lcores = LogicalCoreListFilter(
-            self.lcores, LogicalCoreList(self.config.lcores)
-        ).filter()
-
         self._other_sessions = []
         self._init_ports()
 
     def _init_ports(self) -> None:
-        self.ports = [Port(port_config) for port_config in self.config.ports]
+        self.ports = [Port(self.name, port_config) for port_config in self.config.ports]
         self.main_session.update_ports(self.ports)
-        for port in self.ports:
-            self.configure_port_state(port)
 
-    def set_up_test_run(self, test_run_config: TestRunConfiguration) -> None:
+    def set_up_test_run(
+        self,
+        test_run_config: TestRunConfiguration,
+        dpdk_build_config: DPDKBuildConfiguration,
+    ) -> None:
         """Test run setup steps.
 
         Configure hugepages on all DTS node types. Additional steps can be added by
@@ -104,6 +99,7 @@ class Node(ABC):
         Args:
             test_run_config: A test run configuration according to which
                 the setup steps will be taken.
+            dpdk_build_config: The build configuration of DPDK.
         """
         self._setup_hugepages()
 
@@ -171,7 +167,7 @@ class Node(ABC):
     def _get_remote_cpus(self) -> None:
         """Scan CPUs in the remote OS and store a list of LogicalCores."""
         self._logger.info("Getting CPU information.")
-        self.lcores = self.main_session.get_remote_cpus(self.config.use_first_core)
+        self.lcores = self.main_session.get_remote_cpus()
 
     def _setup_hugepages(self) -> None:
         """Setup hugepages on the node.
@@ -185,48 +181,12 @@ class Node(ABC):
                 self.config.hugepages.force_first_numa,
             )
 
-    def configure_port_state(self, port: Port, enable: bool = True) -> None:
-        """Enable/disable `port`.
-
-        Args:
-            port: The port to enable/disable.
-            enable: :data:`True` to enable, :data:`False` to disable.
-        """
-        self.main_session.configure_port_state(port, enable)
-
-    def configure_port_ip_address(
-        self,
-        address: Union[IPv4Interface, IPv6Interface],
-        port: Port,
-        delete: bool = False,
-    ) -> None:
-        """Add an IP address to `port` on this node.
-
-        Args:
-            address: The IP address with mask in CIDR format. Can be either IPv4 or IPv6.
-            port: The port to which to add the address.
-            delete: If :data:`True`, will delete the address from the port instead of adding it.
-        """
-        self.main_session.configure_port_ip_address(address, port, delete)
-
     def close(self) -> None:
         """Close all connections and free other resources."""
         if self.main_session:
             self.main_session.close()
         for session in self._other_sessions:
             session.close()
-
-    @staticmethod
-    def skip_setup(func: Callable[..., Any]) -> Callable[..., Any]:
-        """Skip the decorated function.
-
-        The :option:`--skip-setup` command line argument and the :envvar:`DTS_SKIP_SETUP`
-        environment variable enable the decorator.
-        """
-        if SETTINGS.skip_setup:
-            return lambda *args: None
-        else:
-            return func
 
 
 def create_session(node_config: NodeConfiguration, name: str, logger: DTSLogger) -> OSSession:
@@ -236,6 +196,9 @@ def create_session(node_config: NodeConfiguration, name: str, logger: DTSLogger)
         node_config: The test run configuration of the node to connect to.
         name: The name of the session.
         logger: The logger instance this session will use.
+
+    Raises:
+        ConfigurationError: If the node's OS is unsupported.
     """
     match node_config.os:
         case OS.linux:

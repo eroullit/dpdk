@@ -84,8 +84,8 @@ struct vhost_user {
 
 #define MAX_VIRTIO_BACKLOG 128
 
-static void vhost_user_server_new_connection(int fd, void *data, int *remove);
-static void vhost_user_read_cb(int fd, void *dat, int *remove);
+static void vhost_user_server_new_connection(int fd, void *data, int *close);
+static void vhost_user_read_cb(int fd, void *dat, int *close);
 static int create_unix_socket(struct vhost_user_socket *vsocket);
 static int vhost_user_start_client(struct vhost_user_socket *vsocket);
 
@@ -290,7 +290,7 @@ err:
 
 /* call back when there is new vhost-user connection from client  */
 static void
-vhost_user_server_new_connection(int fd, void *dat, int *remove __rte_unused)
+vhost_user_server_new_connection(int fd, void *dat, int *close __rte_unused)
 {
 	struct vhost_user_socket *vsocket = dat;
 
@@ -303,7 +303,7 @@ vhost_user_server_new_connection(int fd, void *dat, int *remove __rte_unused)
 }
 
 static void
-vhost_user_read_cb(int connfd, void *dat, int *remove)
+vhost_user_read_cb(int connfd, void *dat, int *close)
 {
 	struct vhost_user_connection *conn = dat;
 	struct vhost_user_socket *vsocket = conn->vsocket;
@@ -313,8 +313,7 @@ vhost_user_read_cb(int connfd, void *dat, int *remove)
 	if (ret < 0) {
 		struct virtio_net *dev = get_device(conn->vid);
 
-		close(connfd);
-		*remove = 1;
+		*close = 1;
 
 		if (dev)
 			vhost_destroy_device_notify(dev);
@@ -359,8 +358,7 @@ create_unix_socket(struct vhost_user_socket *vsocket)
 
 	memset(un, 0, sizeof(*un));
 	un->sun_family = AF_UNIX;
-	strncpy(un->sun_path, vsocket->path, sizeof(un->sun_path));
-	un->sun_path[sizeof(un->sun_path) - 1] = '\0';
+	strlcpy(un->sun_path, vsocket->path, sizeof(un->sun_path));
 
 	vsocket->socket_fd = fd;
 	return 0;
@@ -498,11 +496,7 @@ vhost_user_reconnect_init(void)
 {
 	int ret;
 
-	ret = pthread_mutex_init(&reconn_list.mutex, NULL);
-	if (ret < 0) {
-		VHOST_CONFIG_LOG("thread", ERR, "%s: failed to initialize mutex", __func__);
-		return ret;
-	}
+	pthread_mutex_init(&reconn_list.mutex, NULL);
 	TAILQ_INIT(&reconn_list.head);
 
 	ret = rte_thread_create_internal_control(&reconn_tid, "vhost-reco",
@@ -844,14 +838,6 @@ rte_vhost_driver_set_max_queue_num(const char *path, uint32_t max_queue_pairs)
 	struct vhost_user_socket *vsocket;
 	int ret = 0;
 
-	VHOST_CONFIG_LOG(path, INFO, "Setting max queue pairs to %u", max_queue_pairs);
-
-	if (max_queue_pairs > VHOST_MAX_QUEUE_PAIRS) {
-		VHOST_CONFIG_LOG(path, ERR, "Library only supports up to %u queue pairs",
-				VHOST_MAX_QUEUE_PAIRS);
-		return -1;
-	}
-
 	pthread_mutex_lock(&vhost_user.mutex);
 	vsocket = find_vhost_user_socket(path);
 	if (!vsocket) {
@@ -869,6 +855,15 @@ rte_vhost_driver_set_max_queue_num(const char *path, uint32_t max_queue_pairs)
 		VHOST_CONFIG_LOG(path, DEBUG,
 				"Keeping %u max queue pairs for Vhost-user backend",
 				VHOST_MAX_QUEUE_PAIRS);
+		goto unlock_exit;
+	}
+
+	VHOST_CONFIG_LOG(path, INFO, "Setting max queue pairs to %u", max_queue_pairs);
+
+	if (max_queue_pairs > VHOST_MAX_QUEUE_PAIRS) {
+		VHOST_CONFIG_LOG(path, ERR, "Library only supports up to %u queue pairs",
+				VHOST_MAX_QUEUE_PAIRS);
+		ret = -1;
 		goto unlock_exit;
 	}
 
@@ -897,7 +892,6 @@ vhost_user_socket_mem_free(struct vhost_user_socket *vsocket)
 int
 rte_vhost_driver_register(const char *path, uint64_t flags)
 {
-	int ret = -1;
 	struct vhost_user_socket *vsocket;
 
 	if (!path)
@@ -921,11 +915,7 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 		goto out;
 	}
 	TAILQ_INIT(&vsocket->conn_list);
-	ret = pthread_mutex_init(&vsocket->conn_mutex, NULL);
-	if (ret) {
-		VHOST_CONFIG_LOG(path, ERR, "failed to init connection mutex");
-		goto out_free;
-	}
+	pthread_mutex_init(&vsocket->conn_mutex, NULL);
 
 	if (!strncmp("/dev/vduse/", path, strlen("/dev/vduse/")))
 		vsocket->is_vduse = true;
@@ -1005,7 +995,6 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 	} else {
 #ifndef RTE_LIBRTE_VHOST_POSTCOPY
 		VHOST_CONFIG_LOG(path, ERR, "Postcopy requested but not compiled");
-		ret = -1;
 		goto out_mutex;
 #endif
 	}
@@ -1020,26 +1009,22 @@ rte_vhost_driver_register(const char *path, uint64_t flags)
 		} else {
 			vsocket->is_server = true;
 		}
-		ret = create_unix_socket(vsocket);
-		if (ret < 0)
+		if (create_unix_socket(vsocket) < 0)
 			goto out_mutex;
 	}
 
 	vhost_user.vsockets[vhost_user.vsocket_cnt++] = vsocket;
 
 	pthread_mutex_unlock(&vhost_user.mutex);
-	return ret;
+	return 0;
 
 out_mutex:
 	if (pthread_mutex_destroy(&vsocket->conn_mutex)) {
 		VHOST_CONFIG_LOG(path, ERR, "failed to destroy connection mutex");
 	}
-out_free:
-	vhost_user_socket_mem_free(vsocket);
 out:
 	pthread_mutex_unlock(&vhost_user.mutex);
-
-	return ret;
+	return -1;
 }
 
 static bool

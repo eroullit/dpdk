@@ -133,7 +133,7 @@ enum {
 };
 
 /* HWS counter age parameter. */
-struct __rte_cache_aligned mlx5_hws_age_param {
+struct __rte_cache_aligned __rte_packed_begin mlx5_hws_age_param {
 	RTE_ATOMIC(uint32_t) timeout; /* Aging timeout in seconds (atomically accessed). */
 	RTE_ATOMIC(uint32_t) sec_since_last_hit;
 	/* Time in seconds since last hit (atomically accessed). */
@@ -149,7 +149,7 @@ struct __rte_cache_aligned mlx5_hws_age_param {
 	cnt_id_t own_cnt_index;
 	/* Counter action created specifically for this AGE action. */
 	void *context; /* Flow AGE context. */
-} __rte_packed;
+} __rte_packed_end;
 
 
 /**
@@ -715,14 +715,15 @@ mlx5_hws_cnt_service_thread_destroy(struct mlx5_dev_ctx_shared *sh);
 int
 mlx5_hws_cnt_pool_create(struct rte_eth_dev *dev,
 		uint32_t nb_counters, uint16_t nb_queue,
-		struct mlx5_hws_cnt_pool *chost);
+		struct mlx5_hws_cnt_pool *chost, struct rte_flow_error *error);
 
 void
 mlx5_hws_cnt_pool_destroy(struct mlx5_dev_ctx_shared *sh,
 		struct mlx5_hws_cnt_pool *cpool);
 
 int
-mlx5_hws_cnt_svc_init(struct mlx5_dev_ctx_shared *sh);
+mlx5_hws_cnt_svc_init(struct mlx5_dev_ctx_shared *sh,
+		      struct rte_flow_error *error);
 
 void
 mlx5_hws_cnt_svc_deinit(struct mlx5_dev_ctx_shared *sh);

@@ -88,8 +88,7 @@ parse_flow_max_priority(const char *key, const char *value, void *extra_args)
 
 	val = atoi(value);
 
-	/* Limit the max priority to 32 */
-	if (val < 1 || val > 32)
+	if (val < 1 || val > ROC_NPC_MAX_MCAM_PRIORITY)
 		return -EINVAL;
 
 	*(uint16_t *)extra_args = val;
@@ -305,12 +304,12 @@ cnxk_ethdev_parse_devargs(struct rte_devargs *devargs, struct cnxk_eth_dev *dev)
 	uint16_t scalar_enable = 0;
 	uint16_t tx_compl_ena = 0;
 	uint16_t custom_sa_act = 0;
-	uint8_t custom_inb_sa = 0;
+	uint16_t custom_inb_sa = 0;
 	struct rte_kvargs *kvlist;
 	uint32_t meta_buf_sz = 0;
+	uint16_t lock_rx_ctx = 0;
+	uint16_t rx_inj_ena = 0;
 	uint16_t no_inl_dev = 0;
-	uint8_t lock_rx_ctx = 0;
-	uint8_t rx_inj_ena = 0;
 
 	memset(&sdp_chan, 0, sizeof(sdp_chan));
 	memset(&pre_l2_info, 0, sizeof(struct flow_pre_l2_size_info));
@@ -390,7 +389,12 @@ null_devargs:
 		dev->nix.meta_buf_sz = meta_buf_sz;
 
 	dev->npc.flow_prealloc_size = flow_prealloc_size;
-	dev->npc.flow_max_priority = flow_max_priority;
+
+	if (roc_model_is_cn20k())
+		dev->npc.flow_max_priority = ROC_NPC_MAX_MCAM_PRIORITY;
+	else
+		dev->npc.flow_max_priority = flow_max_priority;
+
 	dev->npc.switch_header_type = switch_header_type;
 	dev->npc.sdp_channel = sdp_chan.channel;
 	dev->npc.sdp_channel_mask = sdp_chan.mask;

@@ -113,6 +113,8 @@ tx4(volatile struct ngbe_tx_desc *txdp, struct rte_mbuf **pkts)
 	for (i = 0; i < 4; ++i, ++txdp, ++pkts) {
 		buf_dma_addr = rte_mbuf_data_iova(*pkts);
 		pkt_len = (*pkts)->data_len;
+		if (pkt_len < RTE_ETHER_HDR_LEN)
+			pkt_len = NGBE_FRAME_SIZE_DFT;
 
 		/* write data to descriptor */
 		txdp->qw0 = rte_cpu_to_le_64(buf_dma_addr);
@@ -133,6 +135,8 @@ tx1(volatile struct ngbe_tx_desc *txdp, struct rte_mbuf **pkts)
 
 	buf_dma_addr = rte_mbuf_data_iova(*pkts);
 	pkt_len = (*pkts)->data_len;
+	if (pkt_len < RTE_ETHER_HDR_LEN)
+		pkt_len = NGBE_FRAME_SIZE_DFT;
 
 	/* write data to descriptor */
 	txdp->qw0 = cpu_to_le64(buf_dma_addr);
@@ -555,6 +559,30 @@ ngbe_xmit_cleanup(struct ngbe_tx_queue *txq)
 	return 0;
 }
 
+static inline bool
+ngbe_check_pkt_err(struct rte_mbuf *tx_pkt)
+{
+	uint32_t total_len = 0, nb_seg = 0;
+	struct rte_mbuf *mseg;
+
+	mseg = tx_pkt;
+	do {
+		if (mseg->data_len == 0)
+			return true;
+		total_len += mseg->data_len;
+		nb_seg++;
+		mseg = mseg->next;
+	} while (mseg != NULL);
+
+	if (tx_pkt->pkt_len != total_len || tx_pkt->pkt_len == 0)
+		return true;
+
+	if (tx_pkt->nb_segs != nb_seg || tx_pkt->nb_segs > 64)
+		return true;
+
+	return false;
+}
+
 uint16_t
 ngbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		uint16_t nb_pkts)
@@ -599,6 +627,12 @@ ngbe_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 	for (nb_tx = 0; nb_tx < nb_pkts; nb_tx++) {
 		new_ctx = 0;
 		tx_pkt = *tx_pkts++;
+		if (ngbe_check_pkt_err(tx_pkt)) {
+			rte_pktmbuf_free(tx_pkt);
+			txq->desc_error++;
+			continue;
+		}
+
 		pkt_len = tx_pkt->pkt_len;
 
 		/*
@@ -2067,6 +2101,7 @@ ngbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	ngbe_set_tx_function(dev, txq);
 
 	txq->ops->reset(txq);
+	txq->desc_error = 0;
 
 	dev->data->tx_queues[queue_idx] = txq;
 
@@ -3421,6 +3456,215 @@ ngbe_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	qinfo->conf.tx_free_thresh = txq->tx_free_thresh;
 	qinfo->conf.offloads = txq->offloads;
 	qinfo->conf.tx_deferred_start = txq->tx_deferred_start;
+}
+
+/*
+ * [VF] Initializes Receive Unit.
+ */
+int
+ngbevf_dev_rx_init(struct rte_eth_dev *dev)
+{
+	struct ngbe_hw     *hw;
+	struct ngbe_rx_queue *rxq;
+	struct rte_eth_rxmode *rxmode = &dev->data->dev_conf.rxmode;
+	uint64_t bus_addr;
+	uint32_t srrctl;
+	uint16_t buf_size;
+	uint16_t i;
+	int ret;
+
+	PMD_INIT_FUNC_TRACE();
+	hw = ngbe_dev_hw(dev);
+
+	if (rte_is_power_of_2(dev->data->nb_rx_queues) == 0) {
+		PMD_INIT_LOG(ERR, "The number of Rx queue invalid, "
+			"it should be power of 2");
+		return -1;
+	}
+
+	if (dev->data->nb_rx_queues > hw->mac.max_rx_queues) {
+		PMD_INIT_LOG(ERR, "The number of Rx queue invalid, "
+			"it should be equal to or less than %d",
+			hw->mac.max_rx_queues);
+		return -1;
+	}
+
+	/*
+	 * When the VF driver issues a NGBE_VF_RESET request, the PF driver
+	 * disables the VF receipt of packets if the PF MTU is > 1500.
+	 * This is done to deal with limitations that imposes
+	 * the PF and all VFs to share the same MTU.
+	 * Then, the PF driver enables again the VF receipt of packet when
+	 * the VF driver issues a NGBE_VF_SET_LPE request.
+	 * In the meantime, the VF device cannot be used, even if the VF driver
+	 * and the Guest VM network stack are ready to accept packets with a
+	 * size up to the PF MTU.
+	 * As a work-around to this PF behaviour, force the call to
+	 * ngbevf_rlpml_set_vf even if jumbo frames are not used. This way,
+	 * VF packets received can work in all cases.
+	 */
+	if (ngbevf_rlpml_set_vf(hw,
+	    (uint16_t)dev->data->mtu + NGBE_ETH_OVERHEAD)) {
+		PMD_INIT_LOG(ERR, "Set max packet length to %d failed.",
+			     dev->data->mtu + NGBE_ETH_OVERHEAD);
+
+		return -EINVAL;
+	}
+
+	/*
+	 * Assume no header split and no VLAN strip support
+	 * on any Rx queue first .
+	 */
+	rxmode->offloads &= ~RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
+	/* Setup RX queues */
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+
+		/* Allocate buffers for descriptor rings */
+		ret = ngbe_alloc_rx_queue_mbufs(rxq);
+		if (ret)
+			return ret;
+
+		/* Setup the Base and Length of the Rx Descriptor Rings */
+		bus_addr = rxq->rx_ring_phys_addr;
+
+		wr32(hw, NGBE_RXBAL(i),
+				(uint32_t)(bus_addr & BIT_MASK32));
+		wr32(hw, NGBE_RXBAH(i),
+				(uint32_t)(bus_addr >> 32));
+		wr32(hw, NGBE_RXRP(i), 0);
+		wr32(hw, NGBE_RXWP(i), 0);
+
+		/* Configure the RXCFG register */
+		srrctl = NGBE_RXCFG_RNGLEN(rxq->nb_rx_desc);
+
+		/* Set if packets are dropped when no descriptors available */
+		if (rxq->drop_en)
+			srrctl |= NGBE_RXCFG_DROP;
+
+		/*
+		 * Configure the RX buffer size in the PKTLEN field of
+		 * the RXCFG register of the queue.
+		 * The value is in 1 KB resolution. Valid values can be from
+		 * 1 KB to 16 KB.
+		 */
+		buf_size = (uint16_t)(rte_pktmbuf_data_room_size(rxq->mb_pool) -
+			RTE_PKTMBUF_HEADROOM);
+		buf_size = ROUND_UP(buf_size, 1 << 10);
+		srrctl |= NGBE_RXCFG_PKTLEN(buf_size);
+
+		/*
+		 * VF modification to write virtual function RXCFG register
+		 */
+		wr32(hw, NGBE_RXCFG(i), srrctl);
+
+		if (rxmode->offloads & RTE_ETH_RX_OFFLOAD_SCATTER ||
+		    /* It adds dual VLAN length for supporting dual VLAN */
+		    (dev->data->mtu + NGBE_ETH_OVERHEAD +
+				2 * RTE_VLAN_HLEN) > buf_size) {
+			if (!dev->data->scattered_rx)
+				PMD_INIT_LOG(DEBUG, "forcing scatter mode");
+			dev->data->scattered_rx = 1;
+		}
+
+		if (rxq->offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)
+			rxmode->offloads |= RTE_ETH_RX_OFFLOAD_VLAN_STRIP;
+	}
+
+	ngbe_set_rx_function(dev);
+
+	return 0;
+}
+
+/*
+ * [VF] Initializes Transmit Unit.
+ */
+void
+ngbevf_dev_tx_init(struct rte_eth_dev *dev)
+{
+	struct ngbe_hw     *hw;
+	struct ngbe_tx_queue *txq;
+	uint64_t bus_addr;
+	uint16_t i;
+
+	PMD_INIT_FUNC_TRACE();
+	hw = ngbe_dev_hw(dev);
+
+	/* Setup the Base and Length of the Tx Descriptor Rings */
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+		bus_addr = txq->tx_ring_phys_addr;
+		wr32(hw, NGBE_TXBAL(i),
+				(uint32_t)(bus_addr & BIT_MASK32));
+		wr32(hw, NGBE_TXBAH(i),
+				(uint32_t)(bus_addr >> 32));
+		wr32m(hw, NGBE_TXCFG(i), NGBE_TXCFG_BUFLEN_MASK,
+			NGBE_TXCFG_BUFLEN(txq->nb_tx_desc));
+		/* Setup the HW Tx Head and TX Tail descriptor pointers */
+		wr32(hw, NGBE_TXRP(i), 0);
+		wr32(hw, NGBE_TXWP(i), 0);
+	}
+}
+
+/*
+ * [VF] Start Transmit and Receive Units.
+ */
+void
+ngbevf_dev_rxtx_start(struct rte_eth_dev *dev)
+{
+	struct ngbe_hw     *hw;
+	struct ngbe_tx_queue *txq;
+	struct ngbe_rx_queue *rxq;
+	uint32_t txdctl;
+	uint32_t rxdctl;
+	uint16_t i;
+	int poll_ms;
+
+	PMD_INIT_FUNC_TRACE();
+	hw = ngbe_dev_hw(dev);
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+		/* Setup Transmit Threshold Registers */
+		wr32m(hw, NGBE_TXCFG(txq->reg_idx),
+		      NGBE_TXCFG_HTHRESH_MASK |
+		      NGBE_TXCFG_WTHRESH_MASK,
+		      NGBE_TXCFG_HTHRESH(txq->hthresh) |
+		      NGBE_TXCFG_WTHRESH(txq->wthresh));
+	}
+
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		wr32m(hw, NGBE_TXCFG(i), NGBE_TXCFG_ENA, NGBE_TXCFG_ENA);
+
+		poll_ms = 10;
+		/* Wait until TX Enable ready */
+		do {
+			rte_delay_ms(1);
+			txdctl = rd32(hw, NGBE_TXCFG(i));
+		} while (--poll_ms && !(txdctl & NGBE_TXCFG_ENA));
+		if (!poll_ms)
+			PMD_INIT_LOG(ERR, "Could not enable Tx Queue %d", i);
+		else
+			dev->data->tx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+	}
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+
+		wr32m(hw, NGBE_RXCFG(i), NGBE_RXCFG_ENA, NGBE_RXCFG_ENA);
+
+		/* Wait until RX Enable ready */
+		poll_ms = 10;
+		do {
+			rte_delay_ms(1);
+			rxdctl = rd32(hw, NGBE_RXCFG(i));
+		} while (--poll_ms && !(rxdctl & NGBE_RXCFG_ENA));
+		if (!poll_ms)
+			PMD_INIT_LOG(ERR, "Could not enable Rx Queue %d", i);
+		else
+			dev->data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
+		rte_wmb();
+		wr32(hw, NGBE_RXWP(i), rxq->nb_rx_desc - 1);
+	}
 }
 
 /* Stubs needed for linkage when RTE_ARCH_PPC_64, RTE_ARCH_RISCV or

@@ -6,6 +6,7 @@
 
 #include <rte_common.h>
 #include <rte_lcore.h>
+#include <rte_lcore_var.h>
 #include <rte_rtm.h>
 #include <rte_spinlock.h>
 
@@ -14,10 +15,20 @@
 /*
  * Per-lcore structure holding current status of C0.2 sleeps.
  */
-static alignas(RTE_CACHE_LINE_SIZE) struct power_wait_status {
+struct power_wait_status {
 	rte_spinlock_t lock;
 	volatile void *monitor_addr; /**< NULL if not currently sleeping */
-} wait_status[RTE_MAX_LCORE];
+};
+
+RTE_LCORE_VAR_HANDLE(struct power_wait_status, wait_status);
+
+static void
+init_wait_status(void)
+{
+	if (wait_status != NULL)
+		return;
+	RTE_LCORE_VAR_ALLOC(wait_status);
+}
 
 /*
  * This function uses UMONITOR/UMWAIT instructions and will enter C0.2 state.
@@ -172,7 +183,8 @@ rte_power_monitor(const struct rte_power_monitor_cond *pmc,
 	if (pmc->fn == NULL)
 		return -EINVAL;
 
-	s = &wait_status[lcore_id];
+	init_wait_status();
+	s = RTE_LCORE_VAR_LCORE(lcore_id, wait_status);
 
 	/* update sleep address */
 	rte_spinlock_lock(&s->lock);
@@ -264,7 +276,8 @@ rte_power_monitor_wakeup(const unsigned int lcore_id)
 	if (lcore_id >= RTE_MAX_LCORE)
 		return -EINVAL;
 
-	s = &wait_status[lcore_id];
+	init_wait_status();
+	s = RTE_LCORE_VAR_LCORE(lcore_id, wait_status);
 
 	/*
 	 * There is a race condition between sleep, wakeup and locking, but we
@@ -303,8 +316,7 @@ int
 rte_power_monitor_multi(const struct rte_power_monitor_cond pmc[],
 		const uint32_t num, const uint64_t tsc_timestamp)
 {
-	const unsigned int lcore_id = rte_lcore_id();
-	struct power_wait_status *s = &wait_status[lcore_id];
+	struct power_wait_status *s;
 	uint32_t i, rc;
 
 	/* check if supported */
@@ -313,6 +325,9 @@ rte_power_monitor_multi(const struct rte_power_monitor_cond pmc[],
 
 	if (pmc == NULL || num == 0)
 		return -EINVAL;
+
+	init_wait_status();
+	s = RTE_LCORE_VAR(wait_status);
 
 	/* we are already inside transaction region, return */
 	if (rte_xtest() != 0)

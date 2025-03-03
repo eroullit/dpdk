@@ -2277,6 +2277,7 @@ vhost_user_get_vring_base(struct virtio_net **pdev,
 
 	rte_rwlock_write_lock(&vq->access_lock);
 	vring_invalidate(dev, vq);
+	memset(&vq->ring_addrs, 0, sizeof(struct vhost_vring_addr));
 	rte_rwlock_write_unlock(&vq->access_lock);
 
 	return RTE_VHOST_MSG_RESULT_REPLY;
@@ -3300,7 +3301,8 @@ unlock:
 	 */
 
 	if (!(dev->flags & VIRTIO_DEV_RUNNING)) {
-		if (dev->notify_ops->new_device(dev->vid) == 0)
+		if (!dev->notify_ops->new_device ||
+			dev->notify_ops->new_device(dev->vid) == 0)
 			dev->flags |= VIRTIO_DEV_RUNNING;
 	}
 
