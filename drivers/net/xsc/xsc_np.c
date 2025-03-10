@@ -137,10 +137,6 @@ xsc_rss_hash_template_get(struct rte_eth_rss_conf *rss_conf)
 		rss_hf &= ~XSC_RSS_HASH_BIT_IPV6_SPORT;
 	}
 
-	if ((rss_conf->rss_hf & RTE_ETH_RSS_LEVEL_PMD_DEFAULT) ||
-	    (rss_conf->rss_hf & RTE_ETH_RSS_LEVEL_OUTERMOST))
-		outer = 1;
-
 	if (rss_conf->rss_hf & RTE_ETH_RSS_LEVEL_INNERMOST)
 		outer = 0;
 
@@ -166,19 +162,21 @@ xsc_dev_np_exec(struct xsc_dev *xdev, void *cmd, int len, int table, int opmod)
 	int data_len;
 	int cmd_len;
 	int ret;
+	void *cmd_buf;
 
 	data_len = sizeof(struct xsc_np_data_tl) + len;
 	in_len = sizeof(struct xsc_np_mbox_in) + data_len;
 	out_len = sizeof(struct xsc_np_mbox_out) + data_len;
 	cmd_len = RTE_MAX(in_len, out_len);
-	in = malloc(cmd_len);
-	memset(in, 0, cmd_len);
-	if (in == NULL) {
+	cmd_buf = malloc(cmd_len);
+	if (cmd_buf == NULL) {
 		rte_errno = ENOMEM;
 		PMD_DRV_LOG(ERR, "Failed to alloc np cmd memory");
 		return -rte_errno;
 	}
 
+	in = cmd_buf;
+	memset(in, 0, cmd_len);
 	in->hdr.opcode = rte_cpu_to_be_16(XSC_CMD_OP_EXEC_NP);
 	in->len = rte_cpu_to_be_16(data_len);
 
@@ -189,10 +187,10 @@ xsc_dev_np_exec(struct xsc_dev *xdev, void *cmd, int len, int table, int opmod)
 	if (cmd && len)
 		memcpy(tl + 1, cmd, len);
 
-	out = (struct xsc_np_mbox_out *)in;
+	out = cmd_buf;
 	ret = xsc_dev_mailbox_exec(xdev, in, in_len, out, out_len);
 
-	free(in);
+	free(cmd_buf);
 	return ret;
 }
 
@@ -384,7 +382,6 @@ xsc_dev_create_vfos_baselp(struct xsc_dev *xdev)
 void
 xsc_dev_pct_uninit(void)
 {
-	rte_bitmap_free(xsc_pct_mgr.bmp_pct);
 	rte_free(xsc_pct_mgr.bmp_mem);
 }
 

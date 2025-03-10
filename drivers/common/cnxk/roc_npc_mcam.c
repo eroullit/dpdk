@@ -511,6 +511,7 @@ npc_mcam_write_entry(struct mbox *mbox, struct roc_npc_flow *mcam)
 		cn20k_req->intf = mcam->nix_intf;
 		cn20k_req->enable_entry = mcam->enable;
 		cn20k_req->entry_data.action = mcam->npc_action;
+		cn20k_req->entry_data.action2 = mcam->npc_action2;
 		cn20k_req->entry_data.vtag_action = mcam->vtag_action;
 		cn20k_req->hw_prio = mcam->priority;
 		if (mcam->use_ctr)
@@ -746,7 +747,7 @@ npc_mcam_set_channel(struct roc_npc_flow *flow, struct npc_cn20k_mcam_write_entr
 			chan = (channel | NIX_CHAN_CPT_CH_START);
 			mask = (chan_mask | NIX_CHAN_CPT_CH_START);
 		} else {
-			if (!(flow->npc_action & NIX_RX_ACTIONOP_UCAST_IPSEC)) {
+			if (!roc_npc_action_is_rx_inline(flow->npc_action)) {
 				/*
 				 * Clear bits 10 & 11 corresponding to CPT
 				 * channel. By default, rules should match
@@ -950,6 +951,7 @@ npc_mcam_alloc_and_write(struct npc *npc, struct roc_npc_flow *flow, struct npc_
 	if (flow->nix_intf == NIX_INTF_RX)
 		flow->npc_action |= (uint64_t)flow->recv_queue << 20;
 	req.entry_data.action = flow->npc_action;
+	req.entry_data.action2 = flow->npc_action2;
 
 	/*
 	 * Driver sets vtag action on per interface basis, not
@@ -972,7 +974,7 @@ npc_mcam_alloc_and_write(struct npc *npc, struct roc_npc_flow *flow, struct npc_
 
 	if (flow->nix_intf == NIX_INTF_RX) {
 		if (inl_dev && inl_dev->is_multi_channel &&
-		    (flow->npc_action & NIX_RX_ACTIONOP_UCAST_IPSEC)) {
+		    roc_npc_action_is_rx_inline(flow->npc_action)) {
 			pf_func = nix_inl_dev_pffunc_get();
 			req.entry_data.action &= ~(GENMASK(19, 4));
 			req.entry_data.action |= (uint64_t)pf_func << 4;
@@ -1283,7 +1285,7 @@ npc_program_mcam(struct npc *npc, struct npc_parse_state *pst, bool mcam_alloc)
 	if (idev)
 		inl_dev = idev->nix_inl_dev;
 	if (inl_dev && inl_dev->is_multi_channel &&
-	    (pst->flow->npc_action & NIX_RX_ACTIONOP_UCAST_IPSEC))
+	    roc_npc_action_is_rx_inline(pst->flow->npc_action))
 		skip_base_rule = true;
 
 	if ((pst->is_vf || pst->flow->is_rep_vf) && pst->flow->nix_intf == NIX_INTF_RX &&

@@ -584,6 +584,35 @@ mlx5dr_definer_ipv6_routing_ext_set(struct mlx5dr_definer_fc *fc,
 }
 
 static void
+mlx5dr_definer_ecpri_common_set(struct mlx5dr_definer_fc *fc,
+				const void *item,
+				uint8_t *tag)
+{
+	const struct rte_flow_item_ecpri *ec = item;
+	uint32_t val;
+
+	val = ec->hdr.common.u32;
+
+	DR_SET_BE32(tag, val, fc->byte_off, 0, fc->bit_mask);
+}
+
+static void
+mlx5dr_definer_ecpri_body_set(struct mlx5dr_definer_fc *fc,
+			      const void *item,
+			      uint8_t *tag)
+{
+	const struct rte_flow_item_ecpri *ec = item;
+	uint32_t val, idx;
+
+
+	idx = fc->fname - MLX5DR_DEFINER_FNAME_FLEX_PARSER_0;
+	/* The 1st DW is used for common field, indeed, there are only 2 DWs. */
+	val = ec->hdr.dummy[idx - 1];
+
+	DR_SET_BE32(tag, val, fc->byte_off, 0, fc->bit_mask);
+}
+
+static void
 mlx5dr_definer_flex_parser_set(struct mlx5dr_definer_fc *fc,
 			       const void *item,
 			       uint8_t *tag, bool is_inner)
@@ -1644,14 +1673,9 @@ mlx5dr_definer_conv_item_mpls(struct mlx5dr_definer_conv_data *cd,
 {
 	const struct rte_flow_item_mpls *m = item->mask;
 	struct mlx5dr_definer_fc *fc;
-	bool inner = cd->tunnel;
+	bool is_udp;
 
-	if (inner) {
-		DR_LOG(ERR, "Inner MPLS item not supported");
-		rte_errno = ENOTSUP;
-		return rte_errno;
-	}
-
+	/* If no protocol is set - assume MPLSoUDP */
 	if (!cd->relaxed) {
 		/* In order to match on MPLS we must match on ip_protocol and l4_dport. */
 		fc = &cd->fc[DR_CALC_FNAME(IP_PROTOCOL, false)];
@@ -1661,14 +1685,17 @@ mlx5dr_definer_conv_item_mpls(struct mlx5dr_definer_conv_data *cd,
 			fc->tag_set = &mlx5dr_definer_udp_protocol_set;
 			DR_CALC_SET(fc, eth_l2, l4_type_bwc, false);
 		}
+		is_udp = (fc->tag_set == &mlx5dr_definer_udp_protocol_set);
 
-		/* Currently support only MPLSoUDP */
-		fc = &cd->fc[DR_CALC_FNAME(L4_DPORT, false)];
-		if (!fc->tag_set) {
-			fc->item_idx = item_idx;
-			fc->tag_mask_set = &mlx5dr_definer_ones_set;
-			fc->tag_set = &mlx5dr_definer_mpls_udp_port_set;
-			DR_CALC_SET(fc, eth_l4, destination_port, false);
+		if (is_udp) {
+			/* Set UDP dest port to MPLS. */
+			fc = &cd->fc[DR_CALC_FNAME(L4_DPORT, false)];
+			if (!fc->tag_set) {
+				fc->item_idx = item_idx;
+				fc->tag_mask_set = &mlx5dr_definer_ones_set;
+				fc->tag_set = &mlx5dr_definer_mpls_udp_port_set;
+				DR_CALC_SET(fc, eth_l4, destination_port, false);
+			}
 		}
 	}
 
@@ -2205,7 +2232,7 @@ mlx5dr_definer_conv_item_ptype(struct mlx5dr_definer_conv_data *cd,
 		 * Cannot be combined with Layer 4 Types (TCP/UDP).
 		 * The exact value must be specified in the mask.
 		 */
-		if (m->packet_type == RTE_PTYPE_L4_FRAG) {
+		if ((m->packet_type & RTE_PTYPE_L4_MASK) == RTE_PTYPE_L4_FRAG) {
 			fc = &cd->fc[DR_CALC_FNAME(PTYPE_FRAG, false)];
 			fc->item_idx = item_idx;
 			fc->tag_set = &mlx5dr_definer_ptype_frag_set;
@@ -2227,7 +2254,7 @@ mlx5dr_definer_conv_item_ptype(struct mlx5dr_definer_conv_data *cd,
 	}
 
 	if (m->packet_type & RTE_PTYPE_INNER_L4_MASK) {
-		if (m->packet_type == RTE_PTYPE_INNER_L4_FRAG) {
+		if ((m->packet_type & RTE_PTYPE_INNER_L4_MASK) == RTE_PTYPE_INNER_L4_FRAG) {
 			fc = &cd->fc[DR_CALC_FNAME(PTYPE_FRAG, true)];
 			fc->item_idx = item_idx;
 			fc->tag_set = &mlx5dr_definer_ptype_frag_set;
@@ -2552,6 +2579,59 @@ mlx5dr_definer_conv_item_random(struct mlx5dr_definer_conv_data *cd,
 	fc->is_range = l && l->value;
 	DR_CALC_SET_HDR(fc, random_number, random_number);
 
+	return 0;
+}
+
+static uint32_t
+mlx5dr_definer_get_ecpri_parser_byte_off_from_ctx(void *dr_ctx, uint32_t *byte_off)
+{
+	uint32_t base_off = MLX5_BYTE_OFF(definer_hl, flex_parser.flex_parser_0);
+	struct mlx5_ecpri_parser_profile *ecp;
+	uint32_t i;
+
+	ecp = flow_hw_get_ecpri_parser_profile(dr_ctx);
+	if (!ecp)
+		return UINT32_MAX;
+	for (i = 0; i < ecp->num; i++)
+		byte_off[i] = base_off - ecp->ids[i] * sizeof(uint32_t);
+	return i;
+}
+
+static int
+mlx5dr_definer_conv_item_ecpri(struct mlx5dr_definer_conv_data *cd,
+			       struct rte_flow_item *item,
+			       int item_idx)
+{
+	const struct rte_flow_item_ecpri *m;
+	uint32_t i, mask, byte_off[8] = {0};
+	struct mlx5dr_definer_fc *fc;
+	uint32_t num_dws;
+
+	num_dws = mlx5dr_definer_get_ecpri_parser_byte_off_from_ctx(cd->ctx, byte_off);
+	if (num_dws == UINT32_MAX) {
+		DR_LOG(ERR, "failed to get eCPRI samples %d", -rte_errno);
+		return rte_errno;
+	}
+
+	m = item->mask;
+	if (!m)
+		return 0;
+
+	for (i = 0; i < num_dws; i++) {
+		mask = i == 0 ? m->hdr.common.u32 : m->hdr.dummy[i - 1];
+		if (!mask)
+			continue;
+		mask = htobe32(mask);
+		fc = mlx5dr_definer_get_flex_parser_fc(cd, byte_off[i]);
+		if (!fc)
+			return rte_errno;
+
+		fc->item_idx = item_idx;
+		fc->tag_set = i == 0 ? &mlx5dr_definer_ecpri_common_set :
+				       &mlx5dr_definer_ecpri_body_set;
+		fc->tag_mask_set = &mlx5dr_definer_ones_set;
+		fc->bit_mask = mask;
+	}
 	return 0;
 }
 
@@ -3313,6 +3393,10 @@ mlx5dr_definer_conv_items_to_hl(struct mlx5dr_context *ctx,
 					item_flags |= cd.tunnel ? MLX5_FLOW_ITEM_INNER_FLEX :
 								  MLX5_FLOW_ITEM_OUTER_FLEX;
 			}
+			break;
+		case RTE_FLOW_ITEM_TYPE_ECPRI:
+			ret = mlx5dr_definer_conv_item_ecpri(&cd, items, i);
+			item_flags |= MLX5_FLOW_LAYER_ECPRI;
 			break;
 		case RTE_FLOW_ITEM_TYPE_MPLS:
 			ret = mlx5dr_definer_conv_item_mpls(&cd, items, i);

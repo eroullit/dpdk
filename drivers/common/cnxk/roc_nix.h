@@ -243,6 +243,7 @@ struct roc_nix_eeprom_info {
 #define ROC_NIX_LF_RX_CFG_LEN_IL3     BIT_ULL(39)
 #define ROC_NIX_LF_RX_CFG_LEN_OL4     BIT_ULL(40)
 #define ROC_NIX_LF_RX_CFG_LEN_OL3     BIT_ULL(41)
+#define ROC_NIX_LF_RX_CFG_APAD_MODE   BIT_ULL(42)
 
 #define ROC_NIX_LF_RX_CFG_RX_ERROR_MASK 0xFFFFFFFFFFF80000
 #define ROC_NIX_RE_PARTIAL		BIT_ULL(1)
@@ -474,6 +475,7 @@ struct roc_nix {
 	bool custom_meta_aura_ena;
 	bool rx_inj_ena;
 	bool custom_inb_sa;
+	bool use_write_sa;
 	uint32_t root_sched_weight;
 	uint16_t inb_cfg_param1;
 	uint16_t inb_cfg_param2;
@@ -488,9 +490,10 @@ struct roc_nix {
 	uintptr_t meta_mempool;
 	uint16_t rep_cnt;
 	uint16_t rep_pfvf_map[MAX_PFVF_REP];
+	bool reass_ena;
 	TAILQ_ENTRY(roc_nix) next;
 
-#define ROC_NIX_MEM_SZ (6 * 1070)
+#define ROC_NIX_MEM_SZ (6 * 1112)
 	uint8_t reserved[ROC_NIX_MEM_SZ] __plt_cache_aligned;
 } __plt_cache_aligned;
 

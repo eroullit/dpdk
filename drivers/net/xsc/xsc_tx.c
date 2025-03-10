@@ -50,9 +50,9 @@ xsc_txq_obj_new(struct xsc_dev *xdev, struct xsc_txq_data *txq_data,
 	txq_data->cq_db = cq_info.cq_db;
 	txq_data->cqn = cq_info.cqn;
 	txq_data->cqes = cq_info.cqes;
-	txq_data->cqe_m = txq_data->cqe_s - 1;
+	txq_data->cqe_m = (uint16_t)(1 << cq_info.cqe_n) - 1;
 
-	PMD_DRV_LOG(INFO, "Create tx cq, cqe_s:%d, cqe_n:%d, cq_db=%p, cqn:%d",
+	PMD_DRV_LOG(INFO, "Create tx cq, cqe_s:%d, cqe_n:%d, cq_db=%p, cqn:%u",
 		    txq_data->cqe_s, txq_data->cqe_n,
 		    txq_data->cq_db, txq_data->cqn);
 
@@ -83,7 +83,7 @@ xsc_txq_obj_new(struct xsc_dev *xdev, struct xsc_txq_data *txq_data,
 	txq_data->wqe_pi = 0;
 	txq_data->wqe_comp = 0;
 
-	PMD_DRV_LOG(INFO, "Create tx qp, wqe_s:%d, wqe_n:%d, qp_db=%p, qpn:%d",
+	PMD_DRV_LOG(INFO, "Create tx qp, wqe_s:%d, wqe_n:%d, qp_db=%p, qpn:%u",
 		    txq_data->wqe_s, txq_data->wqe_n,
 		    txq_data->qp_db, txq_data->qpn);
 	return 0;
@@ -215,7 +215,6 @@ xsc_tx_wqe_ctrl_seg_init(struct xsc_txq_data *__rte_restrict txq,
 		cs->csum_en = 0;
 
 	if (txq->tso_en == 1 && (mbuf->ol_flags & RTE_MBUF_F_TX_TCP_SEG)) {
-		cs->has_pph = 0;
 		cs->so_type = 1;
 		cs->so_hdr_len = mbuf->l2_len + mbuf->l3_len + mbuf->l4_len;
 		cs->so_data_size = rte_cpu_to_le_16(mbuf->tso_segsz);

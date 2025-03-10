@@ -90,10 +90,9 @@ class SingleActiveInteractiveShell(MultiInheritanceBaseClass, ABC):
     def __init__(
         self,
         node: Node,
-        privileged: bool = False,
-        timeout: float = SETTINGS.timeout,
-        app_params: Params = Params(),
         name: str | None = None,
+        privileged: bool = False,
+        app_params: Params = Params(),
         **kwargs,
     ) -> None:
         """Create an SSH channel during initialization.
@@ -103,13 +102,10 @@ class SingleActiveInteractiveShell(MultiInheritanceBaseClass, ABC):
 
         Args:
             node: The node on which to run start the interactive shell.
-            privileged: Enables the shell to run as superuser.
-            timeout: The timeout used for the SSH channel that is dedicated to this interactive
-                shell. This timeout is for collecting output, so if reading from the buffer
-                and no output is gathered within the timeout, an exception is thrown.
-            app_params: The command line parameters to be passed to the application on startup.
             name: Name for the interactive shell to use for logging. This name will be appended to
                 the name of the underlying node which it is running on.
+            privileged: Enables the shell to run as superuser.
+            app_params: The command line parameters to be passed to the application on startup.
             **kwargs: Any additional arguments if any.
         """
         self._node = node
@@ -118,7 +114,7 @@ class SingleActiveInteractiveShell(MultiInheritanceBaseClass, ABC):
         self._logger = get_dts_logger(f"{node.name}.{name}")
         self._app_params = app_params
         self._privileged = privileged
-        self._timeout = timeout
+        self._timeout = SETTINGS.timeout
         # Ensure path is properly formatted for the host
         self._update_real_path(self.path)
         super().__init__(**kwargs)

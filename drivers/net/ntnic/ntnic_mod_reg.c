@@ -69,6 +69,23 @@ const struct link_ops_s *get_100g_link_ops(void)
 	return link_100g_ops;
 }
 
+/*
+ *
+ */
+static struct link_ops_s *link_agx_100g_ops;
+
+void register_agx_100g_link_ops(struct link_ops_s *ops)
+{
+	link_agx_100g_ops = ops;
+}
+
+const struct link_ops_s *get_agx_100g_link_ops(void)
+{
+	if (link_agx_100g_ops == NULL)
+		link_agx_100g_init();
+	return link_agx_100g_ops;
+}
+
 static const struct port_ops *port_ops;
 
 void register_port_ops(const struct port_ops *ops)
@@ -159,6 +176,36 @@ static const struct flow_backend_ops *flow_backend_ops;
 void register_flow_backend_ops(const struct flow_backend_ops *ops)
 {
 	flow_backend_ops = ops;
+}
+
+static struct rst9574_ops *rst9574_ops;
+
+void register_rst9574_ops(struct rst9574_ops *ops)
+{
+	rst9574_ops = ops;
+}
+
+struct rst9574_ops *get_rst9574_ops(void)
+{
+	if (rst9574_ops == NULL)
+		rst9574_ops_init();
+
+	return rst9574_ops;
+}
+
+static struct rst_nt400dxx_ops *rst_nt400dxx_ops;
+
+void register_rst_nt400dxx_ops(struct rst_nt400dxx_ops *ops)
+{
+	rst_nt400dxx_ops = ops;
+}
+
+struct rst_nt400dxx_ops *get_rst_nt400dxx_ops(void)
+{
+	if (rst_nt400dxx_ops == NULL)
+		rst_nt400dxx_ops_init();
+
+	return rst_nt400dxx_ops;
 }
 
 const struct flow_backend_ops *get_flow_backend_ops(void)

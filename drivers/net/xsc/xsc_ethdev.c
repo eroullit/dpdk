@@ -137,8 +137,8 @@ xsc_ethdev_enable(struct rte_eth_dev *dev)
 	int pcie_logic_port = 0;
 	int qp_set_id;
 	int repr_id;
-	struct xsc_rxq_data *rxq = xsc_rxq_get(priv, 0);
-	uint16_t rx_qpn = (uint16_t)rxq->qpn;
+	struct xsc_rxq_data *rxq;
+	uint16_t rx_qpn;
 	int i, vld;
 	struct xsc_txq_data *txq;
 	struct xsc_repr_port *repr;
@@ -147,6 +147,11 @@ xsc_ethdev_enable(struct rte_eth_dev *dev)
 	if (priv->funcid_type != XSC_PHYPORT_MAC_FUNCID)
 		return -ENODEV;
 
+	rxq = xsc_rxq_get(priv, 0);
+	if (rxq == NULL)
+		return -EINVAL;
+
+	rx_qpn = (uint16_t)rxq->qpn;
 	hwinfo = &priv->xdev->hwinfo;
 	repr_id = priv->representor_id;
 	repr = &priv->xdev->repr_ports[repr_id];
@@ -162,6 +167,8 @@ xsc_ethdev_enable(struct rte_eth_dev *dev)
 
 	for (i = 0; i < priv->num_sq; i++) {
 		txq = xsc_txq_get(priv, i);
+		if (txq == NULL)
+			return -EINVAL;
 		xsc_dev_modify_qp_status(priv->xdev, txq->qpn, 1, XSC_CMD_OP_RTR2RTS_QP);
 		xsc_dev_modify_qp_qostree(priv->xdev, txq->qpn);
 		xsc_dev_set_qpsetid(priv->xdev, txq->qpn, qp_set_id);
@@ -229,6 +236,8 @@ xsc_txq_start(struct xsc_ethdev_priv *priv)
 
 	for (i = 0; i != priv->num_sq; ++i) {
 		txq_data = xsc_txq_get(priv, i);
+		if (txq_data == NULL)
+			goto error;
 		xsc_txq_elts_alloc(txq_data);
 		ret = xsc_txq_obj_new(priv->xdev, txq_data, offloads, i);
 		if (ret < 0)
@@ -270,6 +279,8 @@ xsc_rxq_start(struct xsc_ethdev_priv *priv)
 
 	for (i = 0; i != priv->num_rq; ++i) {
 		rxq_data = xsc_rxq_get(priv, i);
+		if (rxq_data == NULL)
+			goto error;
 		if (dev->data->rx_queue_state[i] != RTE_ETH_QUEUE_STATE_STARTED) {
 			ret = xsc_rxq_elts_alloc(rxq_data);
 			if (ret != 0)
@@ -314,6 +325,11 @@ xsc_ethdev_start(struct rte_eth_dev *dev)
 	dev->tx_pkt_burst = xsc_tx_burst;
 
 	ret = xsc_ethdev_enable(dev);
+	if (ret) {
+		PMD_DRV_LOG(ERR, "Failed to enable port: %u",
+			    dev->data->port_id);
+		goto error;
+	}
 
 	return 0;
 
@@ -647,7 +663,7 @@ xsc_ethdev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac, uin
 	for (i = 0; i != XSC_MAX_MAC_ADDRESSES; ++i) {
 		if (i == (int)index)
 			continue;
-		if (memcmp(&dev->data->mac_addrs[i], mac, sizeof(*mac)))
+		if (memcmp(&dev->data->mac_addrs[i], mac, sizeof(*mac)) != 0)
 			continue;
 		/* Address already configured elsewhere, return with error */
 		rte_errno = EADDRINUSE;
@@ -721,16 +737,13 @@ xsc_ethdev_init_one_representor(struct rte_eth_dev *eth_dev, void *init_params)
 		config->tso = 0;
 	} else {
 		config->tso = 1;
-		if (config->tso)
-			config->tso_max_payload_sz = 1500;
+		config->tso_max_payload_sz = 1500;
 	}
 
-	priv->is_representor = (priv->eth_type == RTE_ETH_REPRESENTOR_NONE) ? 0 : 1;
-	if (priv->is_representor) {
-		eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
-		eth_dev->data->representor_id = priv->representor_id;
-		eth_dev->data->backer_port_id = eth_dev->data->port_id;
-	}
+	priv->is_representor = 1;
+	eth_dev->data->dev_flags |= RTE_ETH_DEV_REPRESENTOR;
+	eth_dev->data->representor_id = priv->representor_id;
+	eth_dev->data->backer_port_id = eth_dev->data->port_id;
 
 	eth_dev->dev_ops = &xsc_eth_dev_ops;
 	eth_dev->rx_pkt_burst = rte_eth_pkt_burst_dummy;

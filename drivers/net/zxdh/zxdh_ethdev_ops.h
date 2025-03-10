@@ -28,17 +28,38 @@
 
 #define ZXDH_ETHER_MIN_MTU      68
 
+struct zxdh_np_stats_data {
+	uint64_t n_pkts_dropped;
+	uint64_t n_bytes_dropped;
+};
+
+struct zxdh_hw_stats_data {
+	uint64_t n_pkts_dropped;
+	uint64_t n_bytes_dropped;
+};
+
 struct zxdh_hw_np_stats {
-	uint64_t np_rx_broadcast;
-	uint64_t np_tx_broadcast;
-	uint64_t np_rx_mtu_drop_pkts;
-	uint64_t np_tx_mtu_drop_pkts;
-	uint64_t np_rx_mtu_drop_bytes;
-	uint64_t np_tx_mtu_drop_bytes;
-	uint64_t np_rx_mtr_drop_pkts;
-	uint64_t np_tx_mtr_drop_pkts;
-	uint64_t np_rx_mtr_drop_bytes;
-	uint64_t np_tx_mtr_drop_bytes;
+	uint64_t rx_unicast_pkts;
+	uint64_t tx_unicast_pkts;
+	uint64_t rx_unicast_bytes;
+	uint64_t tx_unicast_bytes;
+	uint64_t rx_multicast_pkts;
+	uint64_t tx_multicast_pkts;
+	uint64_t rx_multicast_bytes;
+	uint64_t tx_multicast_bytes;
+	uint64_t rx_broadcast_pkts;
+	uint64_t tx_broadcast_pkts;
+	uint64_t rx_broadcast_bytes;
+	uint64_t tx_broadcast_bytes;
+	uint64_t rx_mtu_drop_pkts;
+	uint64_t tx_mtu_drop_pkts;
+	uint64_t rx_mtu_drop_bytes;
+	uint64_t tx_mtu_drop_bytes;
+	uint64_t rx_mtr_drop_pkts;
+	uint64_t tx_mtr_drop_pkts;
+	uint64_t rx_mtr_drop_bytes;
+	uint64_t tx_mtr_drop_bytes;
+	uint64_t tx_ssvpc_pkts;
 };
 
 struct zxdh_hw_vqm_stats {
@@ -53,7 +74,7 @@ struct zxdh_hw_vqm_stats {
 
 int zxdh_dev_set_link_up(struct rte_eth_dev *dev);
 int zxdh_dev_set_link_down(struct rte_eth_dev *dev);
-int32_t zxdh_dev_link_update(struct rte_eth_dev *dev, int32_t wait_to_complete __rte_unused);
+int32_t zxdh_dev_link_update(struct rte_eth_dev *dev, int32_t wait_to_complete);
 int zxdh_dev_mac_addr_add(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr,
 		uint32_t index, uint32_t vmdq);
 int zxdh_dev_mac_addr_set(struct rte_eth_dev *dev, struct rte_ether_addr *mac_addr);
@@ -76,5 +97,14 @@ int zxdh_rss_configure(struct rte_eth_dev *dev);
 int zxdh_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
 int zxdh_dev_stats_reset(struct rte_eth_dev *dev);
 int zxdh_dev_mtu_set(struct rte_eth_dev *dev, uint16_t new_mtu);
+int zxdh_hw_np_stats_pf_reset(struct rte_eth_dev *dev, uint32_t stats_id);
+void zxdh_data_hi_to_lo(uint64_t *data);
+int32_t zxdh_dev_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats, uint32_t n);
+int32_t zxdh_dev_xstats_get_names(struct rte_eth_dev *dev,
+			struct rte_eth_xstat_name *xstats_names, unsigned int limit);
+int zxdh_dev_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size);
+int zxdh_dev_get_module_info(struct rte_eth_dev *dev, struct rte_eth_dev_module_info *modinfo);
+int zxdh_dev_get_module_eeprom(struct rte_eth_dev *dev, struct rte_dev_eeprom_info *info);
+int zxdh_meter_ops_get(struct rte_eth_dev *dev, void *arg);
 
 #endif /* ZXDH_ETHDEV_OPS_H */

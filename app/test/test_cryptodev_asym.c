@@ -62,7 +62,7 @@ queue_ops_rsa_sign_verify(void *sess)
 	struct rte_crypto_op *op, *result_op;
 	struct rte_crypto_asym_op *asym_op;
 	uint8_t output_buf[TEST_DATA_SIZE];
-	int status = TEST_SUCCESS;
+	int status;
 
 	/* Set up crypto op data structure */
 	op = rte_crypto_op_alloc(op_mpool, RTE_CRYPTO_OP_TYPE_ASYMMETRIC);
@@ -129,12 +129,35 @@ queue_ops_rsa_sign_verify(void *sess)
 		goto error_exit;
 	}
 
-	status = TEST_SUCCESS;
 	if (result_op->status != RTE_CRYPTO_OP_STATUS_SUCCESS) {
+		RTE_LOG(ERR, USER1, "Failed to process sign-verify op\n");
+		status = TEST_FAILED;
+		goto error_exit;
+	}
+
+	/* Negative test */
+	result_op->asym->rsa.sign.data[0] ^= 0xff;
+	if (rte_cryptodev_enqueue_burst(dev_id, 0, &result_op, 1) != 1) {
+		RTE_LOG(ERR, USER1, "Error sending packet for verify\n");
+		status = TEST_FAILED;
+		goto error_exit;
+	}
+
+	while (rte_cryptodev_dequeue_burst(dev_id, 0, &result_op, 1) == 0)
+		rte_pause();
+
+	if (result_op == NULL) {
+		RTE_LOG(ERR, USER1, "Failed to process verify op\n");
+		status = TEST_FAILED;
+		goto error_exit;
+	}
+
+	if (result_op->status != RTE_CRYPTO_OP_STATUS_ERROR) {
 		RTE_LOG(ERR, USER1, "Failed to process sign-verify op\n");
 		status = TEST_FAILED;
 	}
 
+	status = TEST_SUCCESS;
 error_exit:
 
 	rte_crypto_op_free(op);
@@ -4000,6 +4023,19 @@ static struct unit_test_suite cryptodev_octeontx_asym_testsuite  = {
 	}
 };
 
+static struct unit_test_suite cryptodev_virtio_asym_testsuite  = {
+	.suite_name = "Crypto Device VIRTIO ASYM Unit Test Suite",
+	.setup = testsuite_setup,
+	.teardown = testsuite_teardown,
+	.unit_test_cases = {
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_capability),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym,
+				test_rsa_sign_verify_crt),
+		TEST_CASE_ST(ut_setup_asym, ut_teardown_asym, test_rsa_enc_dec_crt),
+		TEST_CASES_END() /**< NULL terminate unit test array */
+	}
+};
+
 static int
 test_cryptodev_openssl_asym(void)
 {
@@ -4068,8 +4104,38 @@ test_cryptodev_cn10k_asym(void)
 	return unit_test_suite_runner(&cryptodev_octeontx_asym_testsuite);
 }
 
+static int
+test_cryptodev_virtio_asym(void)
+{
+	gbl_driver_id = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_VIRTIO_PMD));
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "virtio PMD must be loaded.\n");
+		return TEST_FAILED;
+	}
+
+	/* Use test suite registered for crypto_virtio PMD */
+	return unit_test_suite_runner(&cryptodev_virtio_asym_testsuite);
+}
+
+static int
+test_cryptodev_virtio_user_asym(void)
+{
+	gbl_driver_id = rte_cryptodev_driver_id_get(
+			RTE_STR(CRYPTODEV_NAME_VIRTIO_USER_PMD));
+	if (gbl_driver_id == -1) {
+		RTE_LOG(ERR, USER1, "virtio user PMD must be loaded.\n");
+		return TEST_FAILED;
+	}
+
+	/* Use test suite registered for crypto_virtio_user PMD */
+	return unit_test_suite_runner(&cryptodev_virtio_asym_testsuite);
+}
+
 REGISTER_DRIVER_TEST(cryptodev_openssl_asym_autotest, test_cryptodev_openssl_asym);
 REGISTER_DRIVER_TEST(cryptodev_qat_asym_autotest, test_cryptodev_qat_asym);
 REGISTER_DRIVER_TEST(cryptodev_octeontx_asym_autotest, test_cryptodev_octeontx_asym);
 REGISTER_DRIVER_TEST(cryptodev_cn9k_asym_autotest, test_cryptodev_cn9k_asym);
 REGISTER_DRIVER_TEST(cryptodev_cn10k_asym_autotest, test_cryptodev_cn10k_asym);
+REGISTER_DRIVER_TEST(cryptodev_virtio_asym_autotest, test_cryptodev_virtio_asym);
+REGISTER_DRIVER_TEST(cryptodev_virtio_user_asym_autotest, test_cryptodev_virtio_user_asym);

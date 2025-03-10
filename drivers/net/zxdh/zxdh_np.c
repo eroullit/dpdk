@@ -13,20 +13,21 @@
 
 #include "zxdh_np.h"
 #include "zxdh_logs.h"
+#include "zxdh_msg.h"
 
 static uint64_t g_np_bar_offset;
 static ZXDH_DEV_MGR_T g_dev_mgr;
 static ZXDH_SDT_MGR_T g_sdt_mgr;
 static uint32_t g_dpp_dtb_int_enable;
 static uint32_t g_table_type[ZXDH_DEV_CHANNEL_MAX][ZXDH_DEV_SDT_ID_MAX];
-ZXDH_PPU_CLS_BITMAP_T g_ppu_cls_bit_map[ZXDH_DEV_CHANNEL_MAX];
-ZXDH_DTB_MGR_T *p_dpp_dtb_mgr[ZXDH_DEV_CHANNEL_MAX];
-ZXDH_RISCV_DTB_MGR *p_riscv_dtb_queue_mgr[ZXDH_DEV_CHANNEL_MAX];
-ZXDH_TLB_MGR_T *g_p_dpp_tlb_mgr[ZXDH_DEV_CHANNEL_MAX];
-ZXDH_REG_T g_dpp_reg_info[4];
-ZXDH_DTB_TABLE_T g_dpp_dtb_table_info[4];
-ZXDH_SDT_TBL_DATA_T g_sdt_info[ZXDH_DEV_CHANNEL_MAX][ZXDH_DEV_SDT_ID_MAX];
-ZXDH_PPU_STAT_CFG_T g_ppu_stat_cfg;
+static ZXDH_PPU_CLS_BITMAP_T g_ppu_cls_bit_map[ZXDH_DEV_CHANNEL_MAX];
+static ZXDH_DTB_MGR_T *p_dpp_dtb_mgr[ZXDH_DEV_CHANNEL_MAX];
+static ZXDH_RISCV_DTB_MGR *p_riscv_dtb_queue_mgr[ZXDH_DEV_CHANNEL_MAX];
+static ZXDH_TLB_MGR_T *g_p_dpp_tlb_mgr[ZXDH_DEV_CHANNEL_MAX];
+static ZXDH_REG_T g_dpp_reg_info[4];
+static ZXDH_DTB_TABLE_T g_dpp_dtb_table_info[4];
+static ZXDH_SDT_TBL_DATA_T g_sdt_info[ZXDH_DEV_CHANNEL_MAX][ZXDH_DEV_SDT_ID_MAX];
+static ZXDH_PPU_STAT_CFG_T g_ppu_stat_cfg;
 
 #define ZXDH_SDT_MGR_PTR_GET()    (&g_sdt_mgr)
 #define ZXDH_SDT_SOFT_TBL_GET(id) (g_sdt_mgr.sdt_tbl_array[id])
@@ -141,6 +142,46 @@ do {\
 
 #define ZXDH_DTB_QUEUE_INIT_FLAG_GET(DEV_ID, QUEUE_ID)       \
 		(p_dpp_dtb_mgr[(DEV_ID)]->queue_info[(QUEUE_ID)].init_flag)
+
+ZXDH_FIELD_T g_stat_car0_cara_queue_ram0_159_0_reg[] = {
+	{"cara_drop", ZXDH_FIELD_FLAG_RW, 147, 1, 0x0, 0x0},
+	{"cara_plcr_en", ZXDH_FIELD_FLAG_RW, 146, 1, 0x0, 0x0},
+	{"cara_profile_id", ZXDH_FIELD_FLAG_RW, 145, 9, 0x0, 0x0},
+	{"cara_tq_h", ZXDH_FIELD_FLAG_RO, 136, 13, 0x0, 0x0},
+	{"cara_tq_l", ZXDH_FIELD_FLAG_RO, 123, 32, 0x0, 0x0},
+	{"cara_ted", ZXDH_FIELD_FLAG_RO, 91, 19, 0x0, 0x0},
+	{"cara_tcd", ZXDH_FIELD_FLAG_RO, 72, 19, 0x0, 0x0},
+	{"cara_tei", ZXDH_FIELD_FLAG_RO, 53, 27, 0x0, 0x0},
+	{"cara_tci", ZXDH_FIELD_FLAG_RO, 26, 27, 0x0, 0x0},
+};
+
+ZXDH_FIELD_T g_stat_car0_carb_queue_ram0_159_0_reg[] = {
+	{"carb_drop", ZXDH_FIELD_FLAG_RW, 147, 1, 0x0, 0x0},
+	{"carb_plcr_en", ZXDH_FIELD_FLAG_RW, 146, 1, 0x0, 0x0},
+	{"carb_profile_id", ZXDH_FIELD_FLAG_RW, 145, 9, 0x0, 0x0},
+	{"carb_tq_h", ZXDH_FIELD_FLAG_RO, 136, 13, 0x0, 0x0},
+	{"carb_tq_l", ZXDH_FIELD_FLAG_RO, 123, 32, 0x0, 0x0},
+	{"carb_ted", ZXDH_FIELD_FLAG_RO, 91, 19, 0x0, 0x0},
+	{"carb_tcd", ZXDH_FIELD_FLAG_RO, 72, 19, 0x0, 0x0},
+	{"carb_tei", ZXDH_FIELD_FLAG_RO, 53, 27, 0x0, 0x0},
+	{"carb_tci", ZXDH_FIELD_FLAG_RO, 26, 27, 0x0, 0x0},
+};
+
+ZXDH_FIELD_T g_stat_car0_carc_queue_ram0_159_0_reg[] = {
+	{"carc_drop", ZXDH_FIELD_FLAG_RW, 147, 1, 0x0, 0x0},
+	{"carc_plcr_en", ZXDH_FIELD_FLAG_RW, 146, 1, 0x0, 0x0},
+	{"carc_profile_id", ZXDH_FIELD_FLAG_RW, 145, 9, 0x0, 0x0},
+	{"carc_tq_h", ZXDH_FIELD_FLAG_RO, 136, 13, 0x0, 0x0},
+	{"carc_tq_l", ZXDH_FIELD_FLAG_RO, 123, 32, 0x0, 0x0},
+	{"carc_ted", ZXDH_FIELD_FLAG_RO, 91, 19, 0x0, 0x0},
+	{"carc_tcd", ZXDH_FIELD_FLAG_RO, 72, 19, 0x0, 0x0},
+	{"carc_tei", ZXDH_FIELD_FLAG_RO, 53, 27, 0x0, 0x0},
+	{"carc_tci", ZXDH_FIELD_FLAG_RO, 26, 27, 0x0, 0x0},
+};
+
+ZXDH_FIELD_T g_nppu_pktrx_cfg_pktrx_glbal_cfg_0_reg[] = {
+	{"pktrx_glbal_cfg_0", ZXDH_FIELD_FLAG_RW, 31, 32, 0x0, 0x0},
+};
 
 static uint32_t
 zxdh_np_comm_is_big_endian(void)
@@ -873,8 +914,7 @@ zxdh_np_sdt_mgr_destroy(uint32_t dev_id)
 	p_sdt_tbl_temp = ZXDH_SDT_SOFT_TBL_GET(dev_id);
 	p_sdt_mgr = ZXDH_SDT_MGR_PTR_GET();
 
-	if (p_sdt_tbl_temp != NULL)
-		free(p_sdt_tbl_temp);
+	free(p_sdt_tbl_temp);
 
 	ZXDH_SDT_SOFT_TBL_GET(dev_id) = NULL;
 
@@ -940,7 +980,7 @@ zxdh_np_dtb_write_table_cmd(uint32_t dev_id,
 	ZXDH_DTB_TABLE_T     *p_table_info = NULL;
 	ZXDH_DTB_FIELD_T     *p_field_info = NULL;
 	uint32_t         temp_data;
-	uint32_t         rc;
+	uint32_t         rc = 0;
 
 	ZXDH_COMM_CHECK_POINT(p_cmd_data);
 	ZXDH_COMM_CHECK_POINT(p_cmd_buff);
@@ -1024,11 +1064,10 @@ zxdh_np_dtb_se_smmu0_ind_write(uint32_t dev_id,
 {
 	uint32_t temp_idx;
 	uint32_t dtb_ind_addr;
-	uint32_t rc;
+	uint32_t rc = 0;
 
 	switch (wrt_mode) {
 	case ZXDH_ERAM128_OPR_128b:
-	{
 		if ((0xFFFFFFFF - (base_addr)) < (index)) {
 			PMD_DRV_LOG(ERR, "ICM %s:%d[Error:VALUE[val0=0x%x]"
 				"INVALID] [val1=0x%x] FUNCTION :%s", __FILE__, __LINE__,
@@ -1042,27 +1081,20 @@ zxdh_np_dtb_se_smmu0_ind_write(uint32_t dev_id,
 		}
 		temp_idx = index << 7;
 		break;
-	}
-
 	case ZXDH_ERAM128_OPR_64b:
-	{
 		if ((base_addr + (index >> 1)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
 			PMD_DRV_LOG(ERR, "dpp_se_smmu0_ind_write : index out of range");
 			return 1;
 		}
 		temp_idx = index << 6;
 		break;
-	}
-
 	case ZXDH_ERAM128_OPR_1b:
-	{
 		if ((base_addr + (index >> 7)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
 			PMD_DRV_LOG(ERR, "dpp_se_smmu0_ind_write : index out of range");
 			return 1;
 		}
 
 		temp_idx = index;
-	}
 	}
 
 	dtb_ind_addr = ((base_addr << 7) & ZXDH_ERAM128_BADDR_MASK) + temp_idx;
@@ -1086,16 +1118,12 @@ zxdh_np_eram_dtb_len_get(uint32_t mode)
 
 	switch (mode) {
 	case ZXDH_ERAM128_OPR_128b:
-	{
 		dtb_len += 2;
 		break;
-	}
 	case ZXDH_ERAM128_OPR_64b:
 	case ZXDH_ERAM128_OPR_1b:
-	{
 		dtb_len += 1;
 		break;
-	}
 	default:
 		break;
 	}
@@ -1130,21 +1158,14 @@ zxdh_np_dtb_eram_one_entry(uint32_t dev_id,
 
 	switch (opr_mode) {
 	case ZXDH_ERAM128_TBL_128b:
-	{
 		opr_mode = ZXDH_ERAM128_OPR_128b;
 		break;
-	}
 	case ZXDH_ERAM128_TBL_64b:
-	{
 		opr_mode = ZXDH_ERAM128_OPR_64b;
 		break;
-	}
-
 	case ZXDH_ERAM128_TBL_1b:
-	{
 		opr_mode = ZXDH_ERAM128_OPR_1b;
 		break;
-	}
 	}
 
 	if (del_en) {
@@ -1187,11 +1208,11 @@ zxdh_np_dtb_data_write(uint8_t *p_data_buff,
 	uint8_t *cmd = (uint8_t *)entry->cmd;
 	uint8_t *data = (uint8_t *)entry->data;
 
-	rte_memcpy(p_cmd, cmd, cmd_size);
+	memcpy(p_cmd, cmd, cmd_size);
 
 	if (!entry->data_in_cmd_flag) {
 		zxdh_np_comm_swap(data, data_size);
-		rte_memcpy(p_data, data, data_size);
+		memcpy(p_data, data, data_size);
 	}
 
 	return 0;
@@ -1399,8 +1420,8 @@ zxdh_np_dtb_table_entry_write(uint32_t dev_id,
 	ZXDH_DTB_ENTRY_T   dtb_one_entry = {0};
 	uint8_t entry_cmd[ZXDH_DTB_TABLE_CMD_SIZE_BIT] = {0};
 	uint8_t entry_data[ZXDH_ETCAM_WIDTH_MAX] = {0};
-	uint8_t *p_data_buff = NULL;
-	uint8_t *p_data_buff_ex = NULL;
+	uint8_t *p_data_buff;
+	uint8_t *p_data_buff_ex;
 	uint32_t element_id = 0xff;
 	uint32_t one_dtb_len = 0;
 	uint32_t dtb_len = 0;
@@ -1409,7 +1430,7 @@ zxdh_np_dtb_table_entry_write(uint32_t dev_id,
 	uint32_t tbl_type;
 	uint32_t addr_offset;
 	uint32_t max_size;
-	uint32_t rc;
+	uint32_t rc = 0;
 
 	p_data_buff = rte_zmalloc(NULL, ZXDH_DTB_TABLE_DATA_BUFF_SIZE, 0);
 	ZXDH_COMM_CHECK_POINT(p_data_buff);
@@ -1428,18 +1449,14 @@ zxdh_np_dtb_table_entry_write(uint32_t dev_id,
 		tbl_type = zxdh_np_sdt_tbl_type_get(dev_id, sdt_no);
 		switch (tbl_type) {
 		case ZXDH_SDT_TBLT_ERAM:
-		{
 			rc = zxdh_np_dtb_eram_one_entry(dev_id, sdt_no, ZXDH_DTB_ITEM_ADD_OR_UPDATE,
 				pentry->p_entry_data, &one_dtb_len, &dtb_one_entry);
 			break;
-		}
 		default:
-		{
 			PMD_DRV_LOG(ERR, "SDT table_type[ %d ] is invalid!", tbl_type);
 			rte_free(p_data_buff);
 			rte_free(p_data_buff_ex);
 			return 1;
-		}
 		}
 
 		addr_offset = dtb_len * ZXDH_DTB_LEN_POS_SETP;
@@ -1523,18 +1540,14 @@ zxdh_np_dtb_table_entry_delete(uint32_t dev_id,
 		zxdh_np_sdt_tbl_data_get(dev_id, sdt_no, &sdt_tbl);
 		switch (tbl_type) {
 		case ZXDH_SDT_TBLT_ERAM:
-		{
 			rc = zxdh_np_dtb_eram_one_entry(dev_id, sdt_no, ZXDH_DTB_ITEM_DELETE,
 				pentry->p_entry_data, &one_dtb_len, &dtb_one_entry);
 			break;
-		}
 		default:
-		{
 			PMD_DRV_LOG(ERR, "SDT table_type[ %d ] is invalid!", tbl_type);
 			rte_free(p_data_buff);
 			rte_free(p_data_buff_ex);
 			return 1;
-		}
 		}
 
 		addr_offset = dtb_len * ZXDH_DTB_LEN_POS_SETP;
@@ -1586,25 +1599,18 @@ zxdh_np_sdt_tbl_data_parser(uint32_t sdt_hig32, uint32_t sdt_low32, void *p_sdt_
 
 	switch (tbl_type) {
 	case ZXDH_SDT_TBLT_ERAM:
-	{
 		p_sdt_eram = (ZXDH_SDTTBL_ERAM_T *)p_sdt_info;
 		p_sdt_eram->table_type = tbl_type;
 		p_sdt_eram->eram_clutch_en = clutch_en;
 		break;
-	}
-
 	case ZXDH_SDT_TBLT_PORTTBL:
-	{
 		p_sdt_porttbl = (ZXDH_SDTTBL_PORTTBL_T *)p_sdt_info;
 		p_sdt_porttbl->table_type = tbl_type;
 		p_sdt_porttbl->porttbl_clutch_en = clutch_en;
 		break;
-	}
 	default:
-	{
 		PMD_DRV_LOG(ERR, "SDT table_type[ %d ] is invalid!", tbl_type);
 		return 1;
-	}
 	}
 
 	return 0;
@@ -1634,22 +1640,16 @@ zxdh_np_eram_index_cal(uint32_t eram_mode, uint32_t index,
 
 	switch (eram_mode) {
 	case ZXDH_ERAM128_TBL_128b:
-	{
 		row_index = index;
 		break;
-	}
 	case ZXDH_ERAM128_TBL_64b:
-	{
 		row_index = (index >> 1);
 		col_index = index & 0x1;
 		break;
-	}
 	case ZXDH_ERAM128_TBL_1b:
-	{
 		row_index = (index >> 7);
 		col_index = index & 0x7F;
 		break;
-	}
 	}
 	*p_row_index = row_index;
 	*p_col_index = col_index;
@@ -1676,21 +1676,15 @@ zxdh_np_dtb_eram_data_get(uint32_t dev_id, uint32_t queue_id, uint32_t sdt_no,
 
 	switch (rd_mode) {
 	case ZXDH_ERAM128_TBL_128b:
-	{
 		memcpy(p_data, temp_data, (128 / 8));
 		break;
-	}
 	case ZXDH_ERAM128_TBL_64b:
-	{
 		memcpy(p_data, temp_data + ((1 - col_index) << 1), (64 / 8));
 		break;
-	}
 	case ZXDH_ERAM128_TBL_1b:
-	{
 		ZXDH_COMM_UINT32_GET_BITS(p_data[0], *(temp_data +
 			(3 - col_index / 32)), (col_index % 32), 1);
 		break;
-	}
 	}
 	return rc;
 }
@@ -1703,7 +1697,7 @@ zxdh_np_dtb_table_entry_get(uint32_t dev_id,
 {
 	ZXDH_SDT_TBL_DATA_T sdt_tbl = {0};
 	uint32_t tbl_type = 0;
-	uint32_t rc;
+	uint32_t rc = 0;
 	uint32_t sdt_no;
 
 	sdt_no = get_entry->sdt_no;
@@ -1713,19 +1707,15 @@ zxdh_np_dtb_table_entry_get(uint32_t dev_id,
 			ZXDH_SDT_H_TBL_TYPE_BT_POS, ZXDH_SDT_H_TBL_TYPE_BT_LEN);
 	switch (tbl_type) {
 	case ZXDH_SDT_TBLT_ERAM:
-	{
 		rc = zxdh_np_dtb_eram_data_get(dev_id,
 				queue_id,
 				sdt_no,
 				(ZXDH_DTB_ERAM_ENTRY_INFO_T *)get_entry->p_entry_data);
 		ZXDH_COMM_CHECK_RC_NO_ASSERT(rc, "dpp_dtb_eram_data_get");
 		break;
-	}
 	default:
-	{
 		PMD_DRV_LOG(ERR, "SDT table_type[ %d ] is invalid!", tbl_type);
 		return 1;
-	}
 	}
 
 	return 0;
@@ -1945,22 +1935,16 @@ zxdh_np_dtb_se_smmu0_ind_read(uint32_t dev_id,
 
 	switch (rd_mode) {
 	case ZXDH_ERAM128_OPR_128b:
-	{
 		row_index = index;
 		break;
-	}
 	case ZXDH_ERAM128_OPR_64b:
-	{
 		row_index = (index >> 1);
 		col_index = index & 0x1;
 		break;
-	}
 	case ZXDH_ERAM128_OPR_1b:
-	{
 		row_index = (index >> 7);
 		col_index = index & 0x7F;
 		break;
-	}
 	}
 
 	eram_dump_base_addr = base_addr + row_index;
@@ -1974,23 +1958,15 @@ zxdh_np_dtb_se_smmu0_ind_read(uint32_t dev_id,
 
 	switch (rd_mode) {
 	case ZXDH_ERAM128_OPR_128b:
-	{
 		memcpy(p_data, temp_data, (128 / 8));
 		break;
-	}
-
 	case ZXDH_ERAM128_OPR_64b:
-	{
 		memcpy(p_data, temp_data + ((1 - col_index) << 1), (64 / 8));
 		break;
-	}
-
 	case ZXDH_ERAM128_OPR_1b:
-	{
 		ZXDH_COMM_UINT32_GET_BITS(p_data[0], *(temp_data +
 			(3 - col_index / 32)), (col_index % 32), 1);
 		break;
-	}
 	}
 
 	return rc;
@@ -2054,6 +2030,657 @@ zxdh_np_dtb_stats_get(uint32_t dev_id,
 									index,
 									p_data);
 		ZXDH_COMM_CHECK_RC_NO_ASSERT(rc, "dpp_dtb_stat_smmu0_int_read");
+	}
+
+	return rc;
+}
+
+static uint32_t
+zxdh_np_se_done_status_check(uint32_t dev_id, uint32_t reg_no, uint32_t pos)
+{
+	uint32_t rc = 0;
+
+	uint32_t data = 0;
+	uint32_t rd_cnt = 0;
+	uint32_t done_flag = 0;
+
+	while (!done_flag) {
+		rc = zxdh_np_reg_read(dev_id, reg_no, 0, 0, &data);
+		if (rc != 0) {
+			PMD_DRV_LOG(ERR, " [ErrorCode:0x%x] !-- zxdh_np_reg_read Fail!", rc);
+			return rc;
+		}
+
+		done_flag = (data >> pos) & 0x1;
+
+		if (done_flag)
+			break;
+
+		if (rd_cnt > ZXDH_RD_CNT_MAX * ZXDH_RD_CNT_MAX)
+			return -1;
+
+		rd_cnt++;
+	}
+
+	return rc;
+}
+
+static uint32_t
+zxdh_np_se_smmu0_ind_read(uint32_t dev_id,
+						uint32_t base_addr,
+						uint32_t index,
+						uint32_t rd_mode,
+						uint32_t rd_clr_mode,
+						uint32_t *p_data)
+{
+	uint32_t rc = 0;
+	uint32_t i = 0;
+	uint32_t row_index = 0;
+	uint32_t col_index = 0;
+	uint32_t temp_data[4] = {0};
+	uint32_t *p_temp_data = NULL;
+	ZXDH_SMMU0_SMMU0_CPU_IND_CMD_T cpu_ind_cmd = {0};
+
+	rc = zxdh_np_se_done_status_check(dev_id, ZXDH_SMMU0_SMMU0_WR_ARB_CPU_RDYR, 0);
+
+	if (rd_clr_mode == ZXDH_RD_MODE_HOLD) {
+		cpu_ind_cmd.cpu_ind_rw = ZXDH_SE_OPR_RD;
+		cpu_ind_cmd.cpu_ind_rd_mode = ZXDH_RD_MODE_HOLD;
+		cpu_ind_cmd.cpu_req_mode = ZXDH_ERAM128_OPR_128b;
+
+		switch (rd_mode) {
+		case ZXDH_ERAM128_OPR_128b:
+			if ((0xFFFFFFFF - (base_addr)) < (index))
+				return ZXDH_PAR_CHK_INVALID_INDEX;
+
+			if (base_addr + index > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+
+			row_index = (index << 7) & ZXDH_ERAM128_BADDR_MASK;
+			break;
+		case ZXDH_ERAM128_OPR_64b:
+			if ((base_addr + (index >> 1)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+
+			row_index = (index << 6) & ZXDH_ERAM128_BADDR_MASK;
+			col_index = index & 0x1;
+			break;
+		case ZXDH_ERAM128_OPR_32b:
+			if ((base_addr + (index >> 2)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+
+			row_index = (index << 5) & ZXDH_ERAM128_BADDR_MASK;
+			col_index = index & 0x3;
+			break;
+		case ZXDH_ERAM128_OPR_1b:
+			if ((base_addr + (index >> 7)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+			row_index = index & ZXDH_ERAM128_BADDR_MASK;
+			col_index = index & 0x7F;
+			break;
+		}
+
+		cpu_ind_cmd.cpu_ind_addr = ((base_addr << 7) & ZXDH_ERAM128_BADDR_MASK) + row_index;
+	} else {
+		cpu_ind_cmd.cpu_ind_rw = ZXDH_SE_OPR_RD;
+		cpu_ind_cmd.cpu_ind_rd_mode = ZXDH_RD_MODE_CLEAR;
+
+		switch (rd_mode) {
+		case ZXDH_ERAM128_OPR_128b:
+			if ((0xFFFFFFFF - (base_addr)) < (index)) {
+				PMD_DRV_LOG(ERR, "%s : index 0x%x is invalid!", __func__, index);
+				return ZXDH_PAR_CHK_INVALID_INDEX;
+			}
+			if (base_addr + index > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+			row_index = (index << 7);
+			cpu_ind_cmd.cpu_req_mode = ZXDH_ERAM128_OPR_128b;
+			break;
+		case ZXDH_ERAM128_OPR_64b:
+			if ((base_addr + (index >> 1)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+
+			row_index = (index << 6);
+			cpu_ind_cmd.cpu_req_mode = 2;
+			break;
+		case ZXDH_ERAM128_OPR_32b:
+			if ((base_addr + (index >> 2)) > ZXDH_SE_SMMU0_ERAM_ADDR_NUM_TOTAL - 1) {
+				PMD_DRV_LOG(ERR, "%s : index out of range !", __func__);
+				return -1;
+			}
+			row_index = (index << 5);
+			cpu_ind_cmd.cpu_req_mode = 1;
+			break;
+		case ZXDH_ERAM128_OPR_1b:
+			PMD_DRV_LOG(ERR, "rd_clr_mode[%d] or rd_mode[%d] error! ",
+				rd_clr_mode, rd_mode);
+			return -1;
+		}
+		cpu_ind_cmd.cpu_ind_addr = ((base_addr << 7) & ZXDH_ERAM128_BADDR_MASK) + row_index;
+	}
+
+	rc = zxdh_np_reg_write(dev_id,
+						ZXDH_SMMU0_SMMU0_CPU_IND_CMDR,
+						0,
+						0,
+						&cpu_ind_cmd);
+
+	rc = zxdh_np_se_done_status_check(dev_id, ZXDH_SMMU0_SMMU0_RD_CPU_IND_DONER, 0);
+
+	p_temp_data = temp_data;
+	for (i = 0; i < 4; i++) {
+		rc = zxdh_np_reg_read(dev_id,
+							ZXDH_SMMU0_SMMU0_CPU_IND_RDAT0R + i,
+							0,
+							0,
+							p_temp_data + 3 - i);
+	}
+
+	if (rd_clr_mode == ZXDH_RD_MODE_HOLD) {
+		switch (rd_mode) {
+		case ZXDH_ERAM128_OPR_128b:
+			memcpy(p_data, p_temp_data, (128 / 8));
+			break;
+		case ZXDH_ERAM128_OPR_64b:
+			memcpy(p_data, p_temp_data + ((1 - col_index) << 1), (64 / 8));
+			break;
+		case ZXDH_ERAM128_OPR_32b:
+			memcpy(p_data, p_temp_data + ((3 - col_index)), (32 / 8));
+			break;
+		case ZXDH_ERAM128_OPR_1b:
+			ZXDH_COMM_UINT32_GET_BITS(p_data[0],
+				*(p_temp_data + (3 - col_index / 32)), (col_index % 32), 1);
+			break;
+		}
+	} else {
+		switch (rd_mode) {
+		case ZXDH_ERAM128_OPR_128b:
+			memcpy(p_data, p_temp_data, (128 / 8));
+			break;
+		case ZXDH_ERAM128_OPR_64b:
+			memcpy(p_data, p_temp_data, (64 / 8));
+			break;
+		case ZXDH_ERAM128_OPR_32b:
+			memcpy(p_data, p_temp_data, (64 / 8));
+			break;
+		}
+	}
+
+	return rc;
+}
+
+uint32_t
+zxdh_np_stat_ppu_cnt_get_ex(uint32_t dev_id,
+				ZXDH_STAT_CNT_MODE_E rd_mode,
+				uint32_t index,
+				uint32_t clr_mode,
+				uint32_t *p_data)
+{
+	uint32_t rc = 0;
+	uint32_t ppu_eram_baddr = 0;
+	uint32_t ppu_eram_depth = 0;
+	uint32_t eram_rd_mode   = 0;
+	uint32_t eram_clr_mode  = 0;
+	ZXDH_PPU_STAT_CFG_T stat_cfg = {0};
+
+	zxdh_np_stat_cfg_soft_get(dev_id, &stat_cfg);
+
+	ppu_eram_depth = stat_cfg.eram_depth;
+	ppu_eram_baddr = stat_cfg.eram_baddr;
+
+	if ((index >> (ZXDH_STAT_128_MODE - rd_mode)) < ppu_eram_depth) {
+		if (rd_mode == ZXDH_STAT_128_MODE)
+			eram_rd_mode = ZXDH_ERAM128_OPR_128b;
+		else
+			eram_rd_mode = ZXDH_ERAM128_OPR_64b;
+
+		if (clr_mode == ZXDH_STAT_RD_CLR_MODE_UNCLR)
+			eram_clr_mode = ZXDH_RD_MODE_HOLD;
+		else
+			eram_clr_mode = ZXDH_RD_MODE_CLEAR;
+
+		rc = zxdh_np_se_smmu0_ind_read(dev_id,
+									ppu_eram_baddr,
+									index,
+									eram_rd_mode,
+									eram_clr_mode,
+									p_data);
+		ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "zxdh_np_se_smmu0_ind_read");
+	} else {
+		PMD_DRV_LOG(ERR, "DPDK DON'T HAVE DDR STAT.");
+	}
+
+	return rc;
+}
+
+static uint32_t
+zxdh_np_agent_channel_sync_send(ZXDH_AGENT_CHANNEL_MSG_T *p_msg,
+				uint32_t *p_data,
+				uint32_t rep_len)
+{
+	uint32_t ret = 0;
+	uint32_t vport = 0;
+	struct zxdh_pci_bar_msg in = {0};
+	struct zxdh_msg_recviver_mem result = {0};
+	uint32_t *recv_buffer;
+	uint8_t *reply_ptr = NULL;
+	uint16_t reply_msg_len = 0;
+	uint64_t agent_addr = 0;
+
+	if (ZXDH_IS_PF(vport))
+		in.src = ZXDH_MSG_CHAN_END_PF;
+	else
+		in.src = ZXDH_MSG_CHAN_END_VF;
+
+	in.virt_addr = agent_addr;
+	in.payload_addr = p_msg->msg;
+	in.payload_len = p_msg->msg_len;
+	in.dst = ZXDH_MSG_CHAN_END_RISC;
+	in.module_id = ZXDH_BAR_MDOULE_NPSDK;
+
+	recv_buffer = (uint32_t *)rte_zmalloc(NULL, rep_len + ZXDH_CHANNEL_REPS_LEN, 0);
+	if (recv_buffer == NULL) {
+		PMD_DRV_LOG(ERR, "%s point null!", __func__);
+		return ZXDH_PAR_CHK_POINT_NULL;
+	}
+
+	result.buffer_len = rep_len + ZXDH_CHANNEL_REPS_LEN;
+	result.recv_buffer = recv_buffer;
+
+	ret = zxdh_bar_chan_sync_msg_send(&in, &result);
+	if (ret == ZXDH_BAR_MSG_OK) {
+		reply_ptr = (uint8_t *)(result.recv_buffer);
+		if (*reply_ptr == 0XFF) {
+			reply_msg_len = *(uint16_t *)(reply_ptr + 1);
+			memcpy(p_data, reply_ptr + 4,
+				((reply_msg_len > rep_len) ? rep_len : reply_msg_len));
+		} else {
+			PMD_DRV_LOG(ERR, "Message not replied");
+		}
+	} else {
+		PMD_DRV_LOG(ERR, "Error[0x%x], %s failed!", ret, __func__);
+	}
+
+	rte_free(recv_buffer);
+	return ret;
+}
+
+static uint32_t
+zxdh_np_agent_channel_plcr_sync_send(ZXDH_AGENT_CHANNEL_PLCR_MSG_T *p_msg,
+		uint32_t *p_data, uint32_t rep_len)
+{
+	uint32_t ret = 0;
+	ZXDH_AGENT_CHANNEL_MSG_T agent_msg = {0};
+
+	agent_msg.msg = (void *)p_msg;
+	agent_msg.msg_len = sizeof(ZXDH_AGENT_CHANNEL_PLCR_MSG_T);
+
+	ret = zxdh_np_agent_channel_sync_send(&agent_msg, p_data, rep_len);
+	if (ret != 0)	{
+		PMD_DRV_LOG(ERR, "%s: agent_channel_sync_send failed.", __func__);
+		return 1;
+	}
+
+	return 0;
+}
+
+static uint32_t
+zxdh_np_agent_channel_plcr_profileid_request(uint32_t vport,
+	uint32_t car_type, uint32_t *p_profileid)
+{
+	uint32_t ret = 0;
+	uint32_t resp_buffer[2] = {0};
+
+	ZXDH_AGENT_CHANNEL_PLCR_MSG_T msgcfg = {0};
+
+	msgcfg.dev_id = 0;
+	msgcfg.type = ZXDH_PLCR_MSG;
+	msgcfg.oper = ZXDH_PROFILEID_REQUEST;
+	msgcfg.vport = vport;
+	msgcfg.car_type = car_type;
+	msgcfg.profile_id = 0xFFFF;
+
+	ret = zxdh_np_agent_channel_plcr_sync_send(&msgcfg,
+		resp_buffer, sizeof(resp_buffer));
+	if (ret != 0)	{
+		PMD_DRV_LOG(ERR, "%s: agent_channel_plcr_sync_send failed.", __func__);
+		return 1;
+	}
+
+	memcpy(p_profileid, resp_buffer, sizeof(uint32_t) * ZXDH_SCHE_RSP_LEN);
+
+	return ret;
+}
+
+static uint32_t
+zxdh_np_agent_channel_plcr_car_rate(uint32_t car_type,
+		uint32_t pkt_sign,
+		uint32_t profile_id __rte_unused,
+		void *p_car_profile_cfg)
+{
+	uint32_t ret = 0;
+	uint32_t resp_buffer[2] = {0};
+	uint32_t resp_len = 8;
+	uint32_t i = 0;
+	ZXDH_AGENT_CHANNEL_MSG_T agent_msg = {0};
+	ZXDH_AGENT_CAR_PKT_PROFILE_MSG_T msgpktcfg = {0};
+	ZXDH_AGENT_CAR_PROFILE_MSG_T msgcfg = {0};
+	ZXDH_STAT_CAR_PROFILE_CFG_T *p_stat_car_profile_cfg = NULL;
+	ZXDH_STAT_CAR_PKT_PROFILE_CFG_T *p_stat_pkt_car_profile_cfg = NULL;
+
+	if (car_type == ZXDH_STAT_CAR_A_TYPE && pkt_sign == 1) {
+		p_stat_pkt_car_profile_cfg = (ZXDH_STAT_CAR_PKT_PROFILE_CFG_T *)p_car_profile_cfg;
+		msgpktcfg.dev_id = 0;
+		msgpktcfg.type = ZXDH_PLCR_CAR_PKT_RATE;
+		msgpktcfg.car_level = car_type;
+		msgpktcfg.cir = p_stat_pkt_car_profile_cfg->cir;
+		msgpktcfg.cbs = p_stat_pkt_car_profile_cfg->cbs;
+		msgpktcfg.profile_id = p_stat_pkt_car_profile_cfg->profile_id;
+		msgpktcfg.pkt_sign = p_stat_pkt_car_profile_cfg->pkt_sign;
+		for (i = 0; i < ZXDH_CAR_PRI_MAX; i++)
+			msgpktcfg.pri[i] = p_stat_pkt_car_profile_cfg->pri[i];
+
+		agent_msg.msg = (void *)&msgpktcfg;
+		agent_msg.msg_len = sizeof(ZXDH_AGENT_CAR_PKT_PROFILE_MSG_T);
+
+		ret = zxdh_np_agent_channel_sync_send(&agent_msg, resp_buffer, resp_len);
+		if (ret != 0)	{
+			PMD_DRV_LOG(ERR, "%s: stat_car_a_type failed.", __func__);
+			return 1;
+		}
+
+		ret = *(uint8_t *)resp_buffer;
+	} else {
+		p_stat_car_profile_cfg = (ZXDH_STAT_CAR_PROFILE_CFG_T *)p_car_profile_cfg;
+		msgcfg.dev_id = 0;
+		msgcfg.type = ZXDH_PLCR_CAR_RATE;
+		msgcfg.car_level = car_type;
+		msgcfg.cir = p_stat_car_profile_cfg->cir;
+		msgcfg.cbs = p_stat_car_profile_cfg->cbs;
+		msgcfg.profile_id = p_stat_car_profile_cfg->profile_id;
+		msgcfg.pkt_sign = p_stat_car_profile_cfg->pkt_sign;
+		msgcfg.cd = p_stat_car_profile_cfg->cd;
+		msgcfg.cf = p_stat_car_profile_cfg->cf;
+		msgcfg.cm = p_stat_car_profile_cfg->cm;
+		msgcfg.cir = p_stat_car_profile_cfg->cir;
+		msgcfg.cbs = p_stat_car_profile_cfg->cbs;
+		msgcfg.eir = p_stat_car_profile_cfg->eir;
+		msgcfg.ebs = p_stat_car_profile_cfg->ebs;
+		msgcfg.random_disc_e = p_stat_car_profile_cfg->random_disc_e;
+		msgcfg.random_disc_c = p_stat_car_profile_cfg->random_disc_c;
+		for (i = 0; i < ZXDH_CAR_PRI_MAX; i++) {
+			msgcfg.c_pri[i] = p_stat_car_profile_cfg->c_pri[i];
+			msgcfg.e_green_pri[i] = p_stat_car_profile_cfg->e_green_pri[i];
+			msgcfg.e_yellow_pri[i] = p_stat_car_profile_cfg->e_yellow_pri[i];
+		}
+
+		agent_msg.msg = (void *)&msgcfg;
+		agent_msg.msg_len = sizeof(ZXDH_AGENT_CAR_PROFILE_MSG_T);
+
+		ret = zxdh_np_agent_channel_sync_send(&agent_msg, resp_buffer, resp_len);
+		if (ret != 0)	{
+			PMD_DRV_LOG(ERR, "%s: stat_car_b_type failed.", __func__);
+			return 1;
+		}
+
+		ret = *(uint8_t *)resp_buffer;
+	}
+
+	return ret;
+}
+
+static uint32_t
+zxdh_np_agent_channel_plcr_profileid_release(uint32_t vport,
+		uint32_t car_type __rte_unused,
+		uint32_t profileid)
+{
+	uint32_t ret = 0;
+	uint32_t resp_buffer[2] = {0};
+
+	ZXDH_AGENT_CHANNEL_PLCR_MSG_T msgcfg = {0};
+
+	msgcfg.dev_id = 0;
+	msgcfg.type = ZXDH_PLCR_MSG;
+	msgcfg.oper = ZXDH_PROFILEID_RELEASE;
+	msgcfg.vport = vport;
+	msgcfg.profile_id = profileid;
+
+	ret = zxdh_np_agent_channel_plcr_sync_send(&msgcfg,
+		resp_buffer, sizeof(resp_buffer));
+	if (ret != 0)	{
+		PMD_DRV_LOG(ERR, "%s: agent_channel_plcr_sync_send failed.", __func__);
+		return 1;
+	}
+
+	ret = *(uint8_t *)resp_buffer;
+
+	return ret;
+}
+
+static uint32_t
+zxdh_np_stat_cara_queue_cfg_set(uint32_t dev_id,
+		uint32_t flow_id,
+		uint32_t drop_flag,
+		uint32_t plcr_en,
+		uint32_t profile_id)
+{
+	uint32_t rc = 0;
+
+	ZXDH_STAT_CAR0_CARA_QUEUE_RAM0_159_0_T queue_cfg = {0};
+
+	queue_cfg.cara_drop = drop_flag;
+	queue_cfg.cara_plcr_en = plcr_en;
+	queue_cfg.cara_profile_id = profile_id;
+	rc = zxdh_np_reg_write(dev_id,
+				ZXDH_STAT_CAR0_CARA_QUEUE_RAM0,
+				0,
+				flow_id,
+				&queue_cfg);
+	ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "zxdh_np_reg_write");
+
+	return rc;
+}
+
+static uint32_t
+zxdh_np_stat_carb_queue_cfg_set(uint32_t dev_id,
+		uint32_t flow_id,
+		uint32_t drop_flag,
+		uint32_t plcr_en,
+		uint32_t profile_id)
+{
+	uint32_t rc = 0;
+
+	ZXDH_STAT_CAR0_CARB_QUEUE_RAM0_159_0_T queue_cfg = {0};
+
+	queue_cfg.carb_drop = drop_flag;
+	queue_cfg.carb_plcr_en = plcr_en;
+	queue_cfg.carb_profile_id = profile_id;
+
+	rc = zxdh_np_reg_write(dev_id,
+				ZXDH_STAT_CAR0_CARB_QUEUE_RAM0,
+				0,
+				flow_id,
+				&queue_cfg);
+	ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "zxdh_np_reg_write");
+
+	return rc;
+}
+
+static uint32_t
+zxdh_np_stat_carc_queue_cfg_set(uint32_t dev_id,
+		uint32_t flow_id,
+		uint32_t drop_flag,
+		uint32_t plcr_en,
+		uint32_t profile_id)
+{
+	uint32_t rc = 0;
+
+	ZXDH_STAT_CAR0_CARC_QUEUE_RAM0_159_0_T queue_cfg = {0};
+	queue_cfg.carc_drop = drop_flag;
+	queue_cfg.carc_plcr_en = plcr_en;
+	queue_cfg.carc_profile_id = profile_id;
+
+	rc = zxdh_np_reg_write(dev_id,
+						ZXDH_STAT_CAR0_CARC_QUEUE_RAM0,
+						0,
+						flow_id,
+						&queue_cfg);
+	ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "zxdh_np_reg_write");
+
+	return rc;
+}
+
+uint32_t
+zxdh_np_car_profile_id_add(uint32_t vport_id,
+		uint32_t flags,
+		uint64_t *p_profile_id)
+{
+	uint32_t ret = 0;
+	uint32_t *profile_id;
+	uint32_t profile_id_h = 0;
+	uint32_t profile_id_l = 0;
+	uint64_t temp_profile_id = 0;
+
+	profile_id = (uint32_t *)rte_zmalloc(NULL, ZXDH_G_PROFILE_ID_LEN, 0);
+	if (profile_id == NULL) {
+		PMD_DRV_LOG(ERR, "%s: profile_id point null!", __func__);
+		return ZXDH_PAR_CHK_POINT_NULL;
+	}
+	ret = zxdh_np_agent_channel_plcr_profileid_request(vport_id, flags, profile_id);
+
+	profile_id_h = *(profile_id + 1);
+	profile_id_l = *profile_id;
+	rte_free(profile_id);
+
+	temp_profile_id = (((uint64_t)profile_id_l) << 32) | ((uint64_t)profile_id_h);
+	if (0 != (uint32_t)(temp_profile_id >> 56)) {
+		PMD_DRV_LOG(ERR, "%s: profile_id is overflow!", __func__);
+		return 1;
+	}
+
+	*p_profile_id = temp_profile_id;
+
+	return ret;
+}
+
+uint32_t
+zxdh_np_car_profile_cfg_set(uint32_t vport_id __rte_unused,
+		uint32_t car_type,
+		uint32_t pkt_sign,
+		uint32_t profile_id,
+		void *p_car_profile_cfg)
+{
+	uint32_t ret = 0;
+
+	ret = zxdh_np_agent_channel_plcr_car_rate(car_type,
+		pkt_sign, profile_id, p_car_profile_cfg);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "%s: plcr_car_rate set failed!", __func__);
+		return 1;
+	}
+
+	return ret;
+}
+
+uint32_t
+zxdh_np_car_profile_id_delete(uint32_t vport_id,
+	uint32_t flags, uint64_t profile_id)
+{
+	uint32_t ret = 0;
+	uint32_t profileid = 0;
+
+	profileid = profile_id & 0xFFFF;
+
+	ret = zxdh_np_agent_channel_plcr_profileid_release(vport_id, flags, profileid);
+	if (ret != 0) {
+		PMD_DRV_LOG(ERR, "%s: plcr profiled id release failed!", __func__);
+		return 1;
+	}
+
+	return 0;
+}
+
+uint32_t
+zxdh_np_stat_car_queue_cfg_set(uint32_t dev_id,
+		uint32_t car_type,
+		uint32_t flow_id,
+		uint32_t drop_flag,
+		uint32_t plcr_en,
+		uint32_t profile_id)
+{
+	uint32_t rc = 0;
+
+	if (car_type == ZXDH_STAT_CAR_A_TYPE) {
+		if (flow_id > ZXDH_CAR_A_FLOW_ID_MAX) {
+			PMD_DRV_LOG(ERR, "%s: stat car a type flow_id invalid!", __func__);
+			return ZXDH_PAR_CHK_INVALID_INDEX;
+		}
+
+		if (profile_id > ZXDH_CAR_A_PROFILE_ID_MAX) {
+			PMD_DRV_LOG(ERR, "%s: stat car a type profile_id invalid!", __func__);
+			return ZXDH_PAR_CHK_INVALID_INDEX;
+		}
+	} else if (car_type == ZXDH_STAT_CAR_B_TYPE) {
+		if (flow_id > ZXDH_CAR_B_FLOW_ID_MAX) {
+			PMD_DRV_LOG(ERR, "%s: stat car b type flow_id invalid!", __func__);
+			return ZXDH_PAR_CHK_INVALID_INDEX;
+		}
+
+		if (profile_id > ZXDH_CAR_B_PROFILE_ID_MAX) {
+			PMD_DRV_LOG(ERR, "%s: stat car b type profile_id invalid!", __func__);
+			return ZXDH_PAR_CHK_INVALID_INDEX;
+		}
+	} else {
+		if (flow_id > ZXDH_CAR_C_FLOW_ID_MAX) {
+			PMD_DRV_LOG(ERR, "%s: stat car c type flow_id invalid!", __func__);
+			return ZXDH_PAR_CHK_INVALID_INDEX;
+		}
+
+		if (profile_id > ZXDH_CAR_C_PROFILE_ID_MAX) {
+			PMD_DRV_LOG(ERR, "%s: stat car c type profile_id invalid!", __func__);
+			return ZXDH_PAR_CHK_INVALID_INDEX;
+		}
+	}
+
+	switch (car_type) {
+	case ZXDH_STAT_CAR_A_TYPE:
+		rc = zxdh_np_stat_cara_queue_cfg_set(dev_id,
+					flow_id,
+					drop_flag,
+					plcr_en,
+					profile_id);
+		ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "stat_cara_queue_cfg_set");
+	break;
+
+	case ZXDH_STAT_CAR_B_TYPE:
+		rc = zxdh_np_stat_carb_queue_cfg_set(dev_id,
+					flow_id,
+					drop_flag,
+					plcr_en,
+					profile_id);
+		ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "stat_carb_queue_cfg_set");
+	break;
+
+	case ZXDH_STAT_CAR_C_TYPE:
+		rc = zxdh_np_stat_carc_queue_cfg_set(dev_id,
+					flow_id,
+					drop_flag,
+					plcr_en,
+					profile_id);
+		ZXDH_COMM_CHECK_DEV_RC(dev_id, rc, "stat_carc_queue_cfg_set");
+	break;
 	}
 
 	return rc;

@@ -10,6 +10,7 @@
 #include <ethdev_driver.h>
 
 #include "zxdh_ethdev_ops.h"
+#include "zxdh_mtr.h"
 
 #define ZXDH_BAR0_INDEX                 0
 #define ZXDH_CTRLCH_OFFSET              (0x2000)
@@ -48,16 +49,26 @@
 #define ZXDH_MSG_REPLY_BODY_MAX_LEN  \
 		(ZXDH_MSG_PAYLOAD_MAX_LEN - sizeof(struct zxdh_msg_reply_head))
 
-#define ZXDH_MSG_HEAD_LEN 8
+#define ZXDH_MSG_HEAD_LEN            8
 #define ZXDH_MSG_REQ_BODY_MAX_LEN  \
 		(ZXDH_MSG_PAYLOAD_MAX_LEN - ZXDH_MSG_HEAD_LEN)
+
+#define ZXDH_FWVERS_LEN              32
+
+#define ZXDH_SFF_I2C_ADDRESS_LOW     (0x50)
+#define ZXDH_SFF_I2C_ADDRESS_HIGH    (0x51)
+
+#define ZXDH_MODULE_EEPROM_DATA_LEN   128
 
 #define ZXDH_MAC_FILTER            0xaa
 #define ZXDH_MAC_UNFILTER          0xff
 #define ZXDH_PROMISC_MODE          1
 #define ZXDH_ALLMULTI_MODE         2
-#define ZXDH_VLAN_STRIP_MSG_TYPE   0
-#define ZXDH_QINQ_STRIP_MSG_TYPE   1
+#define ZXDH_VLAN_STRIP_TYPE       0
+#define ZXDH_QINQ_STRIP_TYPE       1
+#define ZXDH_VLAN_FILTER_TYPE      2
+
+#define ZXDH_EEXIST_MAC_FLAG       0xFD
 
 enum ZXDH_DRIVER_TYPE {
 	ZXDH_MSG_CHAN_END_MPF = 0,
@@ -177,13 +188,25 @@ enum pciebar_layout_type {
 	ZXDH_URI_MAX,
 };
 
+enum zxdh_module_id {
+	ZXDH_MODULE_ID_SFP       = 0x3,
+	ZXDH_MODULE_ID_QSFP      = 0xC,
+	ZXDH_MODULE_ID_QSFP_PLUS = 0xD,
+	ZXDH_MODULE_ID_QSFP28    = 0x11,
+	ZXDH_MODULE_ID_QSFP_DD   = 0x18,
+	ZXDH_MODULE_ID_OSFP      = 0x19,
+	ZXDH_MODULE_ID_DSFP      = 0x1B,
+};
+
 /* riscv msg opcodes */
 enum zxdh_agent_msg_type {
 	ZXDH_MAC_STATS_GET = 10,
 	ZXDH_MAC_STATS_RESET,
 	ZXDH_MAC_LINK_GET = 14,
+	ZXDH_MAC_MODULE_EEPROM_READ = 20,
 	ZXDH_VQM_DEV_STATS_GET = 21,
 	ZXDH_VQM_DEV_STATS_RESET,
+	ZXDH_FLASH_FIR_VERSION_GET = 23,
 	ZXDH_VQM_QUEUE_STATS_GET = 24,
 	ZXDH_VQM_QUEUE_STATS_RESET,
 };
@@ -208,6 +231,11 @@ enum zxdh_msg_type {
 	ZXDH_PORT_PROMISC_SET = 26,
 
 	ZXDH_GET_NP_STATS = 31,
+	ZXDH_PLCR_CAR_PROFILE_ID_ADD = 36,
+	ZXDH_PLCR_CAR_PROFILE_ID_DELETE = 37,
+	ZXDH_PLCR_CAR_PROFILE_CFG_SET,
+	ZXDH_PLCR_CAR_QUEUE_CFG_SET = 40,
+	ZXDH_PORT_METER_STAT_GET = 42,
 
 	ZXDH_MSG_TYPE_END,
 };
@@ -301,82 +329,113 @@ struct zxdh_offset_get_msg {
 	uint16_t type;
 };
 
-struct __rte_packed_begin zxdh_msg_reply_head {
+struct zxdh_msg_reply_head {
 	uint8_t flag;
 	uint16_t reps_len;
 	uint8_t resvd;
-} __rte_packed_end;
+};
 
 enum zxdh_reps_flag {
 	ZXDH_REPS_FAIL,
 	ZXDH_REPS_SUCC = 0xaa,
+	ZXDH_REPS_INVALID = 0xee,
 };
 
-struct __rte_packed_begin zxdh_link_info_msg {
+struct zxdh_np_stats_updata_msg {
+	uint32_t clear_mode;
+};
+
+struct zxdh_link_info_msg {
 	uint8_t autoneg;
 	uint8_t link_state;
 	uint8_t blink_enable;
 	uint8_t duplex;
 	uint32_t speed_modes;
 	uint32_t speed;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_rss_reta {
+struct zxdh_rss_reta {
 	uint32_t reta[RTE_ETH_RSS_RETA_SIZE_256];
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_rss_hf {
+struct zxdh_rss_hf {
 	uint32_t rss_hf;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_msg_reply_body {
+struct zxdh_mac_reply_msg {
+	uint8_t mac_flag;
+};
+
+struct zxdh_mac_module_eeprom_msg {
+	uint8_t i2c_addr;
+	uint8_t bank;
+	uint8_t page;
+	uint8_t offset;
+	uint8_t length;
+	uint8_t data[ZXDH_MODULE_EEPROM_DATA_LEN];
+};
+
+struct zxdh_flash_msg {
+	uint8_t firmware_version[ZXDH_FWVERS_LEN];
+};
+
+struct zxdh_mtr_profile_info {
+	uint64_t profile_id;
+};
+
+struct zxdh_msg_reply_body {
 	enum zxdh_reps_flag flag;
-	union __rte_packed_begin {
+	union {
 		uint8_t reply_data[ZXDH_MSG_REPLY_BODY_MAX_LEN - sizeof(enum zxdh_reps_flag)];
 		struct zxdh_hw_np_stats np_stats;
 		struct zxdh_link_info_msg link_msg;
 		struct zxdh_rss_reta rss_reta;
 		struct zxdh_rss_hf rss_hf;
 		struct zxdh_hw_vqm_stats vqm_stats;
-	} __rte_packed_end;
-} __rte_packed_end;
+		struct zxdh_mac_reply_msg mac_reply_msg;
+		struct zxdh_flash_msg flash_msg;
+		struct zxdh_mac_module_eeprom_msg module_eeprom_msg;
+		struct zxdh_mtr_profile_info mtr_profile_info;
+		struct zxdh_mtr_stats hw_mtr_stats;
+	};
+};
 
-struct __rte_packed_begin zxdh_msg_reply_info {
+struct zxdh_msg_reply_info {
 	struct zxdh_msg_reply_head reply_head;
 	struct zxdh_msg_reply_body reply_body;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_vf_init_msg {
+struct zxdh_vf_init_msg {
 	uint8_t link_up;
 	uint8_t rsv;
 	uint16_t base_qid;
 	uint8_t rss_enable;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_msg_head {
+struct zxdh_msg_head {
 	enum zxdh_msg_type msg_type;
 	uint16_t  vport;
 	uint16_t  vf_id;
 	uint16_t pcieid;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_port_attr_set_msg {
+struct zxdh_port_attr_set_msg {
 	uint32_t mode;
 	uint32_t value;
 	uint8_t allmulti_follow;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_mac_filter {
+struct zxdh_mac_filter {
 	uint8_t mac_flag;
 	uint8_t filter_flag;
 	struct rte_ether_addr mac;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_port_promisc_msg {
+struct zxdh_port_promisc_msg {
 	uint8_t mode;
 	uint8_t value;
 	uint8_t mc_follow;
-} __rte_packed_end;
+};
 
 struct zxdh_vlan_filter {
 	uint16_t vlan_id;
@@ -386,31 +445,62 @@ struct zxdh_vlan_filter_set {
 	uint8_t enable;
 };
 
-struct __rte_packed_begin zxdh_vlan_offload {
+struct zxdh_vlan_offload {
 	uint8_t enable;
 	uint8_t type;
-} __rte_packed_end;
+};
 
 struct zxdh_rss_enable {
 	uint8_t enable;
 };
 
-struct __rte_packed_begin zxdh_agent_msg_head {
+struct zxdh_agent_msg_head {
 	enum zxdh_agent_msg_type msg_type;
 	uint8_t panel_id;
 	uint8_t phyport;
 	uint8_t rsv;
 	uint16_t vf_id;
 	uint16_t pcie_id;
-} __rte_packed_end;
+};
 
-struct __rte_packed_begin zxdh_msg_info {
+struct zxdh_plcr_profile_add {
+	uint8_t car_type;/* 0 :carA ; 1:carB ;2 carC*/
+};
+
+struct zxdh_mtr_stats_query {
+	uint8_t direction;
+	uint8_t is_clr;
+};
+
+struct zxdh_plcr_profile_cfg {
+	uint8_t car_type; /* 0 :carA ; 1:carB ;2 carC*/
+	uint8_t packet_mode;  /*0 bps  1 pps */
+	uint16_t hw_profile_id;
+	union zxdh_offload_profile_cfg plcr_param;
+};
+
+struct zxdh_plcr_flow_cfg {
+	uint8_t car_type;  /* 0:carA; 1:carB; 2:carC */
+	uint8_t drop_flag; /* default */
+	uint8_t plcr_en;   /* 1:bind, 0:unbind */
+	uint8_t rsv;
+	uint16_t flow_id;
+	uint16_t profile_id;
+};
+
+struct zxdh_plcr_profile_free {
+	uint8_t car_type;
+	uint8_t rsv;
+	uint16_t profile_id;
+};
+
+struct zxdh_msg_info {
 	union {
 		uint8_t head_len[ZXDH_MSG_HEAD_LEN];
 		struct zxdh_msg_head msg_head;
 		struct zxdh_agent_msg_head agent_msg_head;
 	};
-	union __rte_packed_begin {
+	union {
 		uint8_t datainfo[ZXDH_MSG_REQ_BODY_MAX_LEN];
 		struct zxdh_vf_init_msg vf_init_msg;
 		struct zxdh_port_attr_set_msg port_attr_msg;
@@ -423,11 +513,24 @@ struct __rte_packed_begin zxdh_msg_info {
 		struct zxdh_rss_reta rss_reta;
 		struct zxdh_rss_enable rss_enable;
 		struct zxdh_rss_hf rss_hf;
-	} __rte_packed_end data;
-} __rte_packed_end;
+		struct zxdh_np_stats_updata_msg np_stats_query;
+		struct zxdh_mac_module_eeprom_msg module_eeprom_msg;
+		struct zxdh_plcr_profile_add zxdh_plcr_profile_add;
+		struct zxdh_plcr_profile_free zxdh_plcr_profile_free;
+		struct zxdh_plcr_profile_cfg zxdh_plcr_profile_cfg;
+		struct zxdh_plcr_flow_cfg  zxdh_plcr_flow_cfg;
+		struct zxdh_mtr_stats_query  zxdh_mtr_stats_query;
+	} data;
+};
 
 typedef int (*zxdh_bar_chan_msg_recv_callback)(void *pay_load, uint16_t len,
 		void *reps_buffer, uint16_t *reps_len, void *dev);
+typedef int (*zxdh_msg_process_callback)(struct zxdh_hw *hw, uint16_t vport, void *cfg_data,
+	struct zxdh_msg_reply_body *res_info, uint16_t *res_len);
+
+typedef int (*zxdh_bar_chan_msg_recv_callback)(void *pay_load, uint16_t len,
+			void *reps_buffer, uint16_t *reps_len, void *dev);
+extern zxdh_bar_chan_msg_recv_callback zxdh_msg_recv_func_tbl[ZXDH_BAR_MSG_MODULE_NUM];
 
 int zxdh_get_bar_offset(struct zxdh_bar_offset_params *paras, struct zxdh_bar_offset_res *res);
 int zxdh_msg_chan_init(void);
@@ -448,5 +551,6 @@ void zxdh_agent_msg_build(struct zxdh_hw *hw, enum zxdh_agent_msg_type type,
 int32_t zxdh_send_msg_to_riscv(struct rte_eth_dev *dev, void *msg_req,
 			uint16_t msg_req_len, void *reply, uint16_t reply_len,
 			enum ZXDH_BAR_MODULE_ID module_id);
+void zxdh_msg_cb_reg(struct zxdh_hw *hw);
 
 #endif /* ZXDH_MSG_H */

@@ -20,6 +20,7 @@
 #define CNXK_MAX_IPSEC_RULES	"max_ipsec_rules"
 #define CNXK_NIX_INL_RX_INJ_ENABLE	"rx_inj_ena"
 #define CNXK_NIX_CUSTOM_INB_SA	      "custom_inb_sa"
+#define CNXK_NIX_NB_INL_INB_QS        "nb_inl_inb_qs"
 
 /* Default soft expiry poll freq in usec */
 #define CNXK_NIX_SOFT_EXP_POLL_FREQ_DFLT 100
@@ -231,6 +232,10 @@ cnxk_eth_outb_sa_idx_get(struct cnxk_eth_dev *dev, uint32_t *idx_p,
 		if (spi > dev->outb.max_sa)
 			return -ENOTSUP;
 		idx = spi;
+		if (!plt_bitmap_get(dev->outb.sa_bmap, idx)) {
+			plt_err("Outbound SA index %u already in use", idx);
+			return -EEXIST;
+		}
 	} else {
 		/* Scan bitmap to get the free sa index */
 		rc = plt_bitmap_scan(dev->outb.sa_bmap, &pos, &slab);
@@ -265,14 +270,14 @@ cnxk_eth_outb_sa_idx_put(struct cnxk_eth_dev *dev, uint32_t idx)
 }
 
 struct cnxk_eth_sec_sess *
-cnxk_eth_sec_sess_get_by_spi(struct cnxk_eth_dev *dev, uint32_t spi, bool inb)
+cnxk_eth_sec_sess_get_by_sa_idx(struct cnxk_eth_dev *dev, uint32_t sa_idx, bool inb)
 {
 	struct cnxk_eth_sec_sess_list *list;
 	struct cnxk_eth_sec_sess *eth_sec;
 
 	list = inb ? &dev->inb.list : &dev->outb.list;
 	TAILQ_FOREACH(eth_sec, list, entry) {
-		if (eth_sec->spi == spi)
+		if (eth_sec->sa_idx == sa_idx)
 			return eth_sec;
 	}
 
@@ -493,6 +498,7 @@ nix_inl_parse_devargs(struct rte_devargs *devargs,
 	uint32_t max_ipsec_rules = 0;
 	struct rte_kvargs *kvlist;
 	uint8_t custom_inb_sa = 0;
+	uint8_t nb_inl_inb_qs = 1;
 	uint32_t nb_meta_bufs = 0;
 	uint32_t meta_buf_sz = 0;
 	uint8_t rx_inj_ena = 0;
@@ -524,6 +530,7 @@ nix_inl_parse_devargs(struct rte_devargs *devargs,
 	rte_kvargs_process(kvlist, CNXK_MAX_IPSEC_RULES, &parse_max_ipsec_rules, &max_ipsec_rules);
 	rte_kvargs_process(kvlist, CNXK_NIX_INL_RX_INJ_ENABLE, &parse_val_u8, &rx_inj_ena);
 	rte_kvargs_process(kvlist, CNXK_NIX_CUSTOM_INB_SA, &parse_val_u8, &custom_inb_sa);
+	rte_kvargs_process(kvlist, CNXK_NIX_NB_INL_INB_QS, &parse_val_u8, &nb_inl_inb_qs);
 	rte_kvargs_free(kvlist);
 
 null_devargs:
@@ -539,6 +546,8 @@ null_devargs:
 	inl_dev->max_ipsec_rules = max_ipsec_rules;
 	if (roc_feature_nix_has_rx_inject())
 		inl_dev->rx_inj_ena = rx_inj_ena;
+	if (roc_feature_nix_has_inl_multi_queue())
+		inl_dev->nb_inb_cptlfs = nb_inl_inb_qs;
 	inl_dev->custom_inb_sa = custom_inb_sa;
 	return 0;
 exit:
@@ -622,7 +631,6 @@ cnxk_nix_inl_dev_probe(struct rte_pci_driver *pci_drv,
 		goto free_mem;
 	}
 
-	inl_dev->attach_cptlf = true;
 	/* WQE skip is one for DPDK */
 	wqe_skip = RTE_ALIGN_CEIL(sizeof(struct rte_mbuf), ROC_CACHE_LINE_SZ);
 	wqe_skip = wqe_skip / ROC_CACHE_LINE_SZ;
@@ -669,4 +677,5 @@ RTE_PMD_REGISTER_PARAM_STRING(cnxk_nix_inl,
 			      CNXK_NIX_SOFT_EXP_POLL_FREQ "=<0-U32_MAX>"
 			      CNXK_MAX_IPSEC_RULES "=<1-4095>"
 			      CNXK_NIX_INL_RX_INJ_ENABLE "=1"
-			      CNXK_NIX_CUSTOM_INB_SA "=1");
+			      CNXK_NIX_CUSTOM_INB_SA "=1"
+			      CNXK_NIX_NB_INL_INB_QS "=[0-16]");

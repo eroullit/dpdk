@@ -46,7 +46,8 @@ class TestSmokeTests(TestSuite):
         Setup:
             Set the build directory path and a list of NICs in the SUT node.
         """
-        self.dpdk_build_dir_path = self.sut_node.remote_dpdk_build_dir
+        self.sut_node = self._ctx.sut_node  # FIXME: accessing the context should be forbidden
+        self.dpdk_build_dir_path = self._ctx.dpdk.build.remote_dpdk_build_dir
         self.nics_in_node = self.sut_node.config.ports
 
     @func_test
@@ -78,7 +79,7 @@ class TestSmokeTests(TestSuite):
             Run the ``driver-tests`` unit test suite through meson.
         """
         vdev_args = ""
-        for dev in self.sut_node.virtual_devices:
+        for dev in self._ctx.dpdk.get_virtual_devices():
             vdev_args += f"--vdev {dev} "
         vdev_args = vdev_args[:-1]
         driver_tests_command = f"meson test -C {self.dpdk_build_dir_path} --suite driver-tests"
@@ -104,7 +105,7 @@ class TestSmokeTests(TestSuite):
         Test:
             List all devices found in testpmd and verify the configured devices are among them.
         """
-        with TestPmdShell(self.sut_node) as testpmd:
+        with TestPmdShell() as testpmd:
             dev_list = [str(x) for x in testpmd.get_devices()]
         for nic in self.nics_in_node:
             self.verify(
@@ -124,7 +125,7 @@ class TestSmokeTests(TestSuite):
             List all devices with the ``dpdk-devbind.py`` script and verify that
             the configured devices are bound to the proper driver.
         """
-        path_to_devbind = self.sut_node.path_to_devbind_script
+        path_to_devbind = self._ctx.dpdk.devbind_script_path
 
         all_nics_in_dpdk_devbind = self.sut_node.main_session.send_command(
             f"{path_to_devbind} --status | awk '/{REGEX_FOR_PCI_ADDRESS}/'",

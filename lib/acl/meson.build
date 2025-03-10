@@ -19,7 +19,7 @@ if dpdk_conf.has('RTE_ARCH_X86')
     avx2_tmplib = static_library('avx2_tmp',
             'acl_run_avx2.c',
             dependencies: static_rte_eal,
-            c_args: cflags + ['-mavx2'])
+            c_args: [cflags, cc_avx2_flags])
     objs += avx2_tmplib.extract_objects('acl_run_avx2.c')
 
     # compile AVX512 version if:
@@ -55,15 +55,11 @@ if dpdk_conf.has('RTE_ARCH_X86')
             sources += files('acl_run_avx512.c')
             cflags += '-DCC_AVX512_SUPPORT'
 
-        elif cc.has_multi_arguments('-mavx512f', '-mavx512vl',
-                    '-mavx512cd', '-mavx512bw')
-
+        elif cc_has_avx512
             avx512_tmplib = static_library('avx512_tmp',
                 'acl_run_avx512.c',
                 dependencies: static_rte_eal,
-                c_args: cflags +
-                    ['-mavx512f', '-mavx512vl',
-                     '-mavx512cd', '-mavx512bw'])
+                c_args: cflags + cc_avx512_flags)
             objs += avx512_tmplib.extract_objects(
                     'acl_run_avx512.c')
             cflags += '-DCC_AVX512_SUPPORT'

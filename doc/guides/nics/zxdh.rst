@@ -36,6 +36,11 @@ Features of the ZXDH PMD are:
 - Port hardware statistics
 - MTU update
 - Jumbo frames
+- Inner and Outer Checksum offload
+- Hardware LRO
+- Hardware TSO for generic IP or UDP tunnel, including VXLAN
+- Extended statistics query
+- Ingress meter support
 
 
 Driver compilation and testing

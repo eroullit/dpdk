@@ -11,7 +11,7 @@ defaults:
 
 env:
   REF_GIT_BRANCH: main
-  REF_GIT_REPO: https://dpdk.org/git/dpdk
+  REF_GIT_REPO: https://github.com/DPDK/dpdk
   REF_GIT_TAG: v24.11
 
 jobs:
@@ -45,6 +45,7 @@ jobs:
       BUILD_DOCS: ${{ contains(matrix.config.checks, 'doc') }}
       BUILD_EXAMPLES: ${{ contains(matrix.config.checks, 'examples') }}
       CC: ccache ${{ matrix.config.compiler }}
+      CCACHE_DIR: $HOME/.ccache
       DEF_LIB: ${{ matrix.config.library }}
       LIBABIGAIL_VERSION: libabigail-2.6
       MINGW: ${{ matrix.config.cross == 'mingw' }}
@@ -151,7 +152,7 @@ jobs:
       run: sudo apt install -y crossbuild-essential-riscv64
     - name: Install test tools packages
       if: env.AARCH64 != 'true' || env.PPC64LE != 'true' || env.RISCV64 != 'true' || env.RUN_TESTS == 'true'
-      run: sudo apt install -y gdb jq
+      run: sudo apt install -y babeltrace gdb jq
     - name: Install doc generation packages
       if: env.BUILD_DOCS == 'true'
       run: sudo apt install -y doxygen graphviz man-db python3-sphinx
@@ -307,6 +308,7 @@ jobs:
         mkdir -p ~/.ccache
         > ~/env
         echo CC=ccache ${{ matrix.config.compiler }} >> ~/env
+        echo CCACHE_DIR=/root/.ccache >> ~/env
         echo DEF_LIB=${{ matrix.config.library }} >> ~/env
         echo STDATOMIC=false >> ~/env
     - name: Load the cached image

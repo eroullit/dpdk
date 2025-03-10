@@ -32,6 +32,9 @@ from typing import (
     TypeAlias,
 )
 
+from framework.context import get_ctx
+from framework.testbed_model.topology import TopologyType
+
 if TYPE_CHECKING or environ.get("DTS_DOC_BUILD"):
     from enum import Enum as NoAliasEnum
 else:
@@ -40,13 +43,11 @@ else:
 from typing_extensions import Self, Unpack
 
 from framework.exception import InteractiveCommandExecutionError, InternalError
-from framework.params.testpmd import SimpleForwardingModes, TestPmdParams
+from framework.params.testpmd import PortTopology, SimpleForwardingModes, TestPmdParams
 from framework.params.types import TestPmdParamsDict
 from framework.parser import ParserFn, TextParser
 from framework.remote_session.dpdk_shell import DPDKShell
 from framework.settings import SETTINGS
-from framework.testbed_model.cpu import LogicalCoreCount, LogicalCoreList
-from framework.testbed_model.sut_node import SutNode
 from framework.utils import REGEX_FOR_MAC_ADDRESS, StrEnum
 
 P = ParamSpec("P")
@@ -1532,26 +1533,14 @@ class TestPmdShell(DPDKShell):
 
     def __init__(
         self,
-        node: SutNode,
-        privileged: bool = True,
-        timeout: float = SETTINGS.timeout,
-        lcore_filter_specifier: LogicalCoreCount | LogicalCoreList = LogicalCoreCount(),
-        ascending_cores: bool = True,
-        append_prefix_timestamp: bool = True,
         name: str | None = None,
+        privileged: bool = True,
         **app_params: Unpack[TestPmdParamsDict],
     ) -> None:
         """Overrides :meth:`~.dpdk_shell.DPDKShell.__init__`. Changes app_params to kwargs."""
-        super().__init__(
-            node,
-            privileged,
-            timeout,
-            lcore_filter_specifier,
-            ascending_cores,
-            append_prefix_timestamp,
-            TestPmdParams(**app_params),
-            name,
-        )
+        if "port_topology" not in app_params and get_ctx().topology.type is TopologyType.one_link:
+            app_params["port_topology"] = PortTopology.loop
+        super().__init__(name, privileged, TestPmdParams(**app_params))
         self.ports_started = not self._app_params.disable_device_start
         self._ports = None
 
@@ -2487,6 +2476,24 @@ class TestPmdShell(DPDKShell):
                 raise InteractiveCommandExecutionError(
                     f"Failed to update ring size of queue {queue_id} on port {port_id}"
                 )
+
+    @requires_stopped_ports
+    def set_queue_deferred_start(
+        self, port_id: int, queue_id: int, is_rx_queue: bool, on: bool
+    ) -> None:
+        """Set the deferred start attribute of the specified queue on/off.
+
+        Args:
+            port_id: The port that the queue resides on.
+            queue_id: The ID of the queue on the port.
+            is_rx_queue: Whether to modify an RX or TX queue. If :data:`True` an RX queue will be
+                updated, otherwise a TX queue will be updated.
+            on: Whether to set deferred start mode on or off. If :data:`True` deferred start will
+                be turned on, otherwise it will be turned off.
+        """
+        queue_type = "rxq" if is_rx_queue else "txq"
+        action = "on" if on else "off"
+        self.send_command(f"port {port_id} {queue_type} {queue_id} deferred_start {action}")
 
     def _update_capabilities_from_flag(
         self,

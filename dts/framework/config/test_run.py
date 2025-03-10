@@ -9,21 +9,25 @@
 The root model of a test run configuration is :class:`TestRunConfiguration`.
 """
 
+import re
 import tarfile
-from enum import auto, unique
+from collections import deque
+from collections.abc import Iterable
+from enum import Enum, auto, unique
 from functools import cached_property
 from pathlib import Path, PurePath
-from typing import Any, Literal
+from typing import Annotated, Any, Literal, NamedTuple
 
 from pydantic import Field, field_validator, model_validator
 from typing_extensions import TYPE_CHECKING, Self
 
-from framework.utils import StrEnum
+from framework.exception import InternalError
+from framework.utils import REGEX_FOR_PORT_LINK, StrEnum
 
 from .common import FrozenModel, load_fields_from_settings
 
 if TYPE_CHECKING:
-    from framework.test_suite import TestSuiteSpec
+    from framework.test_suite import TestCase, TestSuite, TestSuiteSpec
 
 
 @unique
@@ -229,6 +233,21 @@ class TestSuiteConfig(FrozenModel):
         ), f"{self.test_suite_name} is not a valid test suite module name."
         return test_suite_spec
 
+    @cached_property
+    def test_cases(self) -> list[type["TestCase"]]:
+        """The objects of the selected test cases."""
+        available_test_cases = {t.name: t for t in self.test_suite_spec.class_obj.get_test_cases()}
+        selected_test_cases = []
+
+        for requested_test_case in self.test_cases_names:
+            assert requested_test_case in available_test_cases, (
+                f"{requested_test_case} is not a valid test case "
+                f"of test suite {self.test_suite_name}."
+            )
+            selected_test_cases.append(available_test_cases[requested_test_case])
+
+        return selected_test_cases or list(available_test_cases.values())
+
     @model_validator(mode="before")
     @classmethod
     def convert_from_string(cls, data: Any) -> Any:
@@ -242,17 +261,11 @@ class TestSuiteConfig(FrozenModel):
     def validate_names(self) -> Self:
         """Validate the supplied test suite and test cases names.
 
-        This validator relies on the cached property `test_suite_spec` to run for the first
-        time in this call, therefore triggering the assertions if needed.
+        This validator relies on the cached properties `test_suite_spec` and `test_cases` to run for
+        the first time in this call, therefore triggering the assertions if needed.
         """
-        available_test_cases = map(
-            lambda t: t.name, self.test_suite_spec.class_obj.get_test_cases()
-        )
-        for requested_test_case in self.test_cases_names:
-            assert requested_test_case in available_test_cases, (
-                f"{requested_test_case} is not a valid test case "
-                f"of test suite {self.test_suite_name}."
-            )
+        if self.test_cases:
+            pass
 
         return self
 
@@ -271,6 +284,145 @@ def fetch_all_test_suites() -> list[TestSuiteConfig]:
     ]
 
 
+class LinkPortIdentifier(NamedTuple):
+    """A tuple linking test run node type to port name."""
+
+    node_type: Literal["sut", "tg"]
+    port_name: str
+
+
+class PortLinkConfig(FrozenModel):
+    """A link between the ports of the nodes.
+
+    Can be represented as a string with the following notation:
+
+    .. code::
+
+        sut.{port name} <-> tg.{port name}  # explicit node nomination
+        {port name} <-> {port name}         # implicit node nomination. Left is SUT, right is TG.
+    """
+
+    #: The port at the left side of the link.
+    left: LinkPortIdentifier
+    #: The port at the right side of the link.
+    right: LinkPortIdentifier
+
+    @cached_property
+    def sut_port(self) -> str:
+        """Port name of the SUT node.
+
+        Raises:
+            InternalError: If a misconfiguration has been allowed to happen.
+        """
+        if self.left.node_type == "sut":
+            return self.left.port_name
+        if self.right.node_type == "sut":
+            return self.right.port_name
+
+        raise InternalError("Unreachable state reached.")
+
+    @cached_property
+    def tg_port(self) -> str:
+        """Port name of the TG node.
+
+        Raises:
+            InternalError: If a misconfiguration has been allowed to happen.
+        """
+        if self.left.node_type == "tg":
+            return self.left.port_name
+        if self.right.node_type == "tg":
+            return self.right.port_name
+
+        raise InternalError("Unreachable state reached.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def convert_from_string(cls, data: Any) -> Any:
+        """Convert the string representation of the model into a valid mapping."""
+        if isinstance(data, str):
+            m = re.match(REGEX_FOR_PORT_LINK, data, re.I)
+            assert m is not None, (
+                "The provided link is malformed. Please use the following "
+                "notation: sut.{port name} <-> tg.{port name}"
+            )
+
+            left = (m.group(1) or "sut").lower(), m.group(2)
+            right = (m.group(3) or "tg").lower(), m.group(4)
+
+            return {"left": left, "right": right}
+        return data
+
+    @model_validator(mode="after")
+    def verify_distinct_nodes(self) -> Self:
+        """Verify that each side of the link has distinct nodes."""
+        assert (
+            self.left.node_type != self.right.node_type
+        ), "Linking ports of the same node is unsupported."
+        return self
+
+
+@unique
+class TrafficGeneratorType(str, Enum):
+    """The supported traffic generators."""
+
+    #:
+    SCAPY = "SCAPY"
+
+
+class TrafficGeneratorConfig(FrozenModel):
+    """A protocol required to define traffic generator types."""
+
+    #: The traffic generator type the child class is required to define to be distinguished among
+    #: others.
+    type: TrafficGeneratorType
+
+
+class ScapyTrafficGeneratorConfig(TrafficGeneratorConfig):
+    """Scapy traffic generator specific configuration."""
+
+    type: Literal[TrafficGeneratorType.SCAPY]
+
+
+#: A union type discriminating traffic generators by the `type` field.
+TrafficGeneratorConfigTypes = Annotated[ScapyTrafficGeneratorConfig, Field(discriminator="type")]
+
+#: Comma-separated list of logical cores to use. An empty string or ```any``` means use all lcores.
+LogicalCores = Annotated[
+    str,
+    Field(
+        examples=["1,2,3,4,5,18-22", "10-15", "any"],
+        pattern=r"^(([0-9]+|([0-9]+-[0-9]+))(,([0-9]+|([0-9]+-[0-9]+)))*)?$|any",
+    ),
+]
+
+
+class DPDKRuntimeConfiguration(FrozenModel):
+    """Configuration of the DPDK EAL parameters."""
+
+    #: A comma delimited list of logical cores to use when running DPDK. ```any```, an empty
+    #: string or omitting this field means use any core except for the first one. The first core
+    #: will only be used if explicitly set.
+    lcores: LogicalCores = ""
+
+    #: The number of memory channels to use when running DPDK.
+    memory_channels: int = 1
+
+    #: The names of virtual devices to test.
+    vdevs: list[str] = Field(default_factory=list)
+
+    @property
+    def use_first_core(self) -> bool:
+        """Returns :data:`True` if `lcores` explicitly selects the first core."""
+        return "0" in self.lcores
+
+
+class DPDKConfiguration(DPDKRuntimeConfiguration):
+    """The DPDK configuration needed to test."""
+
+    #: The DPDKD build configuration used to test.
+    build: DPDKBuildConfiguration
+
+
 class TestRunConfiguration(FrozenModel):
     """The configuration of a test run.
 
@@ -279,7 +431,9 @@ class TestRunConfiguration(FrozenModel):
     """
 
     #: The DPDK configuration used to test.
-    dpdk_config: DPDKBuildConfiguration = Field(alias="dpdk_build")
+    dpdk: DPDKConfiguration
+    #: The traffic generator configuration used to test.
+    traffic_generator: TrafficGeneratorConfigTypes
     #: Whether to run performance tests.
     perf: bool
     #: Whether to run functional tests.
@@ -292,11 +446,37 @@ class TestRunConfiguration(FrozenModel):
     system_under_test_node: str
     #: The TG node name to use in this test run.
     traffic_generator_node: str
-    #: The names of virtual devices to test.
-    vdevs: list[str] = Field(default_factory=list)
     #: The seed to use for pseudo-random generation.
     random_seed: int | None = None
+    #: The port links between the specified nodes to use.
+    port_topology: list[PortLinkConfig] = Field(max_length=2)
 
     fields_from_settings = model_validator(mode="before")(
         load_fields_from_settings("test_suites", "random_seed")
     )
+
+    def filter_tests(
+        self,
+    ) -> Iterable[tuple[type["TestSuite"], deque[type["TestCase"]]]]:
+        """Filter test suites and cases selected for execution."""
+        from framework.test_suite import TestCaseType
+
+        test_suites = [TestSuiteConfig(test_suite="smoke_tests")]
+
+        if self.skip_smoke_tests:
+            test_suites = self.test_suites
+        else:
+            test_suites += self.test_suites
+
+        return (
+            (
+                t.test_suite_spec.class_obj,
+                deque(
+                    tt
+                    for tt in t.test_cases
+                    if (tt.test_type is TestCaseType.FUNCTIONAL and self.func)
+                    or (tt.test_type is TestCaseType.PERFORMANCE and self.perf)
+                ),
+            )
+            for t in test_suites
+        )

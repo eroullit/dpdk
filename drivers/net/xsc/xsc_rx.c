@@ -42,8 +42,6 @@ xsc_rx_poll_len(struct xsc_rxq_data *rxq, volatile struct xsc_cqe *cqe)
 		if (unlikely(ret != XSC_CQE_OWNER_SW)) {
 			if (unlikely(ret == XSC_CQE_OWNER_ERR)) {
 				++rxq->stats.rx_errors;
-				if (ret == XSC_CQE_OWNER_HW || ret == -1)
-					return 0;
 			} else {
 				return 0;
 			}
@@ -278,8 +276,12 @@ xsc_rss_qp_create(struct xsc_ethdev_priv *priv, int port_id)
 	struct xsc_dev *xdev = priv->xdev;
 	struct xsc_hwinfo *hwinfo = &xdev->hwinfo;
 	char name[RTE_ETH_NAME_MAX_LEN] = { 0 };
+	void *cmd_buf;
 
 	rxq_data = xsc_rxq_get(priv, 0);
+	if (rxq_data == NULL)
+		return -EINVAL;
+
 	log_ele = rte_log2_u32(sizeof(struct xsc_wqe_data_seg));
 	wqe_n = rxq_data->wqe_s;
 	log_rq_sz = rte_log2_u32(wqe_n * hwinfo->recv_seg_num);
@@ -292,14 +294,15 @@ xsc_rss_qp_create(struct xsc_ethdev_priv *priv, int port_id)
 	in_len = sizeof(struct xsc_cmd_create_multiqp_mbox_in) + entry_total_len;
 	out_len = sizeof(struct xsc_cmd_create_multiqp_mbox_out) + entry_total_len;
 	cmd_len = RTE_MAX(in_len, out_len);
-	in = malloc(cmd_len);
-	memset(in, 0, cmd_len);
-	if (in == NULL) {
+	cmd_buf = malloc(cmd_len);
+	if (cmd_buf == NULL) {
 		rte_errno = ENOMEM;
 		PMD_DRV_LOG(ERR, "Alloc rss qp create cmd memory failed");
 		goto error;
 	}
 
+	in = cmd_buf;
+	memset(in, 0, cmd_len);
 	in->qp_num = rte_cpu_to_be_16((uint16_t)priv->num_rq);
 	in->qp_type = XSC_QUEUE_TYPE_RAW;
 	in->req_len = rte_cpu_to_be_32(cmd_len);
@@ -332,7 +335,7 @@ xsc_rss_qp_create(struct xsc_ethdev_priv *priv, int port_id)
 	}
 
 	in->hdr.opcode = rte_cpu_to_be_16(XSC_CMD_OP_CREATE_MULTI_QP);
-	out = (struct xsc_cmd_create_multiqp_mbox_out *)in;
+	out = cmd_buf;
 	ret = xsc_dev_mailbox_exec(xdev, in, in_len, out, out_len);
 	if (ret != 0 || out->hdr.status != 0) {
 		PMD_DRV_LOG(ERR,
@@ -358,17 +361,17 @@ xsc_rss_qp_create(struct xsc_ethdev_priv *priv, int port_id)
 		xsc_rxq_initialize(xdev, rxq_data);
 		rxq_data->cq_ci = 0;
 		priv->dev_data->rx_queue_state[i] = RTE_ETH_QUEUE_STATE_STARTED;
-		PMD_DRV_LOG(INFO, "Port %u create rx qp, wqe_s:%d, wqe_n:%d, qp_db=%p, qpn:%d",
+		PMD_DRV_LOG(INFO, "Port %d create rx qp, wqe_s:%d, wqe_n:%d, qp_db=%p, qpn:%u",
 			    port_id,
 			    rxq_data->wqe_s, rxq_data->wqe_n,
 			    rxq_data->rq_db, rxq_data->qpn);
 	}
 
-	free(in);
+	free(cmd_buf);
 	return 0;
 
 error:
-	free(in);
+	free(cmd_buf);
 	return -rte_errno;
 }
 
@@ -385,6 +388,8 @@ xsc_rxq_rss_obj_new(struct xsc_ethdev_priv *priv, uint16_t port_id)
 	/* Create CQ */
 	for (i = 0; i < priv->num_rq; ++i) {
 		rxq_data = xsc_rxq_get(priv, i);
+		if (rxq_data == NULL)
+			return -EINVAL;
 
 		memset(&cq_params, 0, sizeof(cq_params));
 		memset(&cq_info, 0, sizeof(cq_info));
@@ -407,7 +412,7 @@ xsc_rxq_rss_obj_new(struct xsc_ethdev_priv *priv, uint16_t port_id)
 		rxq_data->cq_db = cq_info.cq_db;
 		rxq_data->cqn = cq_info.cqn;
 
-		PMD_DRV_LOG(INFO, "Port %u create rx cq, cqe_s:%d, cqe_n:%d, cq_db=%p, cqn:%d",
+		PMD_DRV_LOG(INFO, "Port %u create rx cq, cqe_s:%d, cqe_n:%d, cq_db=%p, cqn:%u",
 			    port_id,
 			    rxq_data->cqe_s, rxq_data->cqe_n,
 			    rxq_data->cq_db, rxq_data->cqn);
@@ -442,10 +447,8 @@ xsc_rxq_elts_alloc(struct xsc_rxq_data *rxq_data)
 
 		mbuf->port = rxq_data->port_id;
 		mbuf->nb_segs = 1;
-		rte_pktmbuf_data_len(mbuf) = rte_pktmbuf_data_room_size(rxq_data->mp)
-						- mbuf->data_off;
-		rte_pktmbuf_pkt_len(mbuf) = rte_pktmbuf_data_room_size(rxq_data->mp)
-						- mbuf->data_off;
+		rte_pktmbuf_data_len(mbuf) = mbuf->buf_len - mbuf->data_off;
+		rte_pktmbuf_pkt_len(mbuf) = rte_pktmbuf_data_len(mbuf);
 		(*rxq_data->elts)[i] = mbuf;
 	}
 

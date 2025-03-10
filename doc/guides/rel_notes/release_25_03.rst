@@ -97,6 +97,10 @@ New Features
   * Added ability to option to configure receive packet fanout mode.
   * Added statistics for failed buffer allocation and missed packets.
 
+* **Updated Amazon ENA (Elastic Network Adapter) net driver.**
+
+  * Added support for mutable RSS table size based on device capabilities.
+
 * **Updated AMD axgbe driver.**
 
   * Added support for the TCP Segmentation Offload (TSO).
@@ -116,9 +120,15 @@ New Features
 * **Updated Marvell cnxk net driver.**
 
   * Added flow rules support for CN20K SoC.
+  * Added inline IPsec support for CN20K SoC.
+
+* **Updated Napatech ntnic driver.**
+
+  * Added support for the NT400D13 adapter.
 
 * **Updated NVIDIA mlx5 driver.**
 
+  * Added support for NVIDIA ConnectX-8 adapters.
   * Optimized port probing in large scale.
     This feature enhances the efficiency of probing VF/SFs on a large scale
     by significantly reducing the probing time.
@@ -137,12 +147,27 @@ New Features
   * Multicast and promiscuous mode.
   * VLAN filtering and offload.
   * Receive Side Scaling (RSS).
-  * Hardware statistics.
+  * Hardware and extended statistics.
   * Jumbo frames.
+  * Checksum offload.
+  * LRO and TSO.
+  * Ingress metering.
 
 * **Added Yunsilicon xsc net driver [EXPERIMENTAL].**
 
   Added network driver for the Yunsilicon metaScale serials NICs.
+
+* **Updated vhost library.**
+
+  Updated vhost library to support RSA crypto operations.
+
+* **Updated virtio crypto driver.**
+
+  * Added support for RSA crypto operations.
+
+* **Updated IPsec_MB crypto driver.**
+
+  * Added support for the SM4 GCM algorithm.
 
 * **Added ZTE Storage Data Accelerator (ZSDA) driver.**
 
