@@ -79,6 +79,7 @@ source_file_deps = {
     'test_event_eth_tx_adapter.c': ['bus_vdev', 'ethdev', 'net_ring', 'eventdev'],
     'test_event_ring.c': ['eventdev'],
     'test_event_timer_adapter.c': ['ethdev', 'eventdev', 'bus_vdev'],
+    'test_event_vector_adapter.c': ['eventdev', 'bus_vdev'],
     'test_eventdev.c': ['eventdev', 'bus_vdev'],
     'test_external_mem.c': [],
     'test_fbarray.c': [],
@@ -89,6 +90,7 @@ source_file_deps = {
     'test_flow_classify.c': ['net', 'acl', 'table', 'ethdev', 'flow_classify'],
     'test_func_reentrancy.c': ['hash', 'lpm'],
     'test_graph.c': ['graph'],
+    'test_graph_feature_arc.c': ['graph'],
     'test_graph_perf.c': ['graph'],
     'test_hash.c': ['net', 'hash'],
     'test_hash_functions.c': ['hash'],
@@ -142,14 +144,17 @@ source_file_deps = {
     'test_pmd_perf.c': ['ethdev', 'net'] + packet_burst_generator_deps,
     'test_pmd_ring.c': ['net_ring', 'ethdev', 'bus_vdev'],
     'test_pmd_ring_perf.c': ['ethdev', 'net_ring', 'bus_vdev'],
-    'test_power.c': ['power'],
-    'test_power_cpufreq.c': ['power'],
-    'test_power_intel_uncore.c': ['power'],
-    'test_power_kvm_vm.c': ['power'],
+    'test_pmu.c': ['pmu'],
+    'test_power.c': ['power', 'power_acpi', 'power_kvm_vm', 'power_intel_pstate',
+        'power_amd_pstate', 'power_cppc'],
+    'test_power_cpufreq.c': ['power', 'power_acpi', 'power_intel_pstate', 'power_amd_pstate',
+        'power_cppc'],
+    'test_power_intel_uncore.c': ['power', 'power_intel_uncore'],
+    'test_power_kvm_vm.c': ['power', 'power_kvm_vm'],
     'test_prefetch.c': [],
     'test_ptr_compress.c': ['ptr_compress'],
     'test_rand_perf.c': [],
-    'test_rawdev.c': ['rawdev', 'bus_vdev'],
+    'test_rawdev.c': ['rawdev', 'bus_vdev', 'raw_skeleton'],
     'test_rcu_qsbr.c': ['rcu', 'hash'],
     'test_rcu_qsbr_perf.c': ['rcu', 'hash'],
     'test_reassembly_perf.c': ['net', 'ip_frag'],
@@ -275,6 +280,8 @@ if not is_windows
             build_by_default: true,
             install: false)
 endif
+
+subdir('bpf')
 
 subdir('test_cfgfiles')
 

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -105,7 +104,7 @@ uint32_t nthw_spim_write_tx_fifo(nthw_spim_t *p, uint32_t n_data)
 
 uint32_t nthw_spim_get_tx_fifo_empty(nthw_spim_t *p, bool *pb_empty)
 {
-	assert(pb_empty);
+	RTE_ASSERT(pb_empty);
 
 	*pb_empty = nthw_field_get_updated(p->mp_fld_sr_txempty) ? true : false;
 

@@ -75,7 +75,7 @@
 
 static int gbl_driver_id;
 
-static enum rte_security_session_action_type gbl_action_type =
+enum rte_security_session_action_type gbl_action_type =
 	RTE_SECURITY_ACTION_TYPE_NONE;
 
 enum cryptodev_api_test_type global_api_test_type = CRYPTODEV_API_TEST;
@@ -289,7 +289,7 @@ process_sym_raw_dp_op(uint8_t dev_id, uint16_t qp_id,
 	struct rte_crypto_vec data_vec[UINT8_MAX], dest_data_vec[UINT8_MAX];
 	struct rte_crypto_va_iova_ptr cipher_iv, digest, aad_auth_iv;
 	union rte_crypto_sym_ofs ofs;
-	struct rte_crypto_sym_vec vec;
+	struct rte_crypto_sym_vec vec = {0};
 	struct rte_crypto_sgl sgl, dest_sgl;
 	uint32_t max_len;
 	union rte_cryptodev_session_ctx sess;
@@ -526,7 +526,7 @@ process_cpu_aead_op(uint8_t dev_id, struct rte_crypto_op *op)
 	struct rte_crypto_sym_op *sop;
 	union rte_crypto_sym_ofs ofs;
 	struct rte_crypto_sgl sgl;
-	struct rte_crypto_sym_vec symvec;
+	struct rte_crypto_sym_vec symvec = {0};
 	struct rte_crypto_va_iova_ptr iv_ptr, aad_ptr, digest_ptr;
 	struct rte_crypto_vec vec[UINT8_MAX];
 
@@ -572,7 +572,7 @@ process_cpu_crypt_auth_op(uint8_t dev_id, struct rte_crypto_op *op)
 	struct rte_crypto_sym_op *sop;
 	union rte_crypto_sym_ofs ofs;
 	struct rte_crypto_sgl sgl;
-	struct rte_crypto_sym_vec symvec;
+	struct rte_crypto_sym_vec symvec = {0};
 	struct rte_crypto_va_iova_ptr iv_ptr, digest_ptr;
 	struct rte_crypto_vec vec[UINT8_MAX];
 
@@ -2625,6 +2625,7 @@ test_queue_pair_descriptor_count(void)
 
 		rte_pktmbuf_free(ops_deq[i]->sym->m_src);
 		rte_crypto_op_free(ops_deq[i]);
+		ops_deq[i] = NULL;
 	}
 
 	return TEST_SUCCESS;
@@ -3487,6 +3488,8 @@ create_wireless_algo_auth_cipher_operation(
 		uint16_t remaining_off = (auth_offset >> 3) + (auth_len >> 3);
 		struct rte_mbuf *sgl_buf = (op_mode == IN_PLACE ?
 				sym_op->m_src : sym_op->m_dst);
+		struct rte_mbuf *sgl_buf_head = sgl_buf;
+
 		while (remaining_off >= rte_pktmbuf_data_len(sgl_buf)) {
 			remaining_off -= rte_pktmbuf_data_len(sgl_buf);
 			sgl_buf = sgl_buf->next;
@@ -3494,11 +3497,18 @@ create_wireless_algo_auth_cipher_operation(
 
 		/* The last segment should be large enough to hold full digest */
 		if (sgl_buf->data_len < auth_tag_len) {
-			rte_pktmbuf_free(sgl_buf->next);
-			sgl_buf->next = NULL;
-			TEST_ASSERT_NOT_NULL(rte_pktmbuf_append(sgl_buf,
-					auth_tag_len - sgl_buf->data_len),
-					"No room to append auth tag");
+			uint16_t next_data_len = 0;
+			if (sgl_buf->next != NULL) {
+				next_data_len = sgl_buf->next->data_len;
+
+				rte_pktmbuf_free(sgl_buf->next);
+				sgl_buf->next = NULL;
+				sgl_buf_head->nb_segs -= 1;
+				sgl_buf_head->pkt_len -= next_data_len;
+			}
+			TEST_ASSERT_NOT_NULL(rte_pktmbuf_append(
+						sgl_buf_head, auth_tag_len - sgl_buf->data_len),
+						"No room to append auth tag");
 		}
 
 		sym_op->auth.digest.data = rte_pktmbuf_mtod_offset(sgl_buf,
@@ -9794,11 +9804,13 @@ test_pdcp_proto_SGL(int i, int oop,
 			buf_oop = buf_oop->next;
 			memset(rte_pktmbuf_mtod(buf_oop, uint8_t *),
 					0, rte_pktmbuf_tailroom(buf_oop));
-			rte_pktmbuf_append(buf_oop, to_trn);
+			TEST_ASSERT_NOT_NULL(ut_params->obuf, "Output buffer not initialized");
+			TEST_ASSERT_NOT_NULL(rte_pktmbuf_append(ut_params->obuf, to_trn), "Failed to append to mbuf");
 		}
 
-		plaintext = (uint8_t *)rte_pktmbuf_append(buf,
+		plaintext = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
 				to_trn);
+		TEST_ASSERT_NOT_NULL(plaintext, "Failed to append plaintext");
 
 		memcpy(plaintext, input_vec + trn_data, to_trn);
 		trn_data += to_trn;
@@ -9827,7 +9839,7 @@ test_pdcp_proto_SGL(int i, int oop,
 			buf_oop = buf_oop->next;
 			memset(rte_pktmbuf_mtod(buf_oop, uint8_t *),
 					0, rte_pktmbuf_tailroom(buf_oop));
-			rte_pktmbuf_append(buf_oop, to_trn);
+			TEST_ASSERT_NOT_NULL(rte_pktmbuf_append(ut_params->obuf, to_trn), "Failed to append to mbuf");
 
 			trn_data += to_trn;
 		}
@@ -10572,7 +10584,8 @@ test_ipsec_proto_process(const struct ipsec_test_data td[],
 		.protocol = RTE_SECURITY_PROTOCOL_IPSEC,
 	};
 
-	if (td[0].aead || td[0].aes_gmac) {
+	if (td[0].aead || td[0].aes_gmac ||
+		       (td[0].xform.chain.cipher.cipher.algo == RTE_CRYPTO_CIPHER_AES_CTR)) {
 		salt_len = RTE_MIN(sizeof(ipsec_xform.salt), td[0].salt.len);
 		memcpy(&ipsec_xform.salt, td[0].salt.data, salt_len);
 	}
@@ -14259,6 +14272,12 @@ test_AES_CCM_authenticated_encryption_test_case_128_3(void)
 }
 
 static int
+test_AES_CCM_authenticated_encryption_test_case_128_4(void)
+{
+	return test_authenticated_encryption(&ccm_test_case_128_4);
+}
+
+static int
 test_AES_CCM_authenticated_decryption_test_case_128_1(void)
 {
 	return test_authenticated_decryption(&ccm_test_case_128_1);
@@ -14274,6 +14293,12 @@ static int
 test_AES_CCM_authenticated_decryption_test_case_128_3(void)
 {
 	return test_authenticated_decryption(&ccm_test_case_128_3);
+}
+
+static int
+test_AES_CCM_authenticated_decryption_test_case_128_4(void)
+{
+	return test_authenticated_decryption(&ccm_test_case_128_4);
 }
 
 static int
@@ -14788,6 +14813,7 @@ test_multi_session(void)
 
 		/* free crypto operation structure */
 		rte_crypto_op_free(ut_params->op);
+		ut_params->op = NULL;
 
 		/*
 		 * free mbuf - both obuf and ibuf are usually the same,
@@ -14891,8 +14917,7 @@ test_multi_session_random_usage(void)
 
 	for (i = 0; i < MB_SESSION_NUMBER; i++) {
 
-		rte_memcpy(&ut_paramz[i].ut_params, &unittest_params,
-				sizeof(struct crypto_unittest_params));
+		ut_paramz[i].ut_params = unittest_params;
 
 		test_AES_CBC_HMAC_SHA512_decrypt_create_session_params(
 				&ut_paramz[i].ut_params,
@@ -14933,6 +14958,7 @@ test_multi_session_random_usage(void)
 					ut_paramz[j].iv);
 
 		rte_crypto_op_free(ut_paramz[j].ut_params.op);
+		ut_paramz[j].ut_params.op = NULL;
 
 		/*
 		 * free mbuf - both obuf and ibuf are usually the same,
@@ -15913,15 +15939,18 @@ test_AES_GMAC_authentication_SGL(const struct gmac_test_data *tdata,
 		memset(rte_pktmbuf_mtod(buf, uint8_t *), 0,
 				rte_pktmbuf_tailroom(buf));
 
-		plaintext = (uint8_t *)rte_pktmbuf_append(buf,
+		plaintext = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
 				to_trn);
+		TEST_ASSERT_NOT_NULL(plaintext, "Failed to append plaintext");
 
 		memcpy(plaintext, tdata->plaintext.data + trn_data,
 				to_trn);
 		trn_data += to_trn;
-		if (trn_data  == tdata->plaintext.len)
-			digest_mem = (uint8_t *)rte_pktmbuf_append(buf,
+		if (trn_data  == tdata->plaintext.len) {
+			digest_mem = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
 					tdata->gmac_tag.len);
+			TEST_ASSERT_NOT_NULL(digest_mem, "Failed to append digest data");
+		}
 	}
 	ut_params->ibuf->nb_segs = segs;
 
@@ -17220,23 +17249,28 @@ test_authenticated_encryption_SGL(const struct aead_test_data *tdata,
 			buf_oop = buf_oop->next;
 			memset(rte_pktmbuf_mtod(buf_oop, uint8_t *),
 					0, rte_pktmbuf_tailroom(buf_oop));
-			rte_pktmbuf_append(buf_oop, to_trn);
+			TEST_ASSERT_NOT_NULL(rte_pktmbuf_append(ut_params->obuf, to_trn), "Failed to append to mbuf");
 		}
 
-		plaintext = (uint8_t *)rte_pktmbuf_append(buf,
+		plaintext = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
 				to_trn);
+		TEST_ASSERT_NOT_NULL(plaintext, "Failed to append plaintext");
 
 		memcpy(plaintext, tdata->plaintext.data + trn_data,
 				to_trn);
 		trn_data += to_trn;
 		if (trn_data  == tdata->plaintext.len) {
 			if (oop) {
-				if (!fragsz_oop)
-					digest_mem = rte_pktmbuf_append(buf_oop,
+				if (!fragsz_oop) {
+					digest_mem = rte_pktmbuf_append(ut_params->obuf,
 						tdata->auth_tag.len);
-			} else
-				digest_mem = (uint8_t *)rte_pktmbuf_append(buf,
+					TEST_ASSERT_NOT_NULL(digest_mem, "Failed to append auth tag");
+				}
+			} else {
+				digest_mem = (uint8_t *)rte_pktmbuf_append(ut_params->ibuf,
 					tdata->auth_tag.len);
+				TEST_ASSERT_NOT_NULL(digest_mem, "Failed to append auth tag");
+			}
 		}
 	}
 
@@ -17271,16 +17305,18 @@ test_authenticated_encryption_SGL(const struct aead_test_data *tdata,
 
 			buf_last_oop = buf_oop->next =
 					rte_pktmbuf_alloc(ts_params->mbuf_pool);
+			TEST_ASSERT_NOT_NULL(buf_oop->next, "Unexpected end of chain");
 			buf_oop = buf_oop->next;
 			memset(rte_pktmbuf_mtod(buf_oop, uint8_t *),
 					0, rte_pktmbuf_tailroom(buf_oop));
-			rte_pktmbuf_append(buf_oop, to_trn);
+			TEST_ASSERT_NOT_NULL(rte_pktmbuf_append(ut_params->obuf, to_trn), "Failed to append to mbuf");
 
 			trn_data += to_trn;
 
 			if (trn_data  == tdata->plaintext.len) {
-				digest_mem = rte_pktmbuf_append(buf_oop,
+				digest_mem = rte_pktmbuf_append(ut_params->obuf,
 					tdata->auth_tag.len);
+				TEST_ASSERT_NOT_NULL(digest_mem, "Failed to append auth tag");
 			}
 		}
 
@@ -17947,6 +17983,36 @@ static struct unit_test_suite ipsec_proto_testsuite  = {
 			ut_setup_security, ut_teardown,
 			test_ipsec_proto_known_vec,
 			&pkt_aes_128_cbc_md5),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Outbound known vector (ESP tunnel mode IPv4 AES-CTR 128 HMAC-SHA256 [16B ICV])",
+			ut_setup_security, ut_teardown,
+			test_ipsec_proto_known_vec,
+			&pkt_aes_128_ctr_hmac_sha256),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Outbound known vector (ESP tunnel mode IPv4 AES-CTR 128 HMAC-SHA384 [16B ICV])",
+			ut_setup_security, ut_teardown,
+			test_ipsec_proto_known_vec,
+			&pkt_aes_128_ctr_hmac_sha384),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Outbound known vector (ESP tunnel mode IPv4 AES-CTR 128 HMAC-SHA512 [16B ICV])",
+			ut_setup_security, ut_teardown,
+			test_ipsec_proto_known_vec,
+			&pkt_aes_128_ctr_hmac_sha512),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Inbound known vector (ESP tunnel mode IPv4 AES-CTR 128 HMAC-SHA256 [16B ICV])",
+			ut_setup_security, ut_teardown,
+			test_ipsec_proto_known_vec_inb,
+			&pkt_aes_128_ctr_hmac_sha256),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Inbound known vector (ESP tunnel mode IPv4 AES-CTR 128 HMAC-SHA384 [16B ICV])",
+			ut_setup_security, ut_teardown,
+			test_ipsec_proto_known_vec_inb,
+			&pkt_aes_128_ctr_hmac_sha384),
+		TEST_CASE_NAMED_WITH_DATA(
+			"Inbound known vector (ESP tunnel mode IPv4 AES-CTR 128 HMAC-SHA512 [16B ICV])",
+			ut_setup_security, ut_teardown,
+			test_ipsec_proto_known_vec_inb,
+			&pkt_aes_128_ctr_hmac_sha512),
 		TEST_CASE_NAMED_WITH_DATA(
 			"Outbound known vector (ESP tunnel mode IPv4 AES-CBC 128 HMAC-SHA256 [16B ICV])",
 			ut_setup_security, ut_teardown,
@@ -18921,6 +18987,8 @@ static struct unit_test_suite cryptodev_aes_ccm_auth_testsuite  = {
 			test_AES_CCM_authenticated_encryption_test_case_128_2),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_AES_CCM_authenticated_encryption_test_case_128_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_encryption_test_case_128_4),
 
 		/** AES CCM Authenticated Decryption 128 bits key*/
 		TEST_CASE_ST(ut_setup, ut_teardown,
@@ -18929,6 +18997,8 @@ static struct unit_test_suite cryptodev_aes_ccm_auth_testsuite  = {
 			test_AES_CCM_authenticated_decryption_test_case_128_2),
 		TEST_CASE_ST(ut_setup, ut_teardown,
 			test_AES_CCM_authenticated_decryption_test_case_128_3),
+		TEST_CASE_ST(ut_setup, ut_teardown,
+			test_AES_CCM_authenticated_decryption_test_case_128_4),
 
 		/** AES CCM Authenticated Encryption 192 bits key */
 		TEST_CASE_ST(ut_setup, ut_teardown,
@@ -20233,6 +20303,12 @@ test_cryptodev_dpaa_sec_raw_api(void)
 	return run_cryptodev_raw_testsuite(RTE_STR(CRYPTODEV_NAME_DPAA_SEC_PMD));
 }
 
+static int
+test_cryptodev_zsda(void)
+{
+	return run_cryptodev_testsuite(RTE_STR(CRYPTODEV_NAME_ZSDA_SYM_PMD));
+}
+
 REGISTER_DRIVER_TEST(cryptodev_cn10k_raw_api_autotest,
 		test_cryptodev_cn10k_raw_api);
 REGISTER_DRIVER_TEST(cryptodev_dpaa2_sec_raw_api_autotest,
@@ -20270,3 +20346,4 @@ REGISTER_DRIVER_TEST(cryptodev_nitrox_autotest, test_cryptodev_nitrox);
 REGISTER_DRIVER_TEST(cryptodev_bcmfs_autotest, test_cryptodev_bcmfs);
 REGISTER_DRIVER_TEST(cryptodev_cn9k_autotest, test_cryptodev_cn9k);
 REGISTER_DRIVER_TEST(cryptodev_cn10k_autotest, test_cryptodev_cn10k);
+REGISTER_DRIVER_TEST(cryptodev_zsda_autotest, test_cryptodev_zsda);

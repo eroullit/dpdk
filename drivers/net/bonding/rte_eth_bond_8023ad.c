@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdbool.h>
 
+#include <eal_export.h>
 #include <rte_alarm.h>
 #include <rte_malloc.h>
 #include <rte_errno.h>
@@ -1185,6 +1186,14 @@ bond_mode_8023ad_mac_address_update(struct rte_eth_dev *bond_dev)
 			continue;
 
 		rte_ether_addr_copy(&internals->mode4.mac_addr, &member->actor.system);
+
+		/* Update physical NIC hardware MAC address to match bonding device. */
+		if (rte_eth_dev_default_mac_addr_set(member_id, &internals->mode4.mac_addr) != 0) {
+			RTE_BOND_LOG(ERR,
+				"Failed to update MAC address on member port %u",
+				member_id);
+		}
+
 		/* Do nothing if this port is not an aggregator. In other case
 		 * Set NTT flag on every port that use this aggregator. */
 		if (member->aggregator_port_id != member_id)
@@ -1403,6 +1412,7 @@ free_out:
 	rte_pktmbuf_free(pkt);
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_conf_get)
 int
 rte_eth_bond_8023ad_conf_get(uint16_t port_id,
 		struct rte_eth_bond_8023ad_conf *conf)
@@ -1420,6 +1430,7 @@ rte_eth_bond_8023ad_conf_get(uint16_t port_id,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_agg_selection_set)
 int
 rte_eth_bond_8023ad_agg_selection_set(uint16_t port_id,
 		enum rte_bond_8023ad_agg_selection agg_selection)
@@ -1444,6 +1455,7 @@ rte_eth_bond_8023ad_agg_selection_set(uint16_t port_id,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_agg_selection_get)
 int rte_eth_bond_8023ad_agg_selection_get(uint16_t port_id)
 {
 	struct rte_eth_dev *bond_dev;
@@ -1491,6 +1503,7 @@ bond_8023ad_setup_validate(uint16_t port_id,
 }
 
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_setup)
 int
 rte_eth_bond_8023ad_setup(uint16_t port_id,
 		struct rte_eth_bond_8023ad_conf *conf)
@@ -1512,6 +1525,7 @@ rte_eth_bond_8023ad_setup(uint16_t port_id,
 
 
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_member_info)
 int
 rte_eth_bond_8023ad_member_info(uint16_t port_id, uint16_t member_id,
 		struct rte_eth_bond_8023ad_member_info *info)
@@ -1573,6 +1587,7 @@ bond_8023ad_ext_validate(uint16_t port_id, uint16_t member_id)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_ext_collect)
 int
 rte_eth_bond_8023ad_ext_collect(uint16_t port_id, uint16_t member_id,
 				int enabled)
@@ -1594,6 +1609,7 @@ rte_eth_bond_8023ad_ext_collect(uint16_t port_id, uint16_t member_id,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_ext_distrib)
 int
 rte_eth_bond_8023ad_ext_distrib(uint16_t port_id, uint16_t member_id,
 				int enabled)
@@ -1615,6 +1631,7 @@ rte_eth_bond_8023ad_ext_distrib(uint16_t port_id, uint16_t member_id,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_ext_distrib_get)
 int
 rte_eth_bond_8023ad_ext_distrib_get(uint16_t port_id, uint16_t member_id)
 {
@@ -1629,6 +1646,7 @@ rte_eth_bond_8023ad_ext_distrib_get(uint16_t port_id, uint16_t member_id)
 	return ACTOR_STATE(port, DISTRIBUTING);
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_ext_collect_get)
 int
 rte_eth_bond_8023ad_ext_collect_get(uint16_t port_id, uint16_t member_id)
 {
@@ -1643,6 +1661,7 @@ rte_eth_bond_8023ad_ext_collect_get(uint16_t port_id, uint16_t member_id)
 	return ACTOR_STATE(port, COLLECTING);
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_ext_slowtx)
 int
 rte_eth_bond_8023ad_ext_slowtx(uint16_t port_id, uint16_t member_id,
 		struct rte_mbuf *lacp_pkt)
@@ -1704,6 +1723,7 @@ bond_mode_8023ad_ext_periodic_cb(void *arg)
 			bond_mode_8023ad_ext_periodic_cb, arg);
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_dedicated_queues_enable)
 int
 rte_eth_bond_8023ad_dedicated_queues_enable(uint16_t port)
 {
@@ -1730,6 +1750,7 @@ rte_eth_bond_8023ad_dedicated_queues_enable(uint16_t port)
 	return retval;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_bond_8023ad_dedicated_queues_disable)
 int
 rte_eth_bond_8023ad_dedicated_queues_disable(uint16_t port)
 {

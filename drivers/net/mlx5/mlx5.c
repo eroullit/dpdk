@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#include <eal_export.h>
 #include <rte_malloc.h>
 #include <ethdev_driver.h>
 #include <rte_pci.h>
@@ -181,8 +182,13 @@
 /* HW steering counter's query interval. */
 #define MLX5_HWS_CNT_CYCLE_TIME "svc_cycle_time"
 
-/* Device parameter to control representor matching in ingress/egress flows with HWS. */
-#define MLX5_REPR_MATCHING_EN "repr_matching_en"
+/*
+ * Alignment of the Tx queue starting address,
+ * If not set, using separate umem and MR for each TxQ.
+ * If set, using consecutive memory address and single MR for all Tx queues,
+ * each TxQ will start at the alignment specified.
+ */
+#define MLX5_TXQ_MEM_ALGN "txq_mem_algn"
 
 /* Shared memory between primary and secondary processes. */
 struct mlx5_shared_data *mlx5_shared_data;
@@ -384,9 +390,6 @@ static const struct mlx5_indexed_pool_config mlx5_ipool_cfg[] = {
 		.type = "mlx5_meter_policy_ipool",
 	},
 };
-
-#define MLX5_FLOW_MIN_ID_POOL_SIZE 512
-#define MLX5_ID_GENERATION_ARRAY_FACTOR 16
 
 #define MLX5_FLOW_TABLE_HLIST_ARRAY_SIZE 1024
 
@@ -1036,24 +1039,6 @@ error:
 }
 
 /*
- * Destroy the flex parser node, including the parser itself, input / output
- * arcs and DW samples. Resources could be reused then.
- *
- * @param dev
- *   Pointer to Ethernet device structure.
- */
-static void
-mlx5_flex_parser_ecpri_release(struct rte_eth_dev *dev)
-{
-	struct mlx5_priv *priv = dev->data->dev_private;
-	struct mlx5_ecpri_parser_profile *prf = &priv->sh->ecpri_parser;
-
-	if (prf->obj)
-		mlx5_devx_cmd_destroy(prf->obj);
-	prf->obj = NULL;
-}
-
-/*
  * Allocation of a flex parser for srh. Once refcnt is zero, the resources held
  * by this parser will be freed.
  * @param dev
@@ -1095,9 +1080,15 @@ mlx5_alloc_srh_flex_parser(struct rte_eth_dev *dev)
 	/* The unit is uint64_t. */
 	node.header_length_field_shift = 0x3;
 	/* Header length is the 2nd byte. */
-	node.header_length_field_offset = 0x8;
-	if (attr->header_length_mask_width < 8)
-		node.header_length_field_offset += 8 - attr->header_length_mask_width;
+	if (attr->header_length_field_mode_wa) {
+		/* Legacy firmware before ConnectX-8, we should provide offset WA. */
+		node.header_length_field_offset = 8;
+		if (attr->header_length_mask_width < 8)
+			node.header_length_field_offset += 8 - attr->header_length_mask_width;
+	} else {
+		/* The new firmware, we can specify the correct offset directly. */
+		node.header_length_field_offset = 12;
+	}
 	node.header_length_field_mask = 0xF;
 	/* One byte next header protocol. */
 	node.next_header_field_size = 0x8;
@@ -1444,8 +1435,8 @@ mlx5_dev_args_check_handler(const char *key, const char *val, void *opaque)
 		config->cnt_svc.service_core = tmp;
 	} else if (strcmp(MLX5_HWS_CNT_CYCLE_TIME, key) == 0) {
 		config->cnt_svc.cycle_time = tmp;
-	} else if (strcmp(MLX5_REPR_MATCHING_EN, key) == 0) {
-		config->repr_matching = !!tmp;
+	} else if (strcmp(MLX5_TXQ_MEM_ALGN, key) == 0) {
+		config->txq_mem_algn = (uint32_t)tmp;
 	}
 	return 0;
 }
@@ -1484,10 +1475,17 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 		MLX5_FDB_DEFAULT_RULE_EN,
 		MLX5_HWS_CNT_SERVICE_CORE,
 		MLX5_HWS_CNT_CYCLE_TIME,
-		MLX5_REPR_MATCHING_EN,
+		MLX5_TXQ_MEM_ALGN,
 		NULL,
 	};
 	int ret = 0;
+	size_t alignment = rte_mem_page_size();
+	uint32_t max_queue_umem_size = MLX5_WQE_SIZE * mlx5_dev_get_max_wq_size(sh);
+
+	if (alignment == (size_t)-1) {
+		alignment = (1 << MLX5_LOG_PAGE_SIZE);
+		DRV_LOG(WARNING, "Failed to get page_size, using default %zu size.", alignment);
+	}
 
 	/* Default configuration. */
 	memset(config, 0, sizeof(*config));
@@ -1499,7 +1497,7 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	config->fdb_def_rule = 1;
 	config->cnt_svc.cycle_time = MLX5_CNT_SVC_CYCLE_TIME_DEFAULT;
 	config->cnt_svc.service_core = rte_get_main_lcore();
-	config->repr_matching = 1;
+	config->txq_mem_algn = log2above(alignment);
 	if (mkvlist != NULL) {
 		/* Process parameters. */
 		ret = mlx5_kvargs_process(mkvlist, params,
@@ -1533,11 +1531,6 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 			config->dv_xmeta_en);
 		config->dv_xmeta_en = MLX5_XMETA_MODE_LEGACY;
 	}
-	if (config->dv_flow_en != 2 && !config->repr_matching) {
-		DRV_LOG(DEBUG, "Disabling representor matching is valid only "
-			       "when HW Steering is enabled.");
-		config->repr_matching = 1;
-	}
 	if (config->tx_pp && !sh->dev_cap.txpp_en) {
 		DRV_LOG(ERR, "Packet pacing is not supported.");
 		rte_errno = ENODEV;
@@ -1566,6 +1559,16 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 		config->hw_fcs_strip = 0;
 	else
 		config->hw_fcs_strip = sh->dev_cap.hw_fcs_strip;
+	if (config->txq_mem_algn != 0 && config->txq_mem_algn < log2above(alignment)) {
+		DRV_LOG(WARNING,
+			"\"txq_mem_algn\" too small %u, round up to %u.",
+			config->txq_mem_algn, log2above(alignment));
+		config->txq_mem_algn = log2above(alignment);
+	} else if (config->txq_mem_algn > log2above(max_queue_umem_size)) {
+		DRV_LOG(WARNING,
+			"\"txq_mem_algn\" with value %u bigger than %u.",
+			config->txq_mem_algn, log2above(max_queue_umem_size));
+	}
 	DRV_LOG(DEBUG, "FCS stripping configuration is %ssupported",
 		(config->hw_fcs_strip ? "" : "not "));
 	DRV_LOG(DEBUG, "\"tx_pp\" is %d.", config->tx_pp);
@@ -1582,7 +1585,7 @@ mlx5_shared_dev_ctx_args_config(struct mlx5_dev_ctx_shared *sh,
 	DRV_LOG(DEBUG, "\"allow_duplicate_pattern\" is %u.",
 		config->allow_duplicate_pattern);
 	DRV_LOG(DEBUG, "\"fdb_def_rule_en\" is %u.", config->fdb_def_rule);
-	DRV_LOG(DEBUG, "\"repr_matching_en\" is %u.", config->repr_matching);
+	DRV_LOG(DEBUG, "\"txq_mem_algn\" is %u.", config->txq_mem_algn);
 	return 0;
 }
 
@@ -1624,7 +1627,8 @@ mlx5_init_hws_flow_tags_registers(struct mlx5_dev_ctx_shared *sh)
 {
 	struct mlx5_dev_registers *reg = &sh->registers;
 	uint32_t meta_mode = sh->config.dv_xmeta_en;
-	uint16_t masks = (uint16_t)sh->cdev->config.hca_attr.set_reg_c;
+	uint16_t reg_c_caps = (uint16_t)sh->cdev->config.hca_attr.set_reg_c;
+	uint16_t masks = reg_c_caps;
 	uint16_t unset = 0;
 	uint32_t i, j;
 
@@ -1637,7 +1641,9 @@ mlx5_init_hws_flow_tags_registers(struct mlx5_dev_ctx_shared *sh)
 	unset |= 1 << mlx5_regc_index(REG_C_6);
 	if (sh->config.dv_esw_en)
 		unset |= 1 << mlx5_regc_index(REG_C_0);
-	if (meta_mode == MLX5_XMETA_MODE_META32_HWS)
+	if (meta_mode == MLX5_XMETA_MODE_META32_HWS ||
+	    mlx5_vport_rx_metadata_passing_enabled(sh) ||
+	    mlx5_vport_tx_metadata_passing_enabled(sh))
 		unset |= 1 << mlx5_regc_index(REG_C_1);
 	masks &= ~unset;
 	for (i = 0, j = 0; i < MLX5_FLOW_HW_TAGS_MAX; i++) {
@@ -1648,11 +1654,16 @@ mlx5_init_hws_flow_tags_registers(struct mlx5_dev_ctx_shared *sh)
 	 * Set the registers for NAT64 usage internally. REG_C_6 is always used.
 	 * The other 2 registers will be fetched from right to left, at least 2
 	 * tag registers should be available.
+	 * If not enough registers are available or REG_C_6 is not supported by current FW,
+	 * NAT64 action will not be supported.
 	 */
-	MLX5_ASSERT(j >= (MLX5_FLOW_NAT64_REGS_MAX - 1));
-	reg->nat64_regs[0] = REG_C_6;
-	reg->nat64_regs[1] = reg->hw_avl_tags[j - 2];
-	reg->nat64_regs[2] = reg->hw_avl_tags[j - 1];
+	if ((reg_c_caps & RTE_BIT32(mlx5_regc_index(REG_C_6))) &&
+	    j >= MLX5_FLOW_NAT64_REGS_MAX - 1) {
+		MLX5_ASSERT(j >= (MLX5_FLOW_NAT64_REGS_MAX - 1));
+		reg->nat64_regs[0] = REG_C_6;
+		reg->nat64_regs[1] = reg->hw_avl_tags[j - 2];
+		reg->nat64_regs[2] = reg->hw_avl_tags[j - 1];
+	}
 }
 
 static void
@@ -1724,6 +1735,16 @@ mlx5_get_physical_device(struct mlx5_common_device *cdev)
 		rte_errno = ENOMEM;
 		return NULL;
 	}
+	/*
+	 * The same CTX create the physical device objects should destroy them.
+	 * Since we can't be sure it will be done by same CTX, we prepare for
+	 * the physical device a special CTX used by objects creation.
+	 */
+	phdev->ctx = mlx5_os_get_physical_device_ctx(cdev);
+	if (!phdev->ctx) {
+		mlx5_free(phdev);
+		return NULL;
+	}
 	phdev->guid = attr->system_image_guid;
 	phdev->refcnt = 1;
 	LIST_INSERT_HEAD(&phdev_list, phdev, next);
@@ -1767,6 +1788,8 @@ mlx5_physical_device_destroy(struct mlx5_physical_device *phdev)
 		return;
 	/* Remove physical device from the global device list. */
 	LIST_REMOVE(phdev, next);
+	MLX5_ASSERT(phdev->ctx);
+	claim_zero(mlx5_glue->close_device(phdev->ctx));
 	mlx5_free(phdev);
 }
 
@@ -2252,8 +2275,8 @@ mlx5_proc_priv_init(struct rte_eth_dev *dev)
 	 */
 	ppriv_size = sizeof(struct mlx5_proc_priv) +
 		     priv->txqs_n * sizeof(struct mlx5_uar_data);
-	ppriv = mlx5_malloc(MLX5_MEM_RTE | MLX5_MEM_ZERO, ppriv_size,
-			    RTE_CACHE_LINE_SIZE, dev->device->numa_node);
+	ppriv = mlx5_malloc_numa_tolerant(MLX5_MEM_RTE | MLX5_MEM_ZERO, ppriv_size,
+					  RTE_CACHE_LINE_SIZE, dev->device->numa_node);
 	if (!ppriv) {
 		rte_errno = ENOMEM;
 		return -rte_errno;
@@ -2285,6 +2308,18 @@ mlx5_proc_priv_uninit(struct rte_eth_dev *dev)
 		mlx5_txpp_unmap_hca_bar(dev);
 	mlx5_free(dev->process_private);
 	dev->process_private = NULL;
+}
+
+static void
+mlx5_flow_pools_destroy(struct mlx5_priv *priv)
+{
+	int i;
+
+	for (i = 0; i < MLX5_FLOW_TYPE_MAXI; i++) {
+		if (!priv->flows[i])
+			continue;
+		mlx5_ipool_destroy(priv->flows[i]);
+	}
 }
 
 /**
@@ -2323,15 +2358,6 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 		rte_errno = EBUSY;
 		return -EBUSY;
 	}
-#ifdef HAVE_MLX5_HWS_SUPPORT
-	/* Check if shared GENEVE options created on context being closed. */
-	ret = mlx5_geneve_tlv_options_check_busy(priv);
-	if (ret) {
-		DRV_LOG(ERR, "port %u maintains shared GENEVE TLV options",
-			dev->data->port_id);
-		return ret;
-	}
-#endif
 	DRV_LOG(DEBUG, "port %u closing device \"%s\"",
 		dev->data->port_id, sh->ibdev_name);
 	/*
@@ -2356,8 +2382,14 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 	/* Free the eCPRI flex parser resource. */
 	mlx5_flex_parser_ecpri_release(dev);
 	mlx5_flex_item_port_cleanup(dev);
+	if (priv->representor) {
+		/* Each representor has a dedicated interrupts handler */
+		rte_intr_instance_free(dev->intr_handle);
+		dev->intr_handle = NULL;
+	}
 	mlx5_indirect_list_handles_release(dev);
 #ifdef HAVE_MLX5_HWS_SUPPORT
+	mlx5_nta_sample_context_free(dev);
 	flow_hw_destroy_vport_action(dev);
 	/* dr context will be closed after mlx5_os_free_shared_dr. */
 	flow_hw_resource_release(dev);
@@ -2484,6 +2516,7 @@ mlx5_dev_close(struct rte_eth_dev *dev)
 		if (!c)
 			claim_zero(rte_eth_switch_domain_free(priv->domain_id));
 	}
+	mlx5_flow_pools_destroy(priv);
 	memset(priv, 0, sizeof(*priv));
 	priv->domain_id = RTE_ETH_DEV_SWITCH_DOMAIN_ID_INVALID;
 	/*
@@ -3140,6 +3173,12 @@ mlx5_probe_again_args_validate(struct mlx5_common_device *cdev,
 			sh->ibdev_name);
 		goto error;
 	}
+	if (sh->config.txq_mem_algn != config->txq_mem_algn) {
+		DRV_LOG(ERR, "\"TxQ memory alignment\" "
+			"configuration mismatch for shared %s context. %u - %u",
+			sh->ibdev_name, sh->config.txq_mem_algn, config->txq_mem_algn);
+		goto error;
+	}
 	mlx5_free(config);
 	return 0;
 error:
@@ -3332,6 +3371,7 @@ mlx5_set_metadata_mask(struct rte_eth_dev *dev)
 	DRV_LOG(DEBUG, "metadata reg_c0 mask %08X", sh->dv_regc0_mask);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_mlx5_get_dyn_flag_names, 20.02)
 int
 rte_pmd_mlx5_get_dyn_flag_names(char *names[], unsigned int n)
 {
@@ -3773,7 +3813,14 @@ static const struct rte_pci_id mlx5_pci_id_map[] = {
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
 				PCI_DEVICE_ID_MELLANOX_CONNECTX8)
 	},
-
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_CONNECTX9)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+				PCI_DEVICE_ID_MELLANOX_BLUEFIELD4)
+	},
 	{
 		.vendor_id = 0
 	}
@@ -3808,6 +3855,6 @@ RTE_INIT(rte_mlx5_pmd_init)
 		mlx5_class_driver_register(&mlx5_net_driver);
 }
 
-RTE_PMD_EXPORT_NAME(MLX5_ETH_DRIVER_NAME, __COUNTER__);
+RTE_PMD_EXPORT_NAME(MLX5_ETH_DRIVER_NAME);
 RTE_PMD_REGISTER_PCI_TABLE(MLX5_ETH_DRIVER_NAME, mlx5_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(MLX5_ETH_DRIVER_NAME, "* ib_uverbs & mlx5_core & mlx5_ib");

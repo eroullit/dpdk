@@ -5,6 +5,7 @@
 #include <stdalign.h>
 #include <sys/queue.h>
 
+#include <eal_export.h>
 #include <rte_thash.h>
 #include <rte_tailq.h>
 #include <rte_random.h>
@@ -13,6 +14,7 @@
 #include <rte_eal_memconfig.h>
 #include <rte_log.h>
 #include <rte_malloc.h>
+#include <rte_cpuflags.h>
 
 RTE_LOG_REGISTER_SUFFIX(thash_logtype, thash, INFO);
 #define RTE_LOGTYPE_HASH thash_logtype
@@ -70,6 +72,7 @@ struct rte_thash_ctx {
 	uint8_t		hash_key[];
 };
 
+RTE_EXPORT_SYMBOL(rte_thash_gfni_supported)
 int
 rte_thash_gfni_supported(void)
 {
@@ -83,6 +86,7 @@ rte_thash_gfni_supported(void)
 	return 0;
 };
 
+RTE_EXPORT_SYMBOL(rte_thash_complete_matrix)
 void
 rte_thash_complete_matrix(uint64_t *matrixes, const uint8_t *rss_key, int size)
 {
@@ -203,6 +207,7 @@ free_lfsr(struct thash_lfsr *lfsr)
 		rte_free(lfsr);
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_init_ctx)
 struct rte_thash_ctx *
 rte_thash_init_ctx(const char *name, uint32_t key_len, uint32_t reta_sz,
 	uint8_t *key, uint32_t flags)
@@ -293,6 +298,7 @@ exit:
 	return NULL;
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_find_existing)
 struct rte_thash_ctx *
 rte_thash_find_existing(const char *name)
 {
@@ -319,6 +325,7 @@ rte_thash_find_existing(const char *name)
 	return ctx;
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_free_ctx)
 void
 rte_thash_free_ctx(struct rte_thash_ctx *ctx)
 {
@@ -409,10 +416,10 @@ generate_subkey(struct rte_thash_ctx *ctx, struct thash_lfsr *lfsr,
 static inline uint32_t
 get_subvalue(struct rte_thash_ctx *ctx, uint32_t offset)
 {
-	uint32_t *tmp, val;
+	uint32_t tmp, val;
 
-	tmp = (uint32_t *)(&ctx->hash_key[offset >> 3]);
-	val = rte_be_to_cpu_32(*tmp);
+	tmp = *(unaligned_uint32_t *)&ctx->hash_key[offset >> 3];
+	val = rte_be_to_cpu_32(tmp);
 	val >>= (TOEPLITZ_HASH_LEN - ((offset & (CHAR_BIT - 1)) +
 		ctx->reta_sz_log));
 
@@ -540,6 +547,7 @@ insert_after(struct rte_thash_ctx *ctx,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_add_helper)
 int
 rte_thash_add_helper(struct rte_thash_ctx *ctx, const char *name, uint32_t len,
 	uint32_t offset)
@@ -630,6 +638,7 @@ rte_thash_add_helper(struct rte_thash_ctx *ctx, const char *name, uint32_t len,
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_get_helper)
 struct rte_thash_subtuple_helper *
 rte_thash_get_helper(struct rte_thash_ctx *ctx, const char *name)
 {
@@ -646,6 +655,7 @@ rte_thash_get_helper(struct rte_thash_ctx *ctx, const char *name)
 	return NULL;
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_get_complement)
 uint32_t
 rte_thash_get_complement(struct rte_thash_subtuple_helper *h,
 	uint32_t hash, uint32_t desired_hash)
@@ -653,12 +663,14 @@ rte_thash_get_complement(struct rte_thash_subtuple_helper *h,
 	return h->compl_table[(hash ^ desired_hash) & h->lsb_msk];
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_get_key)
 const uint8_t *
 rte_thash_get_key(struct rte_thash_ctx *ctx)
 {
 	return ctx->hash_key;
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_get_gfni_matrices)
 const uint64_t *
 rte_thash_get_gfni_matrices(struct rte_thash_ctx *ctx)
 {
@@ -754,6 +766,7 @@ write_unaligned_bits(uint8_t *ptr, int len, int offset, uint32_t val)
 	}
 }
 
+RTE_EXPORT_SYMBOL(rte_thash_adjust_tuple)
 int
 rte_thash_adjust_tuple(struct rte_thash_ctx *ctx,
 	struct rte_thash_subtuple_helper *h,
@@ -823,6 +836,7 @@ rte_thash_adjust_tuple(struct rte_thash_ctx *ctx,
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_thash_gen_key, 24.11)
 int
 rte_thash_gen_key(uint8_t *key, size_t key_len, size_t reta_sz_log,
 	uint32_t entropy_start, size_t entropy_sz)

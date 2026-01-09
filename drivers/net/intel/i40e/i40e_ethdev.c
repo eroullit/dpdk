@@ -256,7 +256,7 @@ static int i40e_dev_allmulticast_disable(struct rte_eth_dev *dev);
 static int i40e_dev_set_link_up(struct rte_eth_dev *dev);
 static int i40e_dev_set_link_down(struct rte_eth_dev *dev);
 static int i40e_dev_stats_get(struct rte_eth_dev *dev,
-			       struct rte_eth_stats *stats);
+			       struct rte_eth_stats *stats,	struct eth_queue_stats *qstats);
 static int i40e_dev_xstats_get(struct rte_eth_dev *dev,
 			       struct rte_eth_xstat *xstats, unsigned n);
 static int i40e_dev_xstats_get_names(struct rte_eth_dev *dev,
@@ -3474,7 +3474,8 @@ i40e_read_stats_registers(struct i40e_pf *pf, struct i40e_hw *hw)
 
 /* Get all statistics of a port */
 static int
-i40e_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+i40e_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		struct eth_queue_stats *qstats __rte_unused)
 {
 	struct i40e_pf *pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -4694,6 +4695,7 @@ out:
 enum i40e_status_code
 i40e_allocate_dma_mem_d(__rte_unused struct i40e_hw *hw,
 			struct i40e_dma_mem *mem,
+			__rte_unused enum i40e_memory_type mtype,
 			u64 size,
 			u32 alignment)
 {
@@ -5987,8 +5989,7 @@ i40e_vsi_setup(struct i40e_pf *pf,
 			PMD_DRV_LOG(ERR, "Failed to get VSI params");
 			goto fail_msix_alloc;
 		}
-		rte_memcpy(&vsi->info, &ctxt.info,
-			sizeof(struct i40e_aqc_vsi_properties_data));
+		vsi->info = ctxt.info;
 		vsi->vsi_id = ctxt.vsi_number;
 		vsi->info.valid_sections = 0;
 
@@ -6005,8 +6006,7 @@ i40e_vsi_setup(struct i40e_pf *pf,
 			rte_cpu_to_le_16(I40E_AQ_VSI_PROP_VLAN_VALID);
 		vsi->info.port_vlan_flags = I40E_AQ_VSI_PVLAN_MODE_ALL |
 					I40E_AQ_VSI_PVLAN_EMOD_STR_BOTH;
-		rte_memcpy(&ctxt.info, &vsi->info,
-			sizeof(struct i40e_aqc_vsi_properties_data));
+		ctxt.info = vsi->info;
 		ret = i40e_vsi_config_tc_queue_mapping(vsi, &ctxt.info,
 						I40E_DEFAULT_TCMAP);
 		if (ret != I40E_SUCCESS) {
@@ -6608,7 +6608,7 @@ i40e_dev_rx_init(struct i40e_pf *pf)
 	struct rte_eth_dev_data *data = pf->dev_data;
 	int ret = I40E_SUCCESS;
 	uint16_t i;
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 
 	i40e_pf_config_rss(pf);
 	for (i = 0; i < data->nb_rx_queues; i++) {
@@ -8973,7 +8973,7 @@ i40e_pf_calc_configured_queues_num(struct i40e_pf *pf)
 {
 	struct rte_eth_dev_data *data = pf->dev_data;
 	int i, num;
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 
 	num = 0;
 	for (i = 0; i < pf->lan_nb_qps; i++) {

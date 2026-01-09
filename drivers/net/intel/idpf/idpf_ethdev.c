@@ -13,6 +13,7 @@
 
 #include "idpf_ethdev.h"
 #include "idpf_rxtx.h"
+#include "../common/tx.h"
 
 #define IDPF_TX_SINGLE_Q	"tx_single"
 #define IDPF_RX_SINGLE_Q	"rx_single"
@@ -267,7 +268,8 @@ idpf_get_mbuf_alloc_failed_stats(struct rte_eth_dev *dev)
 }
 
 static int
-idpf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+idpf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		struct eth_queue_stats *qstats __rte_unused)
 {
 	struct idpf_vport *vport =
 		(struct idpf_vport *)dev->data->dev_private;
@@ -693,6 +695,8 @@ idpf_dev_configure(struct rte_eth_dev *dev)
 		(dev->data->mtu == 0) ? IDPF_DEFAULT_MTU : dev->data->mtu +
 		IDPF_ETH_OVERHEAD;
 
+	vport->adapter->rx_func_type = IDPF_RX_DEFAULT;
+
 	return 0;
 }
 
@@ -709,7 +713,7 @@ static int
 idpf_start_queues(struct rte_eth_dev *dev)
 {
 	struct idpf_rx_queue *rxq;
-	struct idpf_tx_queue *txq;
+	struct ci_tx_queue *txq;
 	int err = 0;
 	int i;
 
@@ -1312,6 +1316,7 @@ err:
 static const struct rte_pci_id pci_id_idpf_map[] = {
 	{ RTE_PCI_DEVICE(IDPF_INTEL_VENDOR_ID, IDPF_DEV_ID_PF) },
 	{ RTE_PCI_DEVICE(IDPF_INTEL_VENDOR_ID, IDPF_DEV_ID_SRIOV) },
+	{ IDPF_PCI_CLASS(IDPF_CLASS_NETWORK_ETHERNET_PROGIF) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 

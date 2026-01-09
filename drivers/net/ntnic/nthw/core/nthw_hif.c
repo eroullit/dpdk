@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -23,10 +22,7 @@ nthw_hif_t *nthw_hif_new(void)
 
 void nthw_hif_delete(nthw_hif_t *p)
 {
-	if (p) {
-		memset(p, 0, sizeof(nthw_hif_t));
-		free(p);
-	}
+	free(p);
 }
 
 int nthw_hif_init(nthw_hif_t *p, nthw_fpga_t *p_fpga, int n_instance)
@@ -79,8 +75,9 @@ int nthw_hif_init(nthw_hif_t *p, nthw_fpga_t *p_fpga, int n_instance)
 	NT_LOG(DBG, NTHW, "%s: HIF %d: %d-%d-%d-%d-%d", p_adapter_id_str, p->mn_instance,
 		p->mn_fpga_id_item, p->mn_fpga_id_prod, p->mn_fpga_id_ver,
 		p->mn_fpga_id_rev, p->mn_fpga_id_build_no);
-	NT_LOG(DBG, NTHW, "%s: HIF %d: HIF ref clock: %d Hz (%d ticks/ps)", p_adapter_id_str,
-		p->mn_instance, p->mn_fpga_hif_ref_clk_freq, p->mn_fpga_param_hif_per_ps);
+	NT_LOG(DBG, NTHW, "%s: HIF %d: HIF ref clock: %" PRIu32 " Hz (%d ticks/ps)",
+		p_adapter_id_str, p->mn_instance, p->mn_fpga_hif_ref_clk_freq,
+		p->mn_fpga_param_hif_per_ps);
 
 	p->mp_reg_build_seed = NULL;	/* Reg/Fld not present on HIF */
 	p->mp_fld_build_seed = NULL;	/* Reg/Fld not present on HIF */
@@ -219,96 +216,6 @@ int nthw_hif_trigger_sample_time(nthw_hif_t *p)
 	return 0;
 }
 
-int nthw_hif_get_stat(nthw_hif_t *p, uint32_t *p_rx_cnt, uint32_t *p_tx_cnt,
-	uint32_t *p_ref_clk_cnt, uint32_t *p_tg_unit_size, uint32_t *p_tg_ref_freq,
-	uint64_t *p_tags_in_use, uint64_t *p_rd_err, uint64_t *p_wr_err)
-{
-	*p_rx_cnt = nthw_field_get_updated(p->mp_fld_stat_rx_counter);
-	*p_tx_cnt = nthw_field_get_updated(p->mp_fld_stat_tx_counter);
-
-	*p_ref_clk_cnt = nthw_field_get_updated(p->mp_fld_stat_ref_clk_ref_clk);
-
-	*p_tg_unit_size = NTHW_TG_CNT_SIZE;
-	*p_tg_ref_freq = p->mn_fpga_hif_ref_clk_freq;
-
-	*p_tags_in_use = (p->mp_fld_status_tags_in_use
-			? nthw_field_get_updated(p->mp_fld_status_tags_in_use)
-			: 0);
-
-	*p_rd_err =
-		(p->mp_fld_status_rd_err ? nthw_field_get_updated(p->mp_fld_status_rd_err) : 0);
-	*p_wr_err =
-		(p->mp_fld_status_wr_err ? nthw_field_get_updated(p->mp_fld_status_wr_err) : 0);
-
-	return 0;
-}
-
-int nthw_hif_get_stat_rate(nthw_hif_t *p, uint64_t *p_pci_rx_rate, uint64_t *p_pci_tx_rate,
-	uint64_t *p_ref_clk_cnt, uint64_t *p_tags_in_use,
-	uint64_t *p_rd_err_cnt, uint64_t *p_wr_err_cnt)
-{
-	uint32_t rx_cnt, tx_cnt, ref_clk_cnt, tg_unit_size, tg_ref_freq;
-	uint64_t n_tags_in_use, n_rd_err, n_wr_err;
-
-	nthw_hif_get_stat(p, &rx_cnt, &tx_cnt, &ref_clk_cnt, &tg_unit_size, &tg_ref_freq,
-		&n_tags_in_use, &n_rd_err, &n_wr_err);
-
-	*p_tags_in_use = n_tags_in_use;
-
-	if (n_rd_err)
-		(*p_rd_err_cnt)++;
-
-	if (n_wr_err)
-		(*p_wr_err_cnt)++;
-
-	if (ref_clk_cnt) {
-		uint64_t rx_rate;
-		uint64_t tx_rate;
-
-		*p_ref_clk_cnt = ref_clk_cnt;
-
-		rx_rate = ((uint64_t)rx_cnt * tg_unit_size * tg_ref_freq) / (uint64_t)ref_clk_cnt;
-		*p_pci_rx_rate = rx_rate;
-
-		tx_rate = ((uint64_t)tx_cnt * tg_unit_size * tg_ref_freq) / (uint64_t)ref_clk_cnt;
-		*p_pci_tx_rate = tx_rate;
-
-	} else {
-		*p_pci_rx_rate = 0;
-		*p_pci_tx_rate = 0;
-		*p_ref_clk_cnt = 0;
-	}
-
-	return 0;
-}
-
-int nthw_hif_stat_req_enable(nthw_hif_t *p)
-{
-	nthw_field_set_all(p->mp_fld_stat_ctrl_ena);
-	nthw_field_set_all(p->mp_fld_stat_ctrl_req);
-	nthw_field_flush_register(p->mp_fld_stat_ctrl_req);
-	return 0;
-}
-
-int nthw_hif_stat_req_disable(nthw_hif_t *p)
-{
-	nthw_field_clr_all(p->mp_fld_stat_ctrl_ena);
-	nthw_field_set_all(p->mp_fld_stat_ctrl_req);
-	nthw_field_flush_register(p->mp_fld_stat_ctrl_req);
-	return 0;
-}
-
-int nthw_hif_end_point_counters_sample(nthw_hif_t *p, struct nthw_hif_end_point_counters *epc)
-{
-	assert(epc);
-
-	/* Get stat rate and maintain rx/tx min/max */
-	nthw_hif_get_stat_rate(p, &epc->cur_tx, &epc->cur_rx, &epc->n_ref_clk_cnt,
-		&epc->n_tags_in_use, &epc->n_rd_err, &epc->n_wr_err);
-
-	return 0;
-}
-
 int nthw_hif_read_test_reg(nthw_hif_t *p, uint8_t test_reg, uint32_t *p_value)
 {
 	uint32_t data;
@@ -341,7 +248,7 @@ int nthw_hif_read_test_reg(nthw_hif_t *p, uint8_t test_reg, uint32_t *p_value)
 		break;
 
 	default:
-		assert(false);
+		RTE_ASSERT(false);
 		return -1;
 	}
 
@@ -384,7 +291,7 @@ int nthw_hif_write_test_reg(nthw_hif_t *p, uint8_t test_reg, uint32_t value)
 		break;
 
 	default:
-		assert(false);
+		RTE_ASSERT(false);
 		return -1;
 	}
 

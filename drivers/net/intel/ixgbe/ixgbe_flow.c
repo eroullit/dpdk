@@ -1644,6 +1644,8 @@ ixgbe_parse_fdir_filter_normal(struct rte_eth_dev *dev,
 	memset(&rule->mask, 0xFF, sizeof(struct ixgbe_hw_fdir_mask));
 	rule->mask.vlan_tci_mask = 0;
 	rule->mask.flex_bytes_mask = 0;
+	rule->mask.dst_port_mask = 0;
+	rule->mask.src_port_mask = 0;
 
 	/**
 	 * The first not void item should be
@@ -2109,10 +2111,11 @@ ixgbe_parse_fdir_filter_normal(struct rte_eth_dev *dev,
 			return -rte_errno;
 		}
 
-		/* only x550 family only support sctp port */
+		/* only some mac types support sctp port */
 		if (hw->mac.type == ixgbe_mac_X550 ||
 		    hw->mac.type == ixgbe_mac_X550EM_x ||
-		    hw->mac.type == ixgbe_mac_X550EM_a) {
+		    hw->mac.type == ixgbe_mac_X550EM_a ||
+		    hw->mac.type == ixgbe_mac_E610) {
 			/**
 			 * Only care about src & dst ports,
 			 * others should be masked.
@@ -3142,9 +3145,7 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 		if (fdir_rule.b_mask) {
 			if (!fdir_info->mask_added) {
 				/* It's the first time the mask is set. */
-				rte_memcpy(&fdir_info->mask,
-					&fdir_rule.mask,
-					sizeof(struct ixgbe_hw_fdir_mask));
+				*&fdir_info->mask = *&fdir_rule.mask;
 
 				if (fdir_rule.mask.flex_bytes_mask) {
 					ret = ixgbe_fdir_set_flexbytes_offset(dev,

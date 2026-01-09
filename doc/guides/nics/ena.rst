@@ -32,6 +32,7 @@ Supported features
 * Watchdog (requires handling of timers in the application)
 * Device reset upon failure
 * Rx interrupts
+* Rx HW packet timestamping
 
 Overview
 --------
@@ -54,6 +55,9 @@ Receive-side scaling (RSS) is supported for multi-core scaling.
 
 Some of the ENA devices support a working mode called Low-latency
 Queue (LLQ), which saves several more microseconds.
+
+Rx hardware timestamping is available in the ENA driver
+on platforms that support this feature.
 
 Management Interface
 --------------------
@@ -136,11 +140,22 @@ Runtime Configuration
 
      0 - Disable (Admin queue will work in interrupt mode).
 
-     [1..1000] - Number of milliseconds to wait between periodic inspection of the admin queues.
+     [500..1000] - Time in milliseconds to wait between periodic checks of the admin queues.
+     If a value outside this range is specified, the driver will automatically adjust it
+     to fit within the valid range.
 
      **A non-zero value for this devarg is mandatory for control path functionality
      when binding ports to uio_pci_generic kernel module which lacks interrupt support.**
 
+   * **enable_frag_bypass** (default 0)
+
+     Enable fragment bypass mode for egress packets.
+     This mode bypasses the PPS limit enforced by EC2 for fragmented egress packets on every ENI.
+     Note that enabling it might negatively impact network performance.
+
+     0 - Disabled (Default).
+
+     1 - Enabled.
 
 ENA Configuration Parameters
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^

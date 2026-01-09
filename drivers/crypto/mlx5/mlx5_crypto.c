@@ -19,9 +19,7 @@
 #include "mlx5_crypto.h"
 
 #define MLX5_CRYPTO_DRIVER_NAME crypto_mlx5
-#define MLX5_CRYPTO_LOG_NAME pmd.crypto.mlx5
 #define MLX5_CRYPTO_MAX_QPS 128
-#define MLX5_CRYPTO_MAX_SEGS 56
 
 #define MLX5_CRYPTO_FEATURE_FLAGS(wrapped_mode) \
 	(RTE_CRYPTODEV_FF_SYMMETRIC_CRYPTO | RTE_CRYPTODEV_FF_HW_ACCELERATED | \
@@ -490,6 +488,14 @@ static const struct rte_pci_id mlx5_crypto_pci_id_map[] = {
 					PCI_DEVICE_ID_MELLANOX_CONNECTX8)
 		},
 		{
+			RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+					PCI_DEVICE_ID_MELLANOX_CONNECTX9)
+		},
+		{
+			RTE_PCI_DEVICE(PCI_VENDOR_ID_MELLANOX,
+					PCI_DEVICE_ID_MELLANOX_BLUEFIELD4)
+		},
+		{
 			.vendor_id = 0
 		}
 };
@@ -514,6 +520,6 @@ RTE_PMD_REGISTER_CRYPTO_DRIVER(mlx5_cryptodev_driver, mlx5_drv,
 			       mlx5_crypto_driver_id);
 
 RTE_LOG_REGISTER_DEFAULT(mlx5_crypto_logtype, NOTICE)
-RTE_PMD_EXPORT_NAME(MLX5_CRYPTO_DRIVER_NAME, __COUNTER__);
+RTE_PMD_EXPORT_NAME(MLX5_CRYPTO_DRIVER_NAME);
 RTE_PMD_REGISTER_PCI_TABLE(MLX5_CRYPTO_DRIVER_NAME, mlx5_crypto_pci_id_map);
 RTE_PMD_REGISTER_KMOD_DEP(MLX5_CRYPTO_DRIVER_NAME, "* ib_uverbs & mlx5_core & mlx5_ib");

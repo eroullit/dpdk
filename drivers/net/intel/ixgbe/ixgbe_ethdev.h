@@ -145,7 +145,7 @@
 #define MAC_TYPE_FILTER_SUP(type)    do {\
 	if ((type) != ixgbe_mac_82599EB && (type) != ixgbe_mac_X540 &&\
 		(type) != ixgbe_mac_X550 && (type) != ixgbe_mac_X550EM_x &&\
-		(type) != ixgbe_mac_X550EM_a)\
+		(type) != ixgbe_mac_X550EM_a && (type) != ixgbe_mac_E610)\
 		return -ENOTSUP;\
 } while (0)
 
@@ -523,6 +523,8 @@ struct ixgbe_vf_representor {
 
 int ixgbe_vf_representor_init(struct rte_eth_dev *ethdev, void *init_params);
 int ixgbe_vf_representor_uninit(struct rte_eth_dev *ethdev);
+uint16_t ixgbe_vf_representor_rx_burst(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts);
+uint16_t ixgbe_vf_representor_tx_burst(void *tx_queue, struct rte_mbuf **tx_pkts, uint16_t nb_pkts);
 
 #define IXGBE_DEV_FDIR_CONF(dev) \
 	(&((struct ixgbe_adapter *)(dev)->data->dev_private)->fdir_conf)
@@ -601,7 +603,7 @@ int  ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t tx_queue_id,
 		uint16_t nb_tx_desc, unsigned int socket_id,
 		const struct rte_eth_txconf *tx_conf);
 
-uint32_t ixgbe_dev_rx_queue_count(void *rx_queue);
+int ixgbe_dev_rx_queue_count(void *rx_queue);
 
 int ixgbe_dev_rx_descriptor_status(void *rx_queue, uint16_t offset);
 int ixgbe_dev_tx_descriptor_status(void *tx_queue, uint16_t offset);

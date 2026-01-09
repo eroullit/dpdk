@@ -118,24 +118,24 @@ struct nfp_net_rx_desc {
 	union {
 		/** Freelist descriptor. */
 		struct __rte_packed_begin {
-			uint16_t dma_addr_hi;  /**< High bits of buffer address. */
-			uint8_t spare;         /**< Reserved, must be zero. */
-			uint8_t dd;            /**< Whether descriptor available. */
-			uint32_t dma_addr_lo;  /**< Low bits of buffer address. */
+			rte_le16_t dma_addr_hi;  /**< High bits of buffer address. */
+			uint8_t spare;           /**< Reserved, must be zero. */
+			uint8_t dd;              /**< Whether descriptor available. */
+			rte_le32_t dma_addr_lo;  /**< Low bits of buffer address. */
 		} __rte_packed_end fld;
 
 		/** RX descriptor. */
 		struct __rte_packed_begin {
-			uint16_t data_len;     /**< Length of frame + metadata. */
+			rte_le16_t data_len;     /**< Length of frame + metadata. */
 			uint8_t reserved;      /**< Reserved, must be zero. */
 			uint8_t meta_len_dd;   /**< Length of metadata + done flag. */
 
-			uint16_t flags;        /**< RX flags. */
-			uint16_t offload_info; /**< Offloading info. */
+			rte_le16_t flags;        /**< RX flags. */
+			rte_le16_t offload_info; /**< Offloading info. */
 		} __rte_packed_end rxd;
 
 		/** Reserved. */
-		uint32_t vals[2];
+		rte_le32_t vals[2];
 	};
 };
 
@@ -220,7 +220,7 @@ nfp_net_mbuf_alloc_failed(struct nfp_net_rxq *rxq)
 void nfp_net_rx_cksum(struct nfp_net_rxq *rxq, struct nfp_net_rx_desc *rxd,
 		struct rte_mbuf *mb);
 int nfp_net_rx_freelist_setup(struct rte_eth_dev *dev);
-uint32_t nfp_net_rx_queue_count(void *rx_queue);
+int nfp_net_rx_queue_count(void *rx_queue);
 uint16_t nfp_net_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		uint16_t nb_pkts);
 void nfp_net_rx_queue_release(struct rte_eth_dev *dev, uint16_t queue_idx);

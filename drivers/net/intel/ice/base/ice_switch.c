@@ -2435,6 +2435,7 @@ ice_get_recp_frm_fw(struct ice_hw *hw, struct ice_sw_recipe *recps, u8 rid,
 		    bool *refresh_required)
 {
 	ice_declare_bitmap(result_bm, ICE_MAX_FV_WORDS);
+	struct ice_recp_grp_entry *rg, *tmprg_entry;
 	struct ice_aqc_recipe_data_elem *tmp;
 	u16 num_recps = ICE_MAX_NUM_RECIPES;
 	struct ice_prot_lkup_ext *lkup_exts;
@@ -2480,6 +2481,15 @@ ice_get_recp_frm_fw(struct ice_hw *hw, struct ice_sw_recipe *recps, u8 rid,
 	 * database.
 	 */
 	lkup_exts = &recps[rid].lkup_exts;
+
+	/* Remove duplicate entries */
+	LIST_FOR_EACH_ENTRY_SAFE(rg, tmprg_entry, &recps[rid].rg_list,
+	                         ice_recp_grp_entry, l_entry) {
+		if (rg->rid == rid) {
+			LIST_DEL(&rg->l_entry);
+			ice_free(hw, rg);
+		}
+	}
 
 	for (sub_recps = 0; sub_recps < num_recps; sub_recps++) {
 		struct ice_aqc_recipe_data_elem root_bufs = tmp[sub_recps];
@@ -4103,7 +4113,11 @@ ice_fill_sw_rule(struct ice_hw *hw, struct ice_fltr_info *f_info,
 		CPU_TO_LE16(ICE_AQC_SW_RULES_T_LKUP_TX);
 
 	/* Recipe set depending on lookup type */
-	s_rule->recipe_id = CPU_TO_LE16(f_info->lkup_type);
+	if (f_info->rid_override) {
+		s_rule->recipe_id = CPU_TO_LE16(f_info->rid);
+	} else {
+		s_rule->recipe_id = CPU_TO_LE16(f_info->lkup_type);
+	}
 	s_rule->src = CPU_TO_LE16(f_info->src);
 	s_rule->act = CPU_TO_LE32(act);
 
@@ -5112,11 +5126,12 @@ ice_aq_get_res_descs(struct ice_hw *hw, u16 num_entries,
 }
 
 /**
- * ice_add_mac_rule - Add a MAC address based filter rule
+ * ice_add_mac_rule_with_fltr_flag - Add a MAC address based filter rule
  * @hw: pointer to the hardware structure
  * @m_list: list of MAC addresses and forwarding information
  * @sw: pointer to switch info struct for which function add rule
  * @lport: logic port number on which function add rule
+ * @flag: filter flag
  *
  * IMPORTANT: When the umac_shared flag is set to false and m_list has
  * multiple unicast addresses, the function assumes that all the
@@ -5125,8 +5140,8 @@ ice_aq_get_res_descs(struct ice_hw *hw, u16 num_entries,
  * list should be taken care of in the caller of this function.
  */
 static int
-ice_add_mac_rule(struct ice_hw *hw, struct LIST_HEAD_TYPE *m_list,
-		 struct ice_switch_info *sw, u8 lport)
+ice_add_mac_rule_with_fltr_flag(struct ice_hw *hw, struct LIST_HEAD_TYPE *m_list,
+			struct ice_switch_info *sw, u8 lport, u16 flag)
 {
 	struct ice_sw_recipe *recp_list = &sw->recp_list[ICE_SW_LKUP_MAC];
 	struct ice_sw_rule_lkup_rx_tx *s_rule, *r_iter;
@@ -5148,7 +5163,7 @@ ice_add_mac_rule(struct ice_hw *hw, struct LIST_HEAD_TYPE *m_list,
 		u16 vsi_handle;
 		u16 hw_vsi_id;
 
-		m_list_itr->fltr_info.flag = ICE_FLTR_TX;
+		m_list_itr->fltr_info.flag = flag;
 		vsi_handle = m_list_itr->fltr_info.vsi_handle;
 		if (!ice_is_vsi_valid(hw, vsi_handle))
 			return ICE_ERR_PARAM;
@@ -5269,6 +5284,26 @@ ice_add_mac_exit:
 }
 
 /**
+ * ice_add_mac_rule - Add a MAC address based filter rule
+ * @hw: pointer to the hardware structure
+ * @m_list: list of MAC addresses and forwarding information
+ * @sw: pointer to switch info struct for which function add rule
+ * @lport: logic port number on which function add rule
+ *
+ * IMPORTANT: When the umac_shared flag is set to false and m_list has
+ * multiple unicast addresses, the function assumes that all the
+ * addresses are unique in a given add_mac call. It doesn't
+ * check for duplicates in this case, removing duplicates from a given
+ * list should be taken care of in the caller of this function.
+ */
+static int
+ice_add_mac_rule(struct ice_hw *hw, struct LIST_HEAD_TYPE *m_list,
+		 struct ice_switch_info *sw, u8 lport)
+{
+	return ice_add_mac_rule_with_fltr_flag(hw, m_list, sw, lport, ICE_FLTR_TX);
+}
+
+/**
  * ice_add_mac - Add a MAC address based filter rule
  * @hw: pointer to the hardware structure
  * @m_list: list of MAC addresses and forwarding information
@@ -5282,6 +5317,23 @@ int ice_add_mac(struct ice_hw *hw, struct LIST_HEAD_TYPE *m_list)
 
 	return ice_add_mac_rule(hw, m_list, hw->switch_info,
 				hw->port_info->lport);
+}
+
+/**
+ * ice_add_mac_with_fltr_flag - Add a MAC address based filter rule
+ * @hw: pointer to the hardware structure
+ * @m_list: list of MAC addresses and forwarding information
+ * @flag: filter flag
+ *
+ * Function add MAC rule for logical port from HW struct
+ */
+int ice_add_mac_with_fltr_flag(struct ice_hw *hw, struct LIST_HEAD_TYPE *m_list, u16 flag)
+{
+	if (!m_list || !hw)
+		return ICE_ERR_PARAM;
+
+	return ice_add_mac_rule_with_fltr_flag(hw, m_list, hw->switch_info,
+				hw->port_info->lport, flag);
 }
 
 /**
@@ -7887,6 +7939,20 @@ ice_add_special_words(struct ice_adv_rule_info *rinfo,
 	u16 mask;
 	u16 off;
 
+	/*
+	 * Failing to add direction metadata is not considered an error, because
+	 * the kinds of rules which would trigger this error are already so
+	 * highly specific that they're unlikely to match both Rx and Tx traffic
+	 * at the same time.
+	 */
+	if (lkup_exts->n_val_words < ICE_MAX_CHAIN_WORDS) {
+		u8 word = lkup_exts->n_val_words++;
+
+		lkup_exts->fv_words[word].prot_id = ICE_META_DATA_ID_HW;
+		lkup_exts->fv_words[word].off = ICE_TUN_FLAG_MDID_OFF(0);
+		lkup_exts->field_mask[word] = ICE_FROM_NETWORK_FLAG_MASK;
+	}
+
 	/* If this is a tunneled packet, then add recipe index to match the
 	 * tunnel bit in the packet metadata flags. If this is a tun_and_non_tun
 	 * packet, then add recipe index to match the direction bit in the flag.
@@ -8190,7 +8256,6 @@ ice_add_adv_recipe(struct ice_hw *hw, struct ice_adv_lkup_elem *lkups,
 	struct ice_sw_recipe *rm;
 	u8 i;
 	int status = ICE_SUCCESS;
-	u16 cnt;
 
 	if (!ice_is_prof_rule(rinfo->tun_type) && !lkups_cnt)
 		return ICE_ERR_PARAM;
@@ -8236,16 +8301,16 @@ ice_add_adv_recipe(struct ice_hw *hw, struct ice_adv_lkup_elem *lkups,
 	 */
 	ice_get_compat_fv_bitmap(hw, rinfo, fv_bitmap);
 
-	status = ice_get_sw_fv_list(hw, lkup_exts, fv_bitmap, &rm->fv_list);
-	if (status)
-		goto err_unroll;
-
 	/* Create any special protocol/offset pairs, such as looking at tunnel
 	 * bits by extracting metadata
 	 */
 	status = ice_add_special_words(rinfo, lkup_exts, ice_is_dvm_ena(hw));
 	if (status)
 		goto err_free_lkup_exts;
+
+	status = ice_get_sw_fv_list(hw, lkup_exts, fv_bitmap, &rm->fv_list);
+	if (status)
+		goto err_unroll;
 
 	/* Group match words into recipes using preferred recipe grouping
 	 * criteria.
@@ -9795,7 +9860,6 @@ ice_rem_adv_rule(struct ice_hw *hw, struct ice_adv_lkup_elem *lkups,
 	bool remove_rule = false;
 	struct ice_lock *rule_lock; /* Lock to protect filter rule list */
 	u16 i, rid, vsi_handle;
-	bool is_add = false;
 	int status = ICE_SUCCESS;
 
 	ice_memset(&lkup_exts, 0, sizeof(lkup_exts), ICE_NONDMA_MEM);

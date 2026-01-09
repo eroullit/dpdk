@@ -119,6 +119,7 @@ struct mlx5_hca_flex_attr {
 	uint8_t  sample_tunnel_inner2:1;
 	uint8_t  zero_size_supported:1;
 	uint8_t  sample_id_in_out:1;
+	uint8_t  header_length_field_mode_wa:1;
 	uint16_t max_base_header_length;
 	uint8_t  max_sample_base_offset;
 	uint16_t max_next_header_offset;
@@ -262,6 +263,8 @@ struct mlx5_hca_attr {
 	uint32_t mini_cqe_resp_l3_l4_tag:1;
 	uint32_t enhanced_cqe_compression:1;
 	uint32_t pkt_integrity_match:1; /* 1 if HW supports integrity item */
+	uint32_t fdb_to_vport_metadata:1; /* 1 if enabled */
+	uint32_t vport_to_fdb_metadata:1; /* 1 if enabled */
 	struct mlx5_hca_qos_attr qos;
 	struct mlx5_hca_vdpa_attr vdpa;
 	struct mlx5_hca_flow_attr flow;
@@ -327,6 +330,10 @@ struct mlx5_hca_attr {
 	uint32_t wqe_based_flow_table_sup:1;
 	uint32_t fdb_unified_en:1;
 	uint32_t jump_fdb_rx_en:1;
+	uint32_t fdb_rx_set_flow_tag_stc:1;
+	uint32_t return_reg_id:16;
+	uint32_t fdb_to_vport_reg_c:1;
+	uint8_t fdb_to_vport_reg_c_id;
 	uint8_t max_header_modify_pattern_length;
 	uint64_t system_image_guid;
 	uint32_t log_max_conn_track_offload:5;
@@ -483,6 +490,11 @@ struct mlx5_devx_create_sq_attr {
 	uint32_t packet_pacing_rate_limit_index:16;
 	uint32_t tis_lst_sz:16;
 	uint32_t tis_num:24;
+	uint32_t q_off;
+	void *umem;
+	void *umem_obj;
+	uint32_t q_len;
+	uint32_t db_off;
 	struct mlx5_devx_wq_attr wq_attr;
 };
 
@@ -514,6 +526,11 @@ struct mlx5_devx_cq_attr {
 	uint64_t db_umem_offset;
 	uint32_t eqn;
 	uint64_t db_addr;
+	void *umem;
+	void *umem_obj;
+	uint32_t q_off;
+	uint32_t q_len;
+	uint32_t db_off;
 };
 
 /* Virtq attributes structure, used by VIRTQ operations. */
@@ -632,6 +649,7 @@ struct mlx5_devx_graph_node_attr {
 	uint32_t header_length_base_value:16;
 	uint32_t header_length_field_shift:4;
 	uint32_t header_length_field_offset:16;
+	uint32_t header_length_field_offset_mode:1;
 	uint32_t header_length_field_mask;
 	struct mlx5_devx_match_sample_attr sample[MLX5_GRAPH_NODE_SAMPLE_NUM];
 	uint32_t next_header_field_offset:16;

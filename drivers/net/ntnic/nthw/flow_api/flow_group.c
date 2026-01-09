@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -25,22 +24,35 @@ struct group_handle_s {
 	struct group_lookup_entry_s *lookup_entries;
 };
 
-int flow_group_handle_create(void **handle, uint32_t group_count)
+int nthw_flow_group_handle_create(void **handle, uint32_t group_count)
 {
 	struct group_handle_s *group_handle;
 
 	*handle = calloc(1, sizeof(struct group_handle_s));
+	if (*handle == NULL)
+		return -1;
+
 	group_handle = *handle;
 
-	group_handle->group_count = group_count;
 	group_handle->translation_table =
 		calloc((uint32_t)(group_count * PORT_COUNT * OWNER_ID_COUNT), sizeof(uint32_t));
 	group_handle->lookup_entries = calloc(group_count, sizeof(struct group_lookup_entry_s));
 
-	return *handle != NULL ? 0 : -1;
+	if (group_handle->lookup_entries == NULL ||
+		group_handle->translation_table == NULL) {
+		free(group_handle->lookup_entries);
+		free(group_handle->translation_table);
+		free(*handle);
+		*handle = NULL;
+		return -1;
+	}
+
+	group_handle->group_count = group_count;
+
+	return 0;
 }
 
-int flow_group_handle_destroy(void **handle)
+int nthw_flow_group_handle_destroy(void **handle)
 {
 	if (*handle) {
 		struct group_handle_s *group_handle = (struct group_handle_s *)*handle;
@@ -55,8 +67,8 @@ int flow_group_handle_destroy(void **handle)
 	return 0;
 }
 
-int flow_group_translate_get(void *handle, uint8_t owner_id, uint8_t port_id, uint32_t group_in,
-	uint32_t *group_out)
+int nthw_flow_group_translate_get(void *handle, uint8_t owner_id, uint8_t port_id,
+	uint32_t group_in, uint32_t *group_out)
 {
 	struct group_handle_s *group_handle = (struct group_handle_s *)handle;
 	uint32_t *table_ptr;
@@ -100,7 +112,7 @@ int flow_group_translate_get(void *handle, uint8_t owner_id, uint8_t port_id, ui
 	return 0;
 }
 
-int flow_group_translate_get_orig_group(void *handle, uint32_t translated_group,
+int nthw_flow_group_translate_get_orig_group(void *handle, uint32_t translated_group,
 	uint32_t *group_orig)
 {
 	struct group_handle_s *group_handle = (struct group_handle_s *)handle;

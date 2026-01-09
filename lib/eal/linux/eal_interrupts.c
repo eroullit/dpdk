@@ -2,6 +2,8 @@
  * Copyright(c) 2010-2014 Intel Corporation
  */
 
+#include <uapi/linux/vfio.h>
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,6 +17,7 @@
 #include <assert.h>
 #include <stdbool.h>
 
+#include <eal_export.h>
 #include <eal_trace_internal.h>
 #include <rte_common.h>
 #include <rte_interrupts.h>
@@ -27,7 +30,6 @@
 #include <rte_errno.h>
 #include <rte_spinlock.h>
 #include <rte_pause.h>
-#include <rte_vfio.h>
 
 #include "eal_private.h"
 
@@ -56,9 +58,7 @@ union intr_pipefds{
  */
 union rte_intr_read_buffer {
 	int uio_intr_count;              /* for uio device */
-#ifdef VFIO_PRESENT
 	uint64_t vfio_intr_count;        /* for vfio device */
-#endif
 	uint64_t timerfd_num;            /* for timerfd */
 	char charbuf[16];                /* for others */
 };
@@ -94,8 +94,6 @@ static struct rte_intr_source_list intr_sources;
 static rte_thread_t intr_thread;
 
 /* VFIO interrupts */
-#ifdef VFIO_PRESENT
-
 #define IRQ_SET_BUF_LEN  (sizeof(struct vfio_irq_set) + sizeof(int))
 /* irq set buffer length for queue interrupts and LSC interrupt */
 #define MSIX_IRQ_SET_BUF_LEN (sizeof(struct vfio_irq_set) + \
@@ -339,7 +337,6 @@ vfio_disable_msix(const struct rte_intr_handle *intr_handle) {
 	return ret;
 }
 
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 /* enable req notifier */
 static int
 vfio_enable_req(const struct rte_intr_handle *intr_handle)
@@ -399,8 +396,6 @@ vfio_disable_req(const struct rte_intr_handle *intr_handle)
 
 	return ret;
 }
-#endif
-#endif
 
 static int
 uio_intx_intr_disable(const struct rte_intr_handle *intr_handle)
@@ -482,6 +477,7 @@ uio_intr_enable(const struct rte_intr_handle *intr_handle)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_intr_callback_register)
 int
 rte_intr_callback_register(const struct rte_intr_handle *intr_handle,
 			rte_intr_callback_fn cb, void *cb_arg)
@@ -566,6 +562,7 @@ rte_intr_callback_register(const struct rte_intr_handle *intr_handle,
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_intr_callback_unregister_pending)
 int
 rte_intr_callback_unregister_pending(const struct rte_intr_handle *intr_handle,
 				rte_intr_callback_fn cb_fn, void *cb_arg,
@@ -617,6 +614,7 @@ rte_intr_callback_unregister_pending(const struct rte_intr_handle *intr_handle,
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_intr_callback_unregister)
 int
 rte_intr_callback_unregister(const struct rte_intr_handle *intr_handle,
 			rte_intr_callback_fn cb_fn, void *cb_arg)
@@ -683,6 +681,7 @@ rte_intr_callback_unregister(const struct rte_intr_handle *intr_handle,
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_intr_callback_unregister_sync)
 int
 rte_intr_callback_unregister_sync(const struct rte_intr_handle *intr_handle,
 			rte_intr_callback_fn cb_fn, void *cb_arg)
@@ -695,6 +694,7 @@ rte_intr_callback_unregister_sync(const struct rte_intr_handle *intr_handle,
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_intr_enable)
 int
 rte_intr_enable(const struct rte_intr_handle *intr_handle)
 {
@@ -728,7 +728,6 @@ rte_intr_enable(const struct rte_intr_handle *intr_handle)
 	case RTE_INTR_HANDLE_ALARM:
 		rc = -1;
 		break;
-#ifdef VFIO_PRESENT
 	case RTE_INTR_HANDLE_VFIO_MSIX:
 		if (vfio_enable_msix(intr_handle))
 			rc = -1;
@@ -741,13 +740,10 @@ rte_intr_enable(const struct rte_intr_handle *intr_handle)
 		if (vfio_enable_intx(intr_handle))
 			rc = -1;
 		break;
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	case RTE_INTR_HANDLE_VFIO_REQ:
 		if (vfio_enable_req(intr_handle))
 			rc = -1;
 		break;
-#endif
-#endif
 	/* not used at this moment */
 	case RTE_INTR_HANDLE_DEV_EVENT:
 		rc = -1;
@@ -775,6 +771,7 @@ out:
  * auto-masked. In fact, for interrupt handle types VFIO_MSIX and VFIO_MSI,
  * this function is no-op.
  */
+RTE_EXPORT_SYMBOL(rte_intr_ack)
 int
 rte_intr_ack(const struct rte_intr_handle *intr_handle)
 {
@@ -800,7 +797,6 @@ rte_intr_ack(const struct rte_intr_handle *intr_handle)
 	/* not used at this moment */
 	case RTE_INTR_HANDLE_ALARM:
 		return -1;
-#ifdef VFIO_PRESENT
 	/* VFIO MSI* is implicitly acked unlike INTx, nothing to do */
 	case RTE_INTR_HANDLE_VFIO_MSIX:
 	case RTE_INTR_HANDLE_VFIO_MSI:
@@ -809,11 +805,8 @@ rte_intr_ack(const struct rte_intr_handle *intr_handle)
 		if (vfio_ack_intx(intr_handle))
 			return -1;
 		break;
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	case RTE_INTR_HANDLE_VFIO_REQ:
 		return -1;
-#endif
-#endif
 	/* not used at this moment */
 	case RTE_INTR_HANDLE_DEV_EVENT:
 		return -1;
@@ -827,6 +820,7 @@ rte_intr_ack(const struct rte_intr_handle *intr_handle)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_intr_disable)
 int
 rte_intr_disable(const struct rte_intr_handle *intr_handle)
 {
@@ -860,7 +854,6 @@ rte_intr_disable(const struct rte_intr_handle *intr_handle)
 	case RTE_INTR_HANDLE_ALARM:
 		rc = -1;
 		break;
-#ifdef VFIO_PRESENT
 	case RTE_INTR_HANDLE_VFIO_MSIX:
 		if (vfio_disable_msix(intr_handle))
 			rc = -1;
@@ -873,13 +866,10 @@ rte_intr_disable(const struct rte_intr_handle *intr_handle)
 		if (vfio_disable_intx(intr_handle))
 			rc = -1;
 		break;
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 	case RTE_INTR_HANDLE_VFIO_REQ:
 		if (vfio_disable_req(intr_handle))
 			rc = -1;
 		break;
-#endif
-#endif
 	/* not used at this moment */
 	case RTE_INTR_HANDLE_DEV_EVENT:
 		rc = -1;
@@ -940,16 +930,12 @@ eal_intr_process_interrupts(struct epoll_event *events, int nfds)
 		case RTE_INTR_HANDLE_ALARM:
 			bytes_read = sizeof(buf.timerfd_num);
 			break;
-#ifdef VFIO_PRESENT
-#ifdef HAVE_VFIO_DEV_REQ_INTERFACE
 		case RTE_INTR_HANDLE_VFIO_REQ:
-#endif
 		case RTE_INTR_HANDLE_VFIO_MSIX:
 		case RTE_INTR_HANDLE_VFIO_MSI:
 		case RTE_INTR_HANDLE_VFIO_LEGACY:
 			bytes_read = sizeof(buf.vfio_intr_count);
 			break;
-#endif
 		case RTE_INTR_HANDLE_VDEV:
 		case RTE_INTR_HANDLE_EXT:
 			bytes_read = 0;
@@ -1213,13 +1199,11 @@ eal_intr_proc_rxtx_intr(int fd, const struct rte_intr_handle *intr_handle)
 	case RTE_INTR_HANDLE_UIO_INTX:
 		bytes_read = sizeof(buf.uio_intr_count);
 		break;
-#ifdef VFIO_PRESENT
 	case RTE_INTR_HANDLE_VFIO_MSIX:
 	case RTE_INTR_HANDLE_VFIO_MSI:
 	case RTE_INTR_HANDLE_VFIO_LEGACY:
 		bytes_read = sizeof(buf.vfio_intr_count);
 		break;
-#endif
 	case RTE_INTR_HANDLE_VDEV:
 		bytes_read = rte_intr_efd_counter_size_get(intr_handle);
 		/* For vdev, number of bytes to read is set by driver */
@@ -1305,6 +1289,7 @@ eal_init_tls_epfd(void)
 	return pfd;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_tls_epfd)
 int
 rte_intr_tls_epfd(void)
 {
@@ -1377,6 +1362,7 @@ eal_epoll_wait(int epfd, struct rte_epoll_event *events,
 	return rc;
 }
 
+RTE_EXPORT_SYMBOL(rte_epoll_wait)
 int
 rte_epoll_wait(int epfd, struct rte_epoll_event *events,
 	       int maxevents, int timeout)
@@ -1384,6 +1370,7 @@ rte_epoll_wait(int epfd, struct rte_epoll_event *events,
 	return eal_epoll_wait(epfd, events, maxevents, timeout, false);
 }
 
+RTE_EXPORT_SYMBOL(rte_epoll_wait_interruptible)
 int
 rte_epoll_wait_interruptible(int epfd, struct rte_epoll_event *events,
 			     int maxevents, int timeout)
@@ -1408,6 +1395,7 @@ eal_epoll_data_safe_free(struct rte_epoll_event *ev)
 	ev->epfd = -1;
 }
 
+RTE_EXPORT_SYMBOL(rte_epoll_ctl)
 int
 rte_epoll_ctl(int epfd, int op, int fd,
 	      struct rte_epoll_event *event)
@@ -1449,6 +1437,7 @@ rte_epoll_ctl(int epfd, int op, int fd,
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_rx_ctl)
 int
 rte_intr_rx_ctl(struct rte_intr_handle *intr_handle, int epfd,
 		int op, unsigned int vec, void *data)
@@ -1514,6 +1503,7 @@ rte_intr_rx_ctl(struct rte_intr_handle *intr_handle, int epfd,
 	return rc;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_free_epoll_fd)
 void
 rte_intr_free_epoll_fd(struct rte_intr_handle *intr_handle)
 {
@@ -1532,6 +1522,7 @@ rte_intr_free_epoll_fd(struct rte_intr_handle *intr_handle)
 	}
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_efd_enable)
 int
 rte_intr_efd_enable(struct rte_intr_handle *intr_handle, uint32_t nb_efd)
 {
@@ -1579,6 +1570,7 @@ rte_intr_efd_enable(struct rte_intr_handle *intr_handle, uint32_t nb_efd)
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_efd_disable)
 void
 rte_intr_efd_disable(struct rte_intr_handle *intr_handle)
 {
@@ -1593,12 +1585,14 @@ rte_intr_efd_disable(struct rte_intr_handle *intr_handle)
 	rte_intr_max_intr_set(intr_handle, 0);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_dp_is_en)
 int
 rte_intr_dp_is_en(struct rte_intr_handle *intr_handle)
 {
 	return !(!rte_intr_nb_efd_get(intr_handle));
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_allow_others)
 int
 rte_intr_allow_others(struct rte_intr_handle *intr_handle)
 {
@@ -1609,6 +1603,7 @@ rte_intr_allow_others(struct rte_intr_handle *intr_handle)
 				rte_intr_nb_efd_get(intr_handle));
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_intr_cap_multiple)
 int
 rte_intr_cap_multiple(struct rte_intr_handle *intr_handle)
 {
@@ -1621,6 +1616,7 @@ rte_intr_cap_multiple(struct rte_intr_handle *intr_handle)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_thread_is_intr)
 int rte_thread_is_intr(void)
 {
 	return rte_thread_equal(intr_thread, rte_thread_self());

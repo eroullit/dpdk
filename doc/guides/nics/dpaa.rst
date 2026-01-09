@@ -254,7 +254,7 @@ for details.
 
    .. code-block:: console
 
-      ./<build_dir>/app/dpdk-testpmd -c 0xff -n 1 \
+      ./<build_dir>/app/dpdk-testpmd -l 0-7 -n 1 \
         -- -i --portmask=0x3 --nb-cores=1 --no-flush-rx
 
       .....
@@ -275,8 +275,9 @@ for details.
       Done
       testpmd>
 
-* Use dev arg option ``drv_ieee1588=1`` to enable IEEE 1588 support
-  at driver level, e.g. ``dpaa:fm1-mac3,drv_ieee1588=1``.
+* Use dev arg option ``recv_err_pkts=1`` to receive all packets including error packets
+  and thus disabling hardware based packet handling at driver level,
+  e.g. ``dpaa:fm1-mac3,recv_err_pkts=1``.
 
 FMAN Config
 -----------

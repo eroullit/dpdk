@@ -28,6 +28,7 @@
 #include <rte_malloc.h>
 #include <rte_memzone.h>
 #include <dev_driver.h>
+#include <eal_export.h>
 
 #include "iavf.h"
 #include "iavf_rxtx.h"
@@ -105,7 +106,7 @@ static int iavf_dev_info_get(struct rte_eth_dev *dev,
 static const uint32_t *iavf_dev_supported_ptypes_get(struct rte_eth_dev *dev,
 						     size_t *no_of_elements);
 static int iavf_dev_stats_get(struct rte_eth_dev *dev,
-			     struct rte_eth_stats *stats);
+			     struct rte_eth_stats *stats, struct eth_queue_stats *qstats);
 static int iavf_dev_stats_reset(struct rte_eth_dev *dev);
 static int iavf_dev_xstats_reset(struct rte_eth_dev *dev);
 static int iavf_dev_xstats_get(struct rte_eth_dev *dev,
@@ -239,6 +240,8 @@ static const struct eth_dev_ops iavf_eth_dev_ops = {
 	.rss_hash_conf_get          = iavf_dev_rss_hash_conf_get,
 	.rxq_info_get               = iavf_dev_rxq_info_get,
 	.txq_info_get               = iavf_dev_txq_info_get,
+	.rx_burst_mode_get          = iavf_rx_burst_mode_get,
+	.tx_burst_mode_get          = iavf_tx_burst_mode_get,
 	.mtu_set                    = iavf_dev_mtu_set,
 	.rx_queue_intr_enable       = iavf_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable      = iavf_dev_rx_queue_intr_disable,
@@ -620,7 +623,7 @@ iavf_dev_vlan_insert_set(struct rte_eth_dev *dev)
 		return 0;
 
 	enable = !!(dev->data->dev_conf.txmode.offloads &
-		    RTE_ETH_TX_OFFLOAD_VLAN_INSERT);
+		    (RTE_ETH_TX_OFFLOAD_VLAN_INSERT | RTE_ETH_TX_OFFLOAD_QINQ_INSERT));
 	iavf_config_vlan_insert_v2(adapter, enable);
 
 	return 0;
@@ -666,7 +669,6 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 	/* Initialize to TRUE. If any of Rx queues doesn't meet the
 	 * vector Rx/Tx preconditions, it will be reset.
 	 */
-	ad->rx_vec_allowed = true;
 	ad->tx_vec_allowed = true;
 
 	if (dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS_FLAG)
@@ -726,7 +728,7 @@ iavf_dev_configure(struct rte_eth_dev *dev)
 }
 
 static int
-iavf_init_rxq(struct rte_eth_dev *dev, struct iavf_rx_queue *rxq)
+iavf_init_rxq(struct rte_eth_dev *dev, struct ci_rx_queue *rxq)
 {
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct rte_eth_dev_data *dev_data = dev->data;
@@ -777,8 +779,7 @@ iavf_init_rxq(struct rte_eth_dev *dev, struct iavf_rx_queue *rxq)
 static int
 iavf_init_queues(struct rte_eth_dev *dev)
 {
-	struct iavf_rx_queue **rxq =
-		(struct iavf_rx_queue **)dev->data->rx_queues;
+	struct ci_rx_queue **rxq = (struct ci_rx_queue **)dev->data->rx_queues;
 	int i, ret = IAVF_SUCCESS;
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
@@ -953,7 +954,7 @@ qv_map_alloc_err:
 static int
 iavf_start_queues(struct rte_eth_dev *dev)
 {
-	struct iavf_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	struct ci_tx_queue *txq;
 	int i;
 	uint16_t nb_txq, nb_rxq;
@@ -1156,7 +1157,6 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	dev_info->tx_offload_capa =
 		RTE_ETH_TX_OFFLOAD_VLAN_INSERT |
-		RTE_ETH_TX_OFFLOAD_QINQ_INSERT |
 		RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |
 		RTE_ETH_TX_OFFLOAD_UDP_CKSUM |
 		RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
@@ -1179,6 +1179,11 @@ iavf_dev_info_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 
 	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_CAP_PTP)
 		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_TIMESTAMP;
+
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2 &&
+			vf->vlan_v2_caps.offloads.insertion_support.inner &&
+			vf->vlan_v2_caps.offloads.insertion_support.outer)
+		dev_info->tx_offload_capa |= RTE_ETH_TX_OFFLOAD_QINQ_INSERT;
 
 	if (iavf_ipsec_crypto_supported(adapter)) {
 		dev_info->rx_offload_capa |= RTE_ETH_RX_OFFLOAD_SECURITY;
@@ -1377,12 +1382,41 @@ iavf_dev_del_mac_addr(struct rte_eth_dev *dev, uint32_t index)
 }
 
 static int
+iavf_disable_vlan_strip_ex(struct rte_eth_dev *dev, int on)
+{
+	/* For i40e kernel drivers which supports both vlan(v1 & v2) VIRTCHNL OP,
+	 * it will set strip on when setting filter on but dpdk side will not
+	 * change strip flag. To be consistent with dpdk side, explicitly disable
+	 * strip again.
+	 *
+	 */
+	struct iavf_adapter *adapter =
+		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
+	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
+	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
+	int err;
+
+	if (adapter->hw.mac.type == IAVF_MAC_XL710 ||
+	    adapter->hw.mac.type == IAVF_MAC_VF ||
+	    adapter->hw.mac.type == IAVF_MAC_X722_VF) {
+		if (on && !(dev_conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)) {
+			if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN_V2)
+				err = iavf_config_vlan_strip_v2(adapter, false);
+			else
+				err = iavf_disable_vlan_strip(adapter);
+			if (err)
+				return -EIO;
+		}
+	}
+	return 0;
+}
+
+static int
 iavf_dev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 {
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(adapter);
-	struct rte_eth_conf *dev_conf = &dev->data->dev_conf;
 	int err;
 
 	if (adapter->closed)
@@ -1392,7 +1426,8 @@ iavf_dev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 		err = iavf_add_del_vlan_v2(adapter, vlan_id, on);
 		if (err)
 			return -EIO;
-		return 0;
+
+		return iavf_disable_vlan_strip_ex(dev, on);
 	}
 
 	if (!(vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_VLAN))
@@ -1402,23 +1437,7 @@ iavf_dev_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 	if (err)
 		return -EIO;
 
-	/* For i40e kernel driver which only supports vlan(v1) VIRTCHNL OP,
-	 * it will set strip on when setting filter on but dpdk side will not
-	 * change strip flag. To be consistent with dpdk side, disable strip
-	 * again.
-	 *
-	 * For i40e kernel driver which supports vlan v2, dpdk will invoke vlan v2
-	 * related function, so it won't go through here.
-	 */
-	if (adapter->hw.mac.type == IAVF_MAC_XL710 ||
-	    adapter->hw.mac.type == IAVF_MAC_X722_VF) {
-		if (on && !(dev_conf->rxmode.offloads & RTE_ETH_RX_OFFLOAD_VLAN_STRIP)) {
-			err = iavf_disable_vlan_strip(adapter);
-			if (err)
-				return -EIO;
-		}
-	}
-	return 0;
+	return iavf_disable_vlan_strip_ex(dev, on);
 }
 
 static void
@@ -1780,7 +1799,8 @@ iavf_update_stats(struct iavf_vsi *vsi, struct virtchnl_eth_stats *nes)
 }
 
 static int
-iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+iavf_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		struct eth_queue_stats *qstats __rte_unused)
 {
 	struct iavf_adapter *adapter =
 		IAVF_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
@@ -1865,10 +1885,10 @@ iavf_dev_update_ipsec_xstats(struct rte_eth_dev *ethdev,
 {
 	uint16_t idx;
 	for (idx = 0; idx < ethdev->data->nb_rx_queues; idx++) {
-		struct iavf_rx_queue *rxq;
+		struct ci_rx_queue *rxq;
 		struct iavf_ipsec_crypto_stats *stats;
-		rxq = (struct iavf_rx_queue *)ethdev->data->rx_queues[idx];
-		stats = &rxq->stats.ipsec_crypto;
+		rxq = (struct ci_rx_queue *)ethdev->data->rx_queues[idx];
+		stats = &rxq->stats->ipsec_crypto;
 		ips->icount += stats->icount;
 		ips->ibytes += stats->ibytes;
 		ips->ierrors.count += stats->ierrors.count;
@@ -2698,6 +2718,9 @@ void
 iavf_dev_alarm_handler(void *param)
 {
 	struct rte_eth_dev *dev = (struct rte_eth_dev *)param;
+	if (dev == NULL || dev->data == NULL || dev->data->dev_private == NULL)
+		return;
+
 	struct iavf_hw *hw = IAVF_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	uint32_t icr0;
 
@@ -2825,18 +2848,16 @@ iavf_dev_init(struct rte_eth_dev *eth_dev)
 			&eth_dev->data->mac_addrs[0]);
 
 
-	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR) {
-		/* register callback func to eal lib */
-		rte_intr_callback_register(pci_dev->intr_handle,
-					   iavf_dev_interrupt_handler,
-					   (void *)eth_dev);
+	if (vf->vf_res->vf_cap_flags & VIRTCHNL_VF_OFFLOAD_WB_ON_ITR &&
+			/* register callback func to eal lib */
+			rte_intr_callback_register(pci_dev->intr_handle,
+				   iavf_dev_interrupt_handler, (void *)eth_dev) == 0)
 
 		/* enable uio intr after callback register */
 		rte_intr_enable(pci_dev->intr_handle);
-	} else {
+	else
 		rte_eal_alarm_set(IAVF_ALARM_INTERVAL,
 				  iavf_dev_alarm_handler, eth_dev);
-	}
 
 	/* configure and enable device interrupt */
 	iavf_enable_irq0(hw);
@@ -3077,18 +3098,23 @@ iavf_is_reset_detected(struct iavf_adapter *adapter)
  * Handle hardware reset
  */
 void
-iavf_handle_hw_reset(struct rte_eth_dev *dev)
+iavf_handle_hw_reset(struct rte_eth_dev *dev, bool vf_initiated_reset)
 {
 	struct iavf_info *vf = IAVF_DEV_PRIVATE_TO_VF(dev->data->dev_private);
 	struct iavf_adapter *adapter = dev->data->dev_private;
 	int ret;
+	bool restart_device = false;
 
-	if (!dev->data->dev_started)
-		return;
+	if (vf_initiated_reset) {
+		restart_device = dev->data->dev_started;
+	} else {
+		if (!dev->data->dev_started)
+			return;
 
-	if (!iavf_is_reset_detected(adapter)) {
-		PMD_DRV_LOG(DEBUG, "reset not start");
-		return;
+		if (!iavf_is_reset_detected(adapter)) {
+			PMD_DRV_LOG(DEBUG, "reset not start");
+			return;
+		}
 	}
 
 	vf->in_reset_recovery = true;
@@ -3105,12 +3131,14 @@ iavf_handle_hw_reset(struct rte_eth_dev *dev)
 
 	iavf_dev_xstats_reset(dev);
 
-	/* start the device */
-	ret = iavf_dev_start(dev);
-	if (ret)
-		goto error;
+	if (!vf_initiated_reset || restart_device) {
+		/* start the device */
+		ret = iavf_dev_start(dev);
+		if (ret)
+			goto error;
 
-	dev->data->dev_started = 1;
+		dev->data->dev_started = 1;
+	}
 	goto exit;
 
 error:
@@ -3120,6 +3148,39 @@ exit:
 	iavf_set_no_poll(adapter, false);
 
 	return;
+}
+
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_pmd_iavf_reinit, 25.11)
+int
+rte_pmd_iavf_reinit(uint16_t port)
+{
+	struct rte_eth_dev *dev;
+	struct iavf_adapter *adapter;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+
+	if (!is_iavf_supported(dev)) {
+		PMD_DRV_LOG(ERR, "Cannot reinit VF, port %u is not an IAVF device.", port);
+		return -ENOTSUP;
+	}
+
+	if (!dev->data->dev_configured) {
+		PMD_DRV_LOG(ERR, "Cannot reinit unconfigured port %u.", port);
+		return -EINVAL;
+	}
+
+	adapter = dev->data->dev_private;
+	if (dev->data->dev_started && !adapter->devargs.no_poll_on_link_down) {
+		PMD_DRV_LOG(ERR, "Cannot reinit started port %u. Either stop the port or enable "
+				"no-poll-on-link-down in devargs.", port);
+		return -EINVAL;
+	}
+
+	iavf_handle_hw_reset(dev, true);
+
+	return 0;
 }
 
 void
@@ -3192,6 +3253,11 @@ static struct rte_pci_driver rte_iavf_pmd = {
 	.probe = eth_iavf_pci_probe,
 	.remove = eth_iavf_pci_remove,
 };
+
+bool is_iavf_supported(struct rte_eth_dev *dev)
+{
+	return !strcmp(dev->device->driver->name, rte_iavf_pmd.driver.name);
+}
 
 RTE_PMD_REGISTER_PCI(net_iavf, rte_iavf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_iavf, pci_id_iavf_map);

@@ -154,6 +154,8 @@ enum {
 	PCI_DEVICE_ID_MELLANOX_CONNECTX7 = 0x1021,
 	PCI_DEVICE_ID_MELLANOX_BLUEFIELD3 = 0Xa2dc,
 	PCI_DEVICE_ID_MELLANOX_CONNECTX8 = 0x1023,
+	PCI_DEVICE_ID_MELLANOX_CONNECTX9 = 0x1025,
+	PCI_DEVICE_ID_MELLANOX_BLUEFIELD4 = 0xa2df,
 };
 
 /* Maximum number of simultaneous unicast MAC addresses. */
@@ -185,6 +187,7 @@ struct mlx5_dev_info {
 	uint32_t ibindex;
 	char ibname[MLX5_FS_NAME_MAX];
 	uint8_t probe_opt;
+	uint8_t async_mon_ready;
 	struct mlx5_port_nl_info *port_info;
 };
 
@@ -574,9 +577,6 @@ typedef int (mlx5_class_driver_probe_t)(struct mlx5_common_device *cdev,
  */
 typedef int (mlx5_class_driver_remove_t)(struct mlx5_common_device *cdev);
 
-/** Device already probed can be probed again to check for new ports. */
-#define MLX5_DRV_PROBE_AGAIN 0x0004
-
 /**
  * A structure describing a mlx5 common class driver.
  */
@@ -650,6 +650,10 @@ void
 mlx5_devx_uar_release(struct mlx5_uar *uar);
 
 /* mlx5_common_os.c */
+
+__rte_internal
+void *
+mlx5_os_get_physical_device_ctx(struct mlx5_common_device *cdev);
 
 int mlx5_os_open_device(struct mlx5_common_device *cdev, uint32_t classes);
 int mlx5_os_pd_prepare(struct mlx5_common_device *cdev);

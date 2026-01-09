@@ -445,7 +445,7 @@ for details.
 
    .. code-block:: console
 
-      ./dpdk-testpmd -c 0xff -n 1 -- -i --portmask=0x3 --nb-cores=1 --no-flush-rx
+      ./dpdk-testpmd -l 0-7 -n 1 -- -i --portmask=0x3 --nb-cores=1 --no-flush-rx
 
       .....
       EAL: Registered [pci] bus.
@@ -481,6 +481,10 @@ for details.
 * Use dev arg option  ``drv_tx_conf=1`` to enable TX confirmation mode.
   In this mode tx conf queues need to be polled to free the buffers.
   e.g. ``fslmc:dpni.1,drv_tx_conf=1``
+
+* Use dev arg option ``drv_rx_parse_drop=1`` to configure the system
+  to start dropping the error packets in hardware (parse errors).
+  e.g. ``fslmc:dpni.1,drv_rx_parse_drop=1``
 
 * Use dev arg option  ``drv_error_queue=1`` to enable Packets in Error queue.
   DPAA2 hardware drops the error packet in hardware. This option enables the
@@ -607,7 +611,7 @@ For a detailed usage description please refer to "Traffic Management" section in
 
    .. code-block:: console
 
-	./dpdk-testpmd  -c 0xf -n 1 -- -i --portmask 0x3 --nb-cores=1 --txq=4 --rxq=4
+	./dpdk-testpmd  -l 0-3 -n 1 -- -i --portmask 0x3 --nb-cores=1 --txq=4 --rxq=4
 
 #. Stop all ports:
 

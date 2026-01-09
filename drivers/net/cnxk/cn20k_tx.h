@@ -48,22 +48,24 @@
 
 #define NIX_XMIT_FC_OR_RETURN_MTS(txq, pkts)                                                       \
 	do {                                                                                       \
-		int64_t *fc_cache = &(txq)->fc_cache_pkts;                                         \
+		int64_t __rte_atomic *fc_cache = &(txq)->fc_cache_pkts;                            \
 		uint8_t retry_count = 8;                                                           \
 		int64_t val, newval;                                                               \
 	retry:                                                                                     \
 		/* Reduce the cached count */                                                      \
-		val = (int64_t)__atomic_fetch_sub(fc_cache, pkts, __ATOMIC_RELAXED);               \
+		val = (int64_t)rte_atomic_fetch_sub_explicit(fc_cache, pkts,                       \
+							     rte_memory_order_relaxed);            \
 		val -= pkts;                                                                       \
 		/* Cached value is low, Update the fc_cache_pkts */                                \
 		if (unlikely(val < 0)) {                                                           \
 			/* Multiply with sqe_per_sqb to express in pkts */                         \
 			newval = txq->nb_sqb_bufs_adj -                                            \
-				 __atomic_load_n(txq->fc_mem, __ATOMIC_RELAXED);                   \
+				 rte_atomic_load_explicit(txq->fc_mem, rte_memory_order_relaxed);  \
 			newval = (newval << (txq)->sqes_per_sqb_log2) - newval;                    \
 			newval -= pkts;                                                            \
-			if (!__atomic_compare_exchange_n(fc_cache, &val, newval, false,            \
-							 __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {    \
+			if (!rte_atomic_compare_exchange_strong_explicit(                          \
+				    fc_cache, &val, newval, rte_memory_order_relaxed,              \
+				    rte_memory_order_relaxed)) {                                   \
 				if (retry_count) {                                                 \
 					retry_count--;                                             \
 					goto retry;                                                \
@@ -162,10 +164,11 @@ retry:
 		     : "memory");
 #else
 	RTE_SET_USED(pkts);
-	while (__atomic_load_n(&txq->fc_cache_pkts, __ATOMIC_RELAXED) < 0)
+	while (rte_atomic_load_explicit(&txq->fc_cache_pkts, rte_memory_order_relaxed) < 0)
 		;
 #endif
-	cached = __atomic_fetch_sub(&txq->fc_cache_pkts, req, __ATOMIC_ACQUIRE) - req;
+	cached = rte_atomic_fetch_sub_explicit(&txq->fc_cache_pkts, req, rte_memory_order_acquire) -
+		 req;
 	/* Check if there is enough space, else update and retry. */
 	if (cached >= 0)
 		return;
@@ -198,13 +201,15 @@ retry:
 		     : "memory");
 #else
 	do {
-		refill = (txq->nb_sqb_bufs_adj - __atomic_load_n(txq->fc_mem, __ATOMIC_RELAXED));
+		refill = (txq->nb_sqb_bufs_adj -
+			  rte_atomic_load_explicit(txq->fc_mem, rte_memory_order_relaxed));
 		refill = (refill << txq->sqes_per_sqb_log2) - refill;
 		refill -= req;
 	} while (refill < 0);
 #endif
-	if (!__atomic_compare_exchange(&txq->fc_cache_pkts, &cached, &refill, 0, __ATOMIC_RELEASE,
-				       __ATOMIC_RELAXED))
+	if (!rte_atomic_compare_exchange_strong_explicit(&txq->fc_cache_pkts, &cached, refill,
+							 rte_memory_order_release,
+							 rte_memory_order_relaxed))
 		goto retry;
 }
 
@@ -354,7 +359,7 @@ cn20k_nix_sec_fc_wait_one(struct cn20k_eth_txq *txq)
 		     : "memory");
 #else
 	RTE_SET_USED(fc);
-	while (nb_desc <= __atomic_load_n(txq->cpt_fc, __ATOMIC_RELAXED))
+	while (nb_desc <= rte_atomic_load_explicit(txq->cpt_fc, rte_memory_order_relaxed))
 		;
 #endif
 }
@@ -363,8 +368,8 @@ static __rte_always_inline void
 cn20k_nix_sec_fc_wait(struct cn20k_eth_txq *txq, uint16_t nb_pkts)
 {
 	int32_t nb_desc, val, newval;
-	int32_t *fc_sw;
-	uint64_t *fc;
+	int32_t __rte_atomic *fc_sw;
+	uint64_t __rte_atomic *fc;
 
 	/* Check if there is any CPT instruction to submit */
 	if (!nb_pkts)
@@ -386,11 +391,11 @@ again:
 		     : "memory");
 #else
 	/* Wait for primary core to refill FC. */
-	while (__atomic_load_n(fc_sw, __ATOMIC_RELAXED) < 0)
+	while (rte_atomic_load_explicit(fc_sw, rte_memory_order_relaxed) < 0)
 		;
 #endif
 
-	val = __atomic_fetch_sub(fc_sw, nb_pkts, __ATOMIC_ACQUIRE) - nb_pkts;
+	val = rte_atomic_fetch_sub_explicit(fc_sw, nb_pkts, rte_memory_order_acquire) - nb_pkts;
 	if (likely(val >= 0))
 		return;
 
@@ -416,15 +421,16 @@ again:
 		     : "memory");
 #else
 	while (true) {
-		newval = nb_desc - __atomic_load_n(fc, __ATOMIC_RELAXED);
+		newval = nb_desc - rte_atomic_load_explicit(fc, rte_memory_order_relaxed);
 		newval -= nb_pkts;
 		if (newval >= 0)
 			break;
 	}
 #endif
 
-	if (!__atomic_compare_exchange_n(fc_sw, &val, newval, false, __ATOMIC_RELEASE,
-					 __ATOMIC_RELAXED))
+	if (!rte_atomic_compare_exchange_strong_explicit(fc_sw, &val, newval,
+							 rte_memory_order_release,
+							 rte_memory_order_relaxed))
 		goto again;
 }
 
@@ -438,14 +444,15 @@ cn20k_nix_prep_sec_vec(struct rte_mbuf *m, uint64x2_t *cmd0, uint64x2_t *cmd1,
 	uint32_t pkt_len, dlen_adj, rlen;
 	uint8_t l3l4type, chksum;
 	uint64x2_t cmd01, cmd23;
+	uint64_t sa, cpt_cq_ena;
 	uint8_t l2_len, l3_len;
 	uintptr_t dptr, nixtx;
 	uint64_t ucode_cmd[4];
 	uint64_t *laddr, w0;
 	uint16_t tag;
-	uint64_t sa;
 
 	sess_priv.u64 = *rte_security_dynfield(m);
+	cpt_cq_ena = sess_priv.cpt_cq_ena;
 
 	if (flags & NIX_TX_NEED_SEND_HDR_W1) {
 		/* Extract l3l4type either from il3il4type or ol3ol4type */
@@ -524,7 +531,7 @@ cn20k_nix_prep_sec_vec(struct rte_mbuf *m, uint64x2_t *cmd0, uint64x2_t *cmd1,
 	cmd01 = vdupq_n_u64(0);
 	cmd01 = vsetq_lane_u64(w0, cmd01, 0);
 	/* CPT_RES_S is 16B above NIXTX */
-	cmd01 = vsetq_lane_u64(nixtx - 16, cmd01, 1);
+	cmd01 = vsetq_lane_u64((nixtx - 16) | cpt_cq_ena << 63, cmd01, 1);
 
 	/* Return nixtx addr */
 	*nixtx_addr = nixtx;
@@ -571,15 +578,16 @@ cn20k_nix_prep_sec(struct rte_mbuf *m, uint64_t *cmd, uintptr_t *nixtx_addr, uin
 	uint8_t l3l4type, chksum;
 	uint64x2_t cmd01, cmd23;
 	union nix_send_sg_s *sg;
+	uint64_t sa, cpt_cq_ena;
 	uint8_t l2_len, l3_len;
 	uintptr_t dptr, nixtx;
 	uint64_t ucode_cmd[4];
 	uint64_t *laddr, w0;
 	uint16_t tag;
-	uint64_t sa;
 
 	/* Move to our line from base */
 	sess_priv.u64 = *rte_security_dynfield(m);
+	cpt_cq_ena = sess_priv.cpt_cq_ena;
 	send_hdr = (struct nix_send_hdr_s *)cmd;
 	if (flags & NIX_TX_NEED_EXT_HDR)
 		sg = (union nix_send_sg_s *)&cmd[4];
@@ -662,7 +670,8 @@ cn20k_nix_prep_sec(struct rte_mbuf *m, uint64_t *cmd, uintptr_t *nixtx_addr, uin
 	cmd01 = vdupq_n_u64(0);
 	cmd01 = vsetq_lane_u64(w0, cmd01, 0);
 	/* CPT_RES_S is 16B above NIXTX */
-	cmd01 = vsetq_lane_u64(nixtx - 16, cmd01, 1);
+	/* CQ_ENA for cpt */
+	cmd01 = vsetq_lane_u64((nixtx - 16) | cpt_cq_ena << 63, cmd01, 1);
 
 	/* Return nixtx addr */
 	*nixtx_addr = nixtx;
@@ -747,7 +756,8 @@ cn20k_nix_prefree_seg(struct rte_mbuf *m, struct rte_mbuf **extm, struct cn20k_e
 			m->next = prev;
 			txq->tx_compl.ptr[sqe_id] = m;
 		} else {
-			sqe_id = __atomic_fetch_add(&txq->tx_compl.sqe_id, 1, __ATOMIC_RELAXED);
+			sqe_id = rte_atomic_fetch_add_explicit(&txq->tx_compl.sqe_id, 1,
+							       rte_memory_order_relaxed);
 			send_hdr->w0.pnc = 1;
 			send_hdr->w1.sqe_id = sqe_id & txq->tx_compl.nb_desc_mask;
 			txq->tx_compl.ptr[send_hdr->w1.sqe_id] = m;

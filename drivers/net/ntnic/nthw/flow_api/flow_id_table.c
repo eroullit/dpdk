@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2024 Napatech A/S
  */
 
@@ -64,7 +63,7 @@ static inline uint32_t ntnic_id_table_array_pop_free_id(struct ntnic_id_table_da
 	return id;
 }
 
-void *ntnic_id_table_create(void)
+void *nthw_id_table_create(void)
 {
 	struct ntnic_id_table_data *handle = calloc(1, sizeof(struct ntnic_id_table_data));
 
@@ -74,7 +73,7 @@ void *ntnic_id_table_create(void)
 	return handle;
 }
 
-void ntnic_id_table_destroy(void *id_table)
+void nthw_id_table_destroy(void *id_table)
 {
 	struct ntnic_id_table_data *handle = id_table;
 
@@ -84,7 +83,7 @@ void ntnic_id_table_destroy(void *id_table)
 	free(id_table);
 }
 
-uint32_t ntnic_id_table_get_id(void *id_table, union flm_handles flm_h, uint8_t caller_id,
+uint32_t nthw_id_table_get_id(void *id_table, union flm_handles flm_h, uint8_t caller_id,
 	uint8_t type)
 {
 	struct ntnic_id_table_data *handle = id_table;
@@ -99,14 +98,14 @@ uint32_t ntnic_id_table_get_id(void *id_table, union flm_handles flm_h, uint8_t 
 	struct ntnic_id_table_element *element = ntnic_id_table_array_find_element(handle, new_id);
 	element->caller_id = caller_id;
 	element->type = type;
-	memcpy(&element->handle, &flm_h, sizeof(union flm_handles));
+	element->handle = flm_h;
 
 	rte_spinlock_unlock(&handle->mtx);
 
 	return new_id;
 }
 
-void ntnic_id_table_free_id(void *id_table, uint32_t id)
+void nthw_id_table_free_id(void *id_table, uint32_t id)
 {
 	struct ntnic_id_table_data *handle = id_table;
 
@@ -114,7 +113,8 @@ void ntnic_id_table_free_id(void *id_table, uint32_t id)
 
 	struct ntnic_id_table_element *current_element =
 		ntnic_id_table_array_find_element(handle, id);
-	memset(current_element, 0, sizeof(struct ntnic_id_table_element));
+	if (current_element)
+		memset(current_element, 0, sizeof(struct ntnic_id_table_element));
 
 	struct ntnic_id_table_element *element =
 		ntnic_id_table_array_find_element(handle, handle->free_head);
@@ -128,7 +128,7 @@ void ntnic_id_table_free_id(void *id_table, uint32_t id)
 	rte_spinlock_unlock(&handle->mtx);
 }
 
-void ntnic_id_table_find(void *id_table, uint32_t id, union flm_handles *flm_h, uint8_t *caller_id,
+void nthw_id_table_find(void *id_table, uint32_t id, union flm_handles *flm_h, uint8_t *caller_id,
 	uint8_t *type)
 {
 	struct ntnic_id_table_data *handle = id_table;
@@ -139,7 +139,7 @@ void ntnic_id_table_find(void *id_table, uint32_t id, union flm_handles *flm_h, 
 
 	*caller_id = element->caller_id;
 	*type = element->type;
-	memcpy(flm_h, &element->handle, sizeof(union flm_handles));
+	*flm_h = element->handle;
 
 	rte_spinlock_unlock(&handle->mtx);
 }

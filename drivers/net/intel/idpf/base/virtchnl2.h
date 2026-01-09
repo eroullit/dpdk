@@ -265,8 +265,6 @@ enum virtchnl2_cap_other {
 	 * if a reserved bit is set in a standard completion's tag.
 	 */
 	VIRTCHNL2_CAP_MISS_COMPL_TAG		= BIT_ULL(20),
-	/* This must be the last capability */
-	VIRTCHNL2_CAP_OEM			= BIT_ULL(63),
 };
 
 /**
@@ -1026,7 +1024,8 @@ struct virtchnl2_add_queues {
 	__le16 num_tx_complq;
 	__le16 num_rx_q;
 	__le16 num_rx_bufq;
-	u8 pad[4];
+	u8 mbx_q_index;
+	u8 pad[3];
 
 	struct virtchnl2_queue_reg_chunks chunks;
 };

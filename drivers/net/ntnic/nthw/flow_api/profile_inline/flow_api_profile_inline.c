@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -94,7 +93,7 @@ static void *flm_lrn_queue_arr;
 
 static int flow_mtr_supported(struct flow_eth_dev *dev)
 {
-	return hw_mod_flm_present(&dev->ndev->be) && dev->ndev->be.flm.nb_variant == 2;
+	return nthw_mod_flm_present(&dev->ndev->be) && dev->ndev->be.flm.nb_variant == 2;
 }
 
 static uint64_t flow_mtr_meter_policy_n_max(void)
@@ -114,7 +113,7 @@ static inline uint64_t convert_policing_parameter(uint64_t value)
 	}
 
 	if (shift != 0) {
-		uint64_t tmp = POLICING_PARAMETER_OFFSET * (1 << (shift - 1));
+		uint64_t tmp = POLICING_PARAMETER_OFFSET * (1ULL << (shift - 1ULL));
 
 		if (tmp > value) {
 			res = 0;
@@ -194,13 +193,13 @@ static int flow_mtr_create_meter(struct flow_eth_dev *dev,
 
 	learn_record =
 		(struct flm_v25_lrn_data_s *)
-			flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+			nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 
 	while (learn_record == NULL) {
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 		learn_record =
 			(struct flm_v25_lrn_data_s *)
-				flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+				nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 	}
 
 	struct flm_flow_mtr_handle_s *handle = dev->ndev->flm_mtr_handle;
@@ -211,7 +210,7 @@ static int flow_mtr_create_meter(struct flow_eth_dev *dev,
 
 	union flm_handles flm_h;
 	flm_h.idx = mtr_id;
-	uint32_t flm_id = ntnic_id_table_get_id(dev->ndev->id_table_handle, flm_h, caller_id, 2);
+	uint32_t flm_id = nthw_id_table_get_id(dev->ndev->id_table_handle, flm_h, caller_id, 2);
 
 	learn_record->sw9 = flm_id;
 	learn_record->kid = 1;
@@ -232,7 +231,7 @@ static int flow_mtr_create_meter(struct flow_eth_dev *dev,
 	if (stats_mask)
 		learn_record->vol_idx = 1;
 
-	flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
+	nthw_flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
 
 	struct flm_mtr_stat_s *mtr_stat = handle->port_stats[caller_id]->stats;
 	mtr_stat[mtr_id].buckets = buckets;
@@ -252,13 +251,13 @@ static int flow_mtr_probe_meter(struct flow_eth_dev *dev, uint8_t caller_id, uin
 
 	learn_record =
 		(struct flm_v25_lrn_data_s *)
-			flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+			nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 
 	while (learn_record == NULL) {
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 		learn_record =
 			(struct flm_v25_lrn_data_s *)
-				flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+				nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 	}
 
 	struct flm_flow_mtr_handle_s *handle = dev->ndev->flm_mtr_handle;
@@ -277,7 +276,7 @@ static int flow_mtr_probe_meter(struct flow_eth_dev *dev, uint8_t caller_id, uin
 
 	learn_record->id = flm_id;
 
-	flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
+	nthw_flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
 
 	rte_spinlock_unlock(&dev->ndev->mtx);
 
@@ -292,13 +291,13 @@ static int flow_mtr_destroy_meter(struct flow_eth_dev *dev, uint8_t caller_id, u
 
 	learn_record =
 		(struct flm_v25_lrn_data_s *)
-			flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+			nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 
 	while (learn_record == NULL) {
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 		learn_record =
 			(struct flm_v25_lrn_data_s *)
-				flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+				nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 	}
 
 	struct flm_flow_mtr_handle_s *handle = dev->ndev->flm_mtr_handle;
@@ -327,9 +326,9 @@ static int flow_mtr_destroy_meter(struct flow_eth_dev *dev, uint8_t caller_id, u
 	mtr_stat[mtr_id].n_pkt_base = 0;
 	mtr_stat[mtr_id].buckets = NULL;
 
-	ntnic_id_table_free_id(dev->ndev->id_table_handle, flm_id);
+	nthw_id_table_free_id(dev->ndev->id_table_handle, flm_id);
 
-	flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
+	nthw_flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
 
 	rte_spinlock_unlock(&dev->ndev->mtx);
 
@@ -345,13 +344,13 @@ static int flm_mtr_adjust_stats(struct flow_eth_dev *dev, uint8_t caller_id, uin
 
 	learn_record =
 		(struct flm_v25_lrn_data_s *)
-			flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+			nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 
 	while (learn_record == NULL) {
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 		learn_record =
 			(struct flm_v25_lrn_data_s *)
-				flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+				nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 	}
 
 	struct flm_flow_mtr_handle_s *handle = dev->ndev->flm_mtr_handle;
@@ -376,7 +375,7 @@ static int flm_mtr_adjust_stats(struct flow_eth_dev *dev, uint8_t caller_id, uin
 	if (atomic_load(&mtr_stat->stats_mask))
 		learn_record->vol_idx = 1;
 
-	flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
+	nthw_flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
 
 	rte_spinlock_unlock(&dev->ndev->mtx);
 
@@ -385,31 +384,27 @@ static int flm_mtr_adjust_stats(struct flow_eth_dev *dev, uint8_t caller_id, uin
 
 static void flm_setup_queues(void)
 {
-	flm_lrn_queue_arr = flm_lrn_queue_create();
-	assert(flm_lrn_queue_arr != NULL);
+	flm_lrn_queue_arr = nthw_flm_lrn_queue_create();
+	RTE_ASSERT(flm_lrn_queue_arr != NULL);
 }
 
 static void flm_free_queues(void)
 {
-	flm_lrn_queue_free(flm_lrn_queue_arr);
+	nthw_flm_lrn_queue_free(flm_lrn_queue_arr);
 }
 
 static uint32_t flm_lrn_update(struct flow_eth_dev *dev, uint32_t *inf_word_cnt,
 	uint32_t *sta_word_cnt)
 {
-	read_record r = flm_lrn_queue_get_read_buffer(flm_lrn_queue_arr);
+	read_record r = nthw_flm_lrn_queue_get_read_buffer(flm_lrn_queue_arr);
+	uint32_t handled_records = 0;
 
 	if (r.num) {
-		uint32_t handled_records = 0;
-
-		if (hw_mod_flm_lrn_data_set_flush(&dev->ndev->be, HW_FLM_FLOW_LRN_DATA, r.p, r.num,
-			&handled_records, inf_word_cnt, sta_word_cnt)) {
+		if (nthw_mod_flm_lrn_data_set_flush(&dev->ndev->be, HW_FLM_FLOW_LRN_DATA, r.p,
+			r.num, &handled_records, inf_word_cnt, sta_word_cnt))
 			NT_LOG(ERR, FILTER, "Flow programming failed");
-
-		} else if (handled_records > 0) {
-			flm_lrn_queue_release_read_buffer(flm_lrn_queue_arr, handled_records);
-		}
 	}
+	nthw_flm_lrn_queue_release_read_buffer(flm_lrn_queue_arr, handled_records);
 
 	return r.num;
 }
@@ -435,7 +430,7 @@ static void flm_mtr_read_inf_records(struct flow_eth_dev *dev, uint32_t *data, u
 		uint8_t caller_id;
 		uint8_t type;
 		union flm_handles flm_h;
-		ntnic_id_table_find(dev->ndev->id_table_handle, inf_data->id, &flm_h, &caller_id,
+		nthw_id_table_find(dev->ndev->id_table_handle, inf_data->id, &flm_h, &caller_id,
 			&type);
 
 		/* Check that received record hold valid meter statistics */
@@ -466,7 +461,7 @@ static void flm_mtr_read_inf_records(struct flow_eth_dev *dev, uint32_t *data, u
 					stat_data.id = mtr_id;
 					stat_data.timestamp = inf_data->ts;
 					stat_data.cause = inf_data->cause;
-					flm_inf_queue_put(port, remote_caller, &stat_data);
+					nthw_flm_inf_queue_put(port, remote_caller, &stat_data);
 				}
 			}
 
@@ -485,10 +480,10 @@ static void flm_mtr_read_inf_records(struct flow_eth_dev *dev, uint32_t *data, u
 
 				is_remote = is_remote_caller(caller_id, &port);
 
-				flm_age_queue_put(caller_id, &age_event);
+				nthw_flm_age_queue_put(caller_id, &age_event);
 				/* age events are supported only for physical ports */
 				if (!is_remote)
-					flm_age_event_set(port);
+					nthw_flm_age_event_set(port);
 			}
 			break;
 
@@ -511,23 +506,22 @@ static void flm_mtr_read_sta_records(struct flow_eth_dev *dev, uint32_t *data, u
 		uint8_t caller_id;
 		uint8_t type;
 		union flm_handles flm_h;
-		ntnic_id_table_find(dev->ndev->id_table_handle, sta_data->id, &flm_h, &caller_id,
+		nthw_id_table_find(dev->ndev->id_table_handle, sta_data->id, &flm_h, &caller_id,
 			&type);
 
 		if (type == 1) {
 			uint8_t port;
 			bool remote_caller = is_remote_caller(caller_id, &port);
 
-			rte_spinlock_lock(&dev->ndev->mtx);
-			((struct flow_handle *)flm_h.p)->learn_ignored = 1;
-			rte_spinlock_unlock(&dev->ndev->mtx);
+			rte_atomic_store_explicit(&((struct flow_handle *)flm_h.p)->learn_ignored,
+				1, rte_memory_order_seq_cst);
 			struct flm_status_event_s data = {
 				.flow = flm_h.p,
 				.learn_ignore = sta_data->lis,
 				.learn_failed = sta_data->lfs,
 			};
 
-			flm_sta_queue_put(port, remote_caller, &data);
+			nthw_flm_sta_queue_put(port, remote_caller, &data);
 		}
 	}
 }
@@ -551,7 +545,7 @@ static uint32_t flm_update(struct flow_eth_dev *dev)
 		if (sta_records > MAX_STA_DATA_RECORDS_PER_READ)
 			sta_records = MAX_STA_DATA_RECORDS_PER_READ;
 
-		hw_mod_flm_inf_sta_data_update_get(&dev->ndev->be, HW_FLM_FLOW_INF_STA_DATA,
+		nthw_mod_flm_inf_sta_data_update_get(&dev->ndev->be, HW_FLM_FLOW_INF_STA_DATA,
 			inf_data, inf_records * WORDS_PER_INF_DATA,
 			&inf_word_cnt, sta_data,
 			sta_records * WORDS_PER_STA_DATA,
@@ -569,9 +563,9 @@ static uint32_t flm_update(struct flow_eth_dev *dev)
 	if (flm_lrn_update(dev, &inf_word_cnt, &sta_word_cnt) != 0)
 		return 1;
 
-	hw_mod_flm_buf_ctrl_update(&dev->ndev->be);
-	hw_mod_flm_buf_ctrl_get(&dev->ndev->be, HW_FLM_BUF_CTRL_INF_AVAIL, &inf_word_cnt);
-	hw_mod_flm_buf_ctrl_get(&dev->ndev->be, HW_FLM_BUF_CTRL_STA_AVAIL, &sta_word_cnt);
+	nthw_mod_flm_buf_ctrl_update(&dev->ndev->be);
+	nthw_mod_flm_buf_ctrl_get(&dev->ndev->be, HW_FLM_BUF_CTRL_INF_AVAIL, &inf_word_cnt);
+	nthw_mod_flm_buf_ctrl_get(&dev->ndev->be, HW_FLM_BUF_CTRL_STA_AVAIL, &sta_word_cnt);
 
 	return inf_word_cnt + sta_word_cnt;
 }
@@ -631,15 +625,15 @@ static int flm_sdram_calibrate(struct flow_nic_dev *ndev)
 	uint32_t fail_value = 0;
 	uint32_t value = 0;
 
-	hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_PRESET_ALL, 0x0);
-	hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_SPLIT_SDRAM_USAGE, 0x10);
-	hw_mod_flm_control_flush(&ndev->be);
+	nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_PRESET_ALL, 0x0);
+	nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_SPLIT_SDRAM_USAGE, 0x10);
+	nthw_mod_flm_control_flush(&ndev->be);
 
 	/* Wait for ddr4 calibration/init done */
 	for (uint32_t i = 0; i < 1000000; ++i) {
-		hw_mod_flm_status_update(&ndev->be);
-		hw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_CALIB_SUCCESS, &value);
-		hw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_CALIB_FAIL, &fail_value);
+		nthw_mod_flm_status_update(&ndev->be);
+		nthw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_CALIB_SUCCESS, &value);
+		nthw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_CALIB_FAIL, &fail_value);
 
 		if (value & 0x80000000) {
 			success = 1;
@@ -649,7 +643,7 @@ static int flm_sdram_calibrate(struct flow_nic_dev *ndev)
 		if (fail_value != 0)
 			break;
 
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 	}
 
 	if (!success) {
@@ -671,26 +665,26 @@ static int flm_sdram_reset(struct flow_nic_dev *ndev, int enable)
 	 * Make sure no lookup is performed during init, i.e.
 	 * disable every category and disable FLM
 	 */
-	hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_ENABLE, 0x0);
-	hw_mod_flm_control_flush(&ndev->be);
+	nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_ENABLE, 0x0);
+	nthw_mod_flm_control_flush(&ndev->be);
 
 	for (uint32_t i = 1; i < ndev->be.flm.nb_categories; ++i)
-		hw_mod_flm_rcp_set(&ndev->be, HW_FLM_RCP_PRESET_ALL, i, 0x0);
+		nthw_mod_flm_rcp_set(&ndev->be, HW_FLM_RCP_PRESET_ALL, i, 0x0);
 
-	hw_mod_flm_rcp_flush(&ndev->be, 1, ndev->be.flm.nb_categories - 1);
+	nthw_mod_flm_rcp_flush(&ndev->be, 1, ndev->be.flm.nb_categories - 1);
 
 	/* Wait for FLM to enter Idle state */
 	for (uint32_t i = 0; i < 1000000; ++i) {
 		uint32_t value = 0;
-		hw_mod_flm_status_update(&ndev->be);
-		hw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_IDLE, &value);
+		nthw_mod_flm_status_update(&ndev->be);
+		nthw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_IDLE, &value);
 
 		if (value) {
 			success = 1;
 			break;
 		}
 
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 	}
 
 	if (!success) {
@@ -701,20 +695,20 @@ static int flm_sdram_reset(struct flow_nic_dev *ndev, int enable)
 	success = 0;
 
 	/* Start SDRAM initialization */
-	hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_INIT, 0x1);
-	hw_mod_flm_control_flush(&ndev->be);
+	nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_INIT, 0x1);
+	nthw_mod_flm_control_flush(&ndev->be);
 
 	for (uint32_t i = 0; i < 1000000; ++i) {
 		uint32_t value = 0;
-		hw_mod_flm_status_update(&ndev->be);
-		hw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_INITDONE, &value);
+		nthw_mod_flm_status_update(&ndev->be);
+		nthw_mod_flm_status_get(&ndev->be, HW_FLM_STATUS_INITDONE, &value);
 
 		if (value) {
 			success = 1;
 			break;
 		}
 
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 	}
 
 	if (!success) {
@@ -724,12 +718,12 @@ static int flm_sdram_reset(struct flow_nic_dev *ndev, int enable)
 	}
 
 	/* Set the INIT value back to zero to clear the bit in the SW register cache */
-	hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_INIT, 0x0);
-	hw_mod_flm_control_flush(&ndev->be);
+	nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_INIT, 0x0);
+	nthw_mod_flm_control_flush(&ndev->be);
 
 	/* Enable FLM */
-	hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_ENABLE, enable);
-	hw_mod_flm_control_flush(&ndev->be);
+	nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_ENABLE, enable);
+	nthw_mod_flm_control_flush(&ndev->be);
 
 	int nb_rpp_per_ps = ndev->be.flm.nb_rpp_clock_in_ps;
 	int nb_load_aps_max = ndev->be.flm.nb_load_aps_max;
@@ -740,8 +734,8 @@ static int flm_sdram_reset(struct flow_nic_dev *ndev, int enable)
 			(nb_load_aps_max * NTNIC_SCANNER_LOAD);
 	}
 
-	hw_mod_flm_scan_set(&ndev->be, HW_FLM_SCAN_I, scan_i_value);
-	hw_mod_flm_scan_flush(&ndev->be);
+	nthw_mod_flm_scan_set(&ndev->be, HW_FLM_SCAN_I, scan_i_value);
+	nthw_mod_flm_scan_flush(&ndev->be);
 
 	return 0;
 }
@@ -774,7 +768,7 @@ struct flm_flow_key_def_s {
 static inline void set_key_def_qw(struct flm_flow_key_def_s *key_def, unsigned int qw,
 	unsigned int dyn, unsigned int ofs)
 {
-	assert(qw < 2);
+	RTE_ASSERT(qw < 2);
 
 	if (qw == 0) {
 		key_def->qw0_dyn = dyn & 0x7f;
@@ -789,7 +783,7 @@ static inline void set_key_def_qw(struct flm_flow_key_def_s *key_def, unsigned i
 static inline void set_key_def_sw(struct flm_flow_key_def_s *key_def, unsigned int sw,
 	unsigned int dyn, unsigned int ofs)
 {
-	assert(sw < 2);
+	RTE_ASSERT(sw < 2);
 
 	if (sw == 0) {
 		key_def->sw8_dyn = dyn & 0x7f;
@@ -912,7 +906,9 @@ static inline struct nic_flow_def *prepare_nic_flow_def(struct nic_flow_def *fd)
 		fd->l3_prot = -1;
 		fd->l4_prot = -1;
 		fd->vlans = 0;
+		fd->tunnel_vlans = 0;
 		fd->tunnel_prot = -1;
+		fd->tunnel_l2_prot = -1;
 		fd->tunnel_l3_prot = -1;
 		fd->tunnel_l4_prot = -1;
 		fd->fragmentation = -1;
@@ -932,8 +928,10 @@ static inline struct nic_flow_def *allocate_nic_flow_def(void)
 
 static bool fd_has_empty_pattern(const struct nic_flow_def *fd)
 {
-	return fd && fd->vlans == 0 && fd->l2_prot < 0 && fd->l3_prot < 0 && fd->l4_prot < 0 &&
-		fd->tunnel_prot < 0 && fd->tunnel_l3_prot < 0 && fd->tunnel_l4_prot < 0 &&
+	return fd && fd->vlans == 0 && fd->tunnel_vlans == 0 && fd->l2_prot < 0 &&
+		fd->l3_prot < 0 && fd->l4_prot < 0 &&
+		fd->tunnel_prot < 0 && fd->tunnel_l2_prot < 0 &&
+		fd->tunnel_l3_prot < 0 && fd->tunnel_l4_prot < 0 &&
 		fd->ip_prot < 0 && fd->tunnel_ip_prot < 0 && fd->non_empty < 0;
 }
 
@@ -963,28 +961,28 @@ static int flm_flow_programming(struct flow_handle *fh, uint32_t flm_op)
 	if (flm_op == NT_FLM_OP_LEARN) {
 		union flm_handles flm_h;
 		flm_h.p = fh;
-		fh->flm_id = ntnic_id_table_get_id(fh->dev->ndev->id_table_handle, flm_h,
+		fh->flm_id = nthw_id_table_get_id(fh->dev->ndev->id_table_handle, flm_h,
 			fh->caller_id, 1);
 	}
 
 	uint32_t flm_id = fh->flm_id;
 
 	if (flm_op == NT_FLM_OP_UNLEARN) {
-		ntnic_id_table_free_id(fh->dev->ndev->id_table_handle, flm_id);
+		nthw_id_table_free_id(fh->dev->ndev->id_table_handle, flm_id);
 
-		if (fh->learn_ignored == 1)
+		if (rte_atomic_load_explicit(&fh->learn_ignored, rte_memory_order_seq_cst) == 1)
 			return 0;
 	}
 
 	learn_record =
 		(struct flm_v25_lrn_data_s *)
-			flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+			nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 
 	while (learn_record == NULL) {
-		nt_os_wait_usec(1);
+		nthw_os_wait_usec(1);
 		learn_record =
 			(struct flm_v25_lrn_data_s *)
-			flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
+			nthw_flm_lrn_queue_get_write_buffer(flm_lrn_queue_arr);
 	}
 
 	memset(learn_record, 0x0, sizeof(struct flm_v25_lrn_data_s));
@@ -1039,7 +1037,7 @@ static int flm_flow_programming(struct flow_handle *fh, uint32_t flm_op)
 	learn_record->eor = 1;
 	learn_record->scrub_prof = fh->flm_scrub_prof;
 
-	flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
+	nthw_flm_lrn_queue_release_write_buffer(flm_lrn_queue_arr);
 	return 0;
 }
 
@@ -1075,7 +1073,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 	*num_queues = 0;
 
 	if (action == NULL) {
-		flow_nic_set_error(ERR_FAILED, error);
+		nthw_flow_nic_set_error(ERR_FAILED, error);
 		NT_LOG(ERR, FILTER, "Flow actions missing");
 		return -1;
 	}
@@ -1100,7 +1098,8 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 				if (*num_dest_port > 0) {
 					NT_LOG(ERR, FILTER,
 						"Multiple port_id actions for one flow is not supported");
-					flow_nic_set_error(ERR_ACTION_MULTIPLE_PORT_ID_UNSUPPORTED,
+					nthw_flow_nic_set_error(
+						ERR_ACTION_MULTIPLE_PORT_ID_UNSUPPORTED,
 						error);
 					return -1;
 				}
@@ -1109,13 +1108,13 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 
 				if (fd->dst_num_avail == MAX_OUTPUT_DEST) {
 					NT_LOG(ERR, FILTER, "Too many output destinations");
-					flow_nic_set_error(ERR_OUTPUT_TOO_MANY, error);
+					nthw_flow_nic_set_error(ERR_OUTPUT_TOO_MANY, error);
 					return -1;
 				}
 
 				if (port >= dev->ndev->be.num_phy_ports) {
 					NT_LOG(ERR, FILTER, "Phy port out of range");
-					flow_nic_set_error(ERR_OUTPUT_INVALID, error);
+					nthw_flow_nic_set_error(ERR_OUTPUT_INVALID, error);
 					return -1;
 				}
 
@@ -1158,8 +1157,9 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 				fd->dst_num_avail++;
 
 				NT_LOG(DBG, FILTER,
-					"Dev:%p: RTE_FLOW_ACTION_TYPE_QUEUE port %u, queue index: %u, hw id %u",
-					dev, dev->port, queue->index, hw_id);
+					"Dev:%p: RTE_FLOW_ACTION_TYPE_QUEUE port %u, queue index:"
+					"%" PRIu16 ",hw id %i",
+					dev, (unsigned int)dev->port, queue->index, hw_id);
 
 				fd->full_offload = 0;
 				*num_queues += 1;
@@ -1181,7 +1181,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					NT_LOG(ERR, FILTER,
 						"ERROR: RSS hash key length %u exceeds maximum value %u",
 						rss->key_len, MAX_RSS_KEY_LEN);
-					flow_nic_set_error(ERR_RSS_TOO_LONG_KEY, error);
+					nthw_flow_nic_set_error(ERR_RSS_TOO_LONG_KEY, error);
 					return -1;
 				}
 
@@ -1201,8 +1201,9 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 				fd->hsh.key_len = rss->key_len;
 
 				NT_LOG(DBG, FILTER,
-					"Dev:%p: RSS func: %d, types: 0x%" PRIX64 ", key_len: %d",
-					dev, rss->func, rss->types, rss->key_len);
+					"Dev:%p: RSS func: %i, types: 0x%" PRIX64
+					", key_len: %" PRIu32 "",
+					dev, (int)rss->func, rss->types, rss->key_len);
 
 				fd->full_offload = 0;
 				*num_queues += rss->queue_num;
@@ -1221,7 +1222,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					sizeof(struct rte_flow_action_mark));
 
 				fd->mark = mark->id;
-				NT_LOG(DBG, FILTER, "Mark: %i", mark->id);
+				NT_LOG(DBG, FILTER, "Mark: %u", mark->id);
 			}
 
 			break;
@@ -1269,7 +1270,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					NT_LOG(ERR, FILTER,
 						"ERROR: - Number of METER actions exceeds %d.",
 						MAX_FLM_MTRS_SUPPORTED);
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
@@ -1293,7 +1294,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 				if (encap_decap_order != 1) {
 					NT_LOG(ERR, FILTER,
 						"ERROR: - RAW_ENCAP must follow RAW_DECAP.");
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
@@ -1301,7 +1302,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					encap->item_count < 2) {
 					NT_LOG(ERR, FILTER,
 						"ERROR: - RAW_ENCAP data/size invalid.");
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
@@ -1396,7 +1397,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					NT_LOG(ERR, FILTER,
 						"ERROR: - Encapsulation with %d vlans not supported.",
 						(int)fd->tun_hdr.nb_vlans);
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
@@ -1425,14 +1426,14 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 				if (encap_decap_order != 0) {
 					NT_LOG(ERR, FILTER,
 						"ERROR: - RAW_ENCAP must follow RAW_DECAP.");
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
 				if (decap->item_count < 2) {
 					NT_LOG(ERR, FILTER,
 						"ERROR: - RAW_DECAP must decap something.");
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
@@ -1489,14 +1490,14 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 				if (modify_field->src.field != RTE_FLOW_FIELD_VALUE) {
 					NT_LOG(ERR, FILTER,
 						"MODIFY_FIELD only src type VALUE is supported.");
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
 				if (modify_field->dst.level > 2) {
 					NT_LOG(ERR, FILTER,
 						"MODIFY_FIELD only dst level 0, 1, and 2 is supported.");
-					flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+					nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 					return -1;
 				}
 
@@ -1505,14 +1506,16 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					if (modify_field->operation != RTE_FLOW_MODIFY_SUB) {
 						NT_LOG(ERR, FILTER,
 							"MODIFY_FIELD only operation SUB is supported for TTL/HOPLIMIT.");
-						flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+						nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED,
+							error);
 						return -1;
 					}
 
 					if (fd->ttl_sub_enable) {
 						NT_LOG(ERR, FILTER,
 							"MODIFY_FIELD TTL/HOPLIMIT resource already in use.");
-						flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+						nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED,
+							error);
 						return -1;
 					}
 
@@ -1527,7 +1530,8 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					if (modify_field->operation != RTE_FLOW_MODIFY_SET) {
 						NT_LOG(ERR, FILTER,
 							"MODIFY_FIELD only operation SET is supported in general.");
-						flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+						nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED,
+							error);
 						return -1;
 					}
 
@@ -1536,7 +1540,8 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 						NT_LOG(ERR, FILTER,
 							"MODIFY_FIELD exceeded maximum of %u MODIFY_FIELD actions.",
 							dev->ndev->be.tpe.nb_cpy_writers);
-						flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+						nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED,
+							error);
 						return -1;
 					}
 
@@ -1626,7 +1631,8 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					default:
 						NT_LOG(ERR, FILTER,
 							"MODIFY_FIELD dst type is not supported.");
-						flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+						nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED,
+							error);
 						return -1;
 					}
 
@@ -1636,7 +1642,8 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					if (modify_field_use_flag & modify_field_use_flags) {
 						NT_LOG(ERR, FILTER,
 							"MODIFY_FIELD dst type hardware resource already used.");
-						flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+						nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED,
+							error);
 						return -1;
 					}
 
@@ -1662,11 +1669,11 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 					memcpy_mask_if(&age_tmp, action[aidx].conf,
 					action_mask ? action_mask[aidx].conf : NULL,
 					sizeof(struct rte_flow_action_age));
-				fd->age.timeout = hw_mod_flm_scrub_timeout_encode(age->timeout);
+				fd->age.timeout = nthw_mod_flm_scrub_timeout_encode(age->timeout);
 				fd->age.context = age->context;
 				NT_LOG(DBG, FILTER,
 					"normalized timeout: %u, original timeout: %u, context: %p",
-					hw_mod_flm_scrub_timeout_decode(fd->age.timeout),
+					nthw_mod_flm_scrub_timeout_decode(fd->age.timeout),
 					age->timeout, fd->age.context);
 			}
 
@@ -1675,7 +1682,7 @@ static int interpret_flow_actions(const struct flow_eth_dev *dev,
 		default:
 			NT_LOG(ERR, FILTER, "Invalid or unsupported flow action received - %i",
 				action[aidx].type);
-			flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
+			nthw_flow_nic_set_error(ERR_ACTION_UNSUPPORTED, error);
 			return -1;
 		}
 	}
@@ -1705,15 +1712,14 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 
 	*in_port_id = UINT32_MAX;
 
-	memset(packet_data, 0x0, sizeof(uint32_t) * 10);
-	memset(packet_mask, 0x0, sizeof(uint32_t) * 10);
-	memset(key_def, 0x0, sizeof(struct flm_flow_key_def_s));
-
-	if (elem == NULL) {
-		flow_nic_set_error(ERR_FAILED, error);
+	if (packet_data == NULL || packet_mask == NULL || key_def == NULL || elem == NULL) {
+		nthw_flow_nic_set_error(ERR_FAILED, error);
 		NT_LOG(ERR, FILTER, "Flow items missing");
 		return -1;
 	}
+	memset(packet_data, 0x0, sizeof(uint32_t) * 10);
+	memset(packet_mask, 0x0, sizeof(uint32_t) * 10);
+	memset(key_def, 0x0, sizeof(struct flm_flow_key_def_s));
 
 	if (implicit_vlan_vid > 0) {
 		uint32_t *sw_data = &packet_data[1 - sw_counter];
@@ -1722,7 +1728,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 		sw_mask[0] = 0x0fff;
 		sw_data[0] = implicit_vlan_vid & sw_mask[0];
 
-		km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1, DYN_FIRST_VLAN, 0);
+		nthw_km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1, DYN_FIRST_VLAN, 0);
 		set_key_def_sw(key_def, sw_counter, DYN_FIRST_VLAN, 0);
 		sw_counter += 1;
 
@@ -1774,7 +1780,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 
 	if (qw_free < 0) {
 		NT_LOG(ERR, FILTER, "Key size too big. Out of QW resources.");
-		flow_nic_set_error(ERR_FAILED, error);
+		nthw_flow_nic_set_error(ERR_FAILED, error);
 		return -1;
 	}
 
@@ -1795,15 +1801,11 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 				const struct rte_ether_hdr *eth_mask =
 					(const struct rte_ether_hdr *)elem[eidx].mask;
 
-				if (any_count > 0) {
-					NT_LOG(ERR, FILTER,
-						"Tunneled L2 ethernet not supported");
-					flow_nic_set_error(ERR_FAILED, error);
-					return -1;
-				}
-
 				if (eth_spec == NULL || eth_mask == NULL) {
-					fd->l2_prot = PROT_L2_ETH2;
+					if (any_count > 0 || fd->l2_prot != -1)
+						fd->tunnel_l2_prot = PROT_L2_ETH2;
+					else
+						fd->l2_prot = PROT_L2_ETH2;
 					break;
 				}
 
@@ -1815,7 +1817,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (qw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -1871,10 +1873,12 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 
 					qw_mask[3] = ntohs(eth_mask->ether_type) << 16;
 
-					km_add_match_elem(&fd->km,
+					nthw_km_add_match_elem(&fd->km,
 						&qw_data[(size_t)(qw_counter * 4)],
-						&qw_mask[(size_t)(qw_counter * 4)], 4, DYN_L2, 0);
-					set_key_def_qw(key_def, qw_counter, DYN_L2, 0);
+						&qw_mask[(size_t)(qw_counter * 4)], 4,
+							any_count > 0 ? DYN_TUN_L2 : DYN_L2, 0);
+					set_key_def_qw(key_def, qw_counter,
+						any_count > 0 ? DYN_TUN_L2 : DYN_L2, 0);
 					qw_counter += 1;
 
 					if (!non_zero)
@@ -1884,7 +1888,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (sw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -1894,9 +1898,11 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					sw_mask[0] = ntohs(eth_mask->ether_type) << 16;
 					sw_data[0] = ntohs(eth_spec->ether_type) << 16 & sw_mask[0];
 
-					km_add_match_elem(&fd->km, &sw_data[0],
-						&sw_mask[0], 1, DYN_L2, 12);
-					set_key_def_sw(key_def, sw_counter, DYN_L2, 12);
+					nthw_km_add_match_elem(&fd->km, &sw_data[0],
+						&sw_mask[0], 1,
+						any_count > 0 ? DYN_TUN_L2 : DYN_L2, 12);
+					set_key_def_sw(key_def, sw_counter,
+						any_count > 0 ? DYN_TUN_L2 : DYN_L2, 12);
 					sw_counter += 1;
 				}
 
@@ -1915,7 +1921,10 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					(const struct rte_vlan_hdr *)elem[eidx].mask;
 
 				if (vlan_spec == NULL || vlan_mask == NULL) {
-					fd->vlans += 1;
+					if (any_count > 0)
+						fd->tunnel_vlans += 1;
+					else
+						fd->vlans += 1;
 					break;
 				}
 
@@ -1925,7 +1934,8 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 				if (implicit_vlan_vid > 0) {
 					NT_LOG(ERR, FILTER,
 						"Multiple VLANs not supported for implicit VLAN patterns.");
-					flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM,
+					nthw_flow_nic_set_error(
+						ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM,
 						error);
 					return -1;
 				}
@@ -1940,10 +1950,14 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						ntohs(vlan_spec->eth_proto);
 					sw_data[0] &= sw_mask[0];
 
-					km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
-						DYN_FIRST_VLAN, 2 + 4 * fd->vlans);
-					set_key_def_sw(key_def, sw_counter, DYN_FIRST_VLAN,
-						2 + 4 * fd->vlans);
+					nthw_km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
+						any_count > 0 ? DYN_TUN_VLAN : DYN_FIRST_VLAN,
+						2 + 4 * (any_count > 0 ? fd->tunnel_vlans :
+							fd->vlans));
+					set_key_def_sw(key_def, sw_counter,
+						any_count > 0 ? DYN_TUN_VLAN : DYN_FIRST_VLAN,
+						2 + 4 * (any_count > 0 ? fd->tunnel_vlans :
+							fd->vlans));
 					sw_counter += 1;
 
 				} else if (qw_counter < 2 && qw_free > 0) {
@@ -1967,17 +1981,20 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					qw_data[2] &= qw_mask[2];
 					qw_data[3] &= qw_mask[3];
 
-					km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
-						DYN_FIRST_VLAN, 2 + 4 * fd->vlans);
-					set_key_def_qw(key_def, qw_counter, DYN_FIRST_VLAN,
-						2 + 4 * fd->vlans);
+					nthw_km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
+						4, any_count > 0 ? DYN_TUN_VLAN : DYN_FIRST_VLAN,
+						2 + 4 * (any_count > 0 ? fd->tunnel_vlans :
+							fd->vlans));
+					set_key_def_qw(key_def, qw_counter,
+					any_count > 0 ? DYN_TUN_VLAN : DYN_FIRST_VLAN,
+					2 + 4 * (any_count > 0 ? fd->tunnel_vlans : fd->vlans));
 					qw_counter += 1;
 					qw_free -= 1;
 
 				} else {
 					NT_LOG(ERR, FILTER,
 						"Key size too big. Out of SW-QW resources.");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2014,7 +2031,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					ipv4_mask->hdr.hdr_checksum != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested IPv4 field not support by running SW version.");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2041,7 +2058,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (qw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of QW resources.");
-						flow_nic_set_error(ERR_FAILED,
+						nthw_flow_nic_set_error(ERR_FAILED,
 							error);
 						return -1;
 					}
@@ -2062,7 +2079,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					qw_data[2] = ntohl(ipv4_spec->hdr.src_addr) & qw_mask[2];
 					qw_data[3] = ntohl(ipv4_spec->hdr.dst_addr) & qw_mask[3];
 
-					km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
+					nthw_km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
 						any_count > 0 ? DYN_TUN_L3 : DYN_L3, 4);
 					set_key_def_qw(key_def, qw_counter, any_count > 0
 						? DYN_TUN_L3 : DYN_L3, 4);
@@ -2080,7 +2097,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (sw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -2090,7 +2107,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					sw_mask[0] = ntohl(ipv4_mask->hdr.src_addr);
 					sw_data[0] = ntohl(ipv4_spec->hdr.src_addr) & sw_mask[0];
 
-					km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
+					nthw_km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
 						any_count > 0 ? DYN_TUN_L3 : DYN_L3, 12);
 					set_key_def_sw(key_def, sw_counter, any_count > 0
 						? DYN_TUN_L3 : DYN_L3, 12);
@@ -2101,7 +2118,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (sw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -2111,7 +2128,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					sw_mask[0] = ntohl(ipv4_mask->hdr.dst_addr);
 					sw_data[0] = ntohl(ipv4_spec->hdr.dst_addr) & sw_mask[0];
 
-					km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
+					nthw_km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
 						any_count > 0 ? DYN_TUN_L3 : DYN_L3, 16);
 					set_key_def_sw(key_def, sw_counter, any_count > 0
 						? DYN_TUN_L3 : DYN_L3, 16);
@@ -2122,7 +2139,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (sw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -2133,7 +2150,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					sw_data[0] = ipv4_spec->hdr.next_proto_id
 						<< 16 & sw_mask[0];
 
-					km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
+					nthw_km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0], 1,
 						any_count > 0 ? DYN_TUN_L3 : DYN_L3, 8);
 					set_key_def_sw(key_def, sw_counter, any_count > 0
 						? DYN_TUN_L3 : DYN_L3, 8);
@@ -2171,7 +2188,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					ipv6_mask->hdr.hop_limits != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested IPv6 field not support by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2179,7 +2196,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (qw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -2204,7 +2221,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					qw_data[2] &= qw_mask[2];
 					qw_data[3] &= qw_mask[3];
 
-					km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
+					nthw_km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
 						any_count > 0 ? DYN_TUN_L3 : DYN_L3, 8);
 					set_key_def_qw(key_def, qw_counter, any_count > 0
 						? DYN_TUN_L3 : DYN_L3, 8);
@@ -2215,7 +2232,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					if (qw_counter >= 2) {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 
@@ -2240,7 +2257,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					qw_data[2] &= qw_mask[2];
 					qw_data[3] &= qw_mask[3];
 
-					km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
+					nthw_km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0], 4,
 						any_count > 0 ? DYN_TUN_L3 : DYN_L3, 24);
 					set_key_def_qw(key_def, qw_counter, any_count > 0
 						? DYN_TUN_L3 : DYN_L3, 24);
@@ -2255,8 +2272,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						sw_mask[0] = ipv6_mask->hdr.proto << 8;
 						sw_data[0] = ipv6_spec->hdr.proto << 8 & sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0],
-							1, any_count > 0 ? DYN_TUN_L3 : DYN_L3, 4);
+						nthw_km_add_match_elem(&fd->km,
+							&sw_data[0], &sw_mask[0], 1,
+							any_count > 0 ? DYN_TUN_L3 : DYN_L3, 4);
 						set_key_def_sw(key_def, sw_counter, any_count > 0
 							? DYN_TUN_L3 : DYN_L3, 4);
 						sw_counter += 1;
@@ -2282,8 +2300,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
-							4, any_count > 0 ? DYN_TUN_L3 : DYN_L3, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&qw_data[0], &qw_mask[0], 4,
+							any_count > 0 ? DYN_TUN_L3 : DYN_L3, 0);
 						set_key_def_qw(key_def, qw_counter, any_count > 0
 							? DYN_TUN_L3 : DYN_L3, 0);
 						qw_counter += 1;
@@ -2292,7 +2311,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2330,7 +2349,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					udp_mask->hdr.dgram_cksum != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested UDP field not support by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2345,8 +2364,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 							<< 16) | ntohs(udp_spec->hdr.dst_port)) &
 							sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0],
-							1, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&sw_data[0], &sw_mask[0], 1,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_sw(key_def, sw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						sw_counter += 1;
@@ -2374,8 +2394,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
-							4, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&qw_data[0], &qw_mask[0], 4,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_qw(key_def, qw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						qw_counter += 1;
@@ -2384,7 +2405,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2424,7 +2445,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 				if (sctp_mask->hdr.tag != 0 || sctp_mask->hdr.cksum != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested SCTP field not support by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2439,8 +2460,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 							<< 16) | ntohs(sctp_spec->hdr.dst_port)) &
 							sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0],
-							1, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&sw_data[0], &sw_mask[0], 1,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_sw(key_def, sw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						sw_counter += 1;
@@ -2468,8 +2490,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
-							4, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&qw_data[0], &qw_mask[0], 4,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_qw(key_def, qw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						qw_counter += 1;
@@ -2478,7 +2501,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2522,7 +2545,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					icmp_mask->hdr.icmp_seq_nb != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested ICMP field not supported by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2537,7 +2560,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 							icmp_spec->hdr.icmp_code << 16;
 						sw_data[0] &= sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0],
+						nthw_km_add_match_elem(&fd->km, &sw_data[0],
 							&sw_mask[0], 1, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_sw(key_def, sw_counter,
@@ -2567,8 +2590,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
-							4, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&qw_data[0], &qw_mask[0], 4,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_qw(key_def, qw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						qw_counter += 1;
@@ -2577,7 +2601,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2621,7 +2645,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 				if (icmp_mask->checksum != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested ICMP6 field not supported by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2636,8 +2660,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 							icmp_spec->code << 16;
 						sw_data[0] &= sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0],
-							1, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&sw_data[0], &sw_mask[0], 1,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 
 						set_key_def_sw(key_def, sw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
@@ -2666,8 +2691,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
-							4, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&qw_data[0], &qw_mask[0], 4,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_qw(key_def, qw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						qw_counter += 1;
@@ -2676,7 +2702,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2724,7 +2750,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					tcp_mask->hdr.tcp_urp != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested TCP field not support by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2739,8 +2765,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 							((ntohs(tcp_spec->hdr.src_port) << 16) |
 							ntohs(tcp_spec->hdr.dst_port)) & sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0], &sw_mask[0],
-							1, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&sw_data[0], &sw_mask[0], 1,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_sw(key_def, sw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						sw_counter += 1;
@@ -2768,8 +2795,9 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0], &qw_mask[0],
-							4, any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
+						nthw_km_add_match_elem(&fd->km,
+							&qw_data[0], &qw_mask[0], 4,
+							any_count > 0 ? DYN_TUN_L4 : DYN_L4, 0);
 						set_key_def_qw(key_def, qw_counter, any_count > 0
 							? DYN_TUN_L4 : DYN_L4, 0);
 						qw_counter += 1;
@@ -2778,7 +2806,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2813,7 +2841,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					gtp_mask->msg_type != 0 || gtp_mask->plen != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested GTP field not support by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2828,7 +2856,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						sw_data[0] =
 							ntohl(gtp_spec->teid) & sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0],
+						nthw_km_add_match_elem(&fd->km, &sw_data[0],
 							&sw_mask[0], 1,
 							DYN_L4_PAYLOAD, 4);
 						set_key_def_sw(key_def, sw_counter,
@@ -2858,7 +2886,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0],
+						nthw_km_add_match_elem(&fd->km, &qw_data[0],
 							&qw_mask[0], 4,
 							DYN_L4_PAYLOAD, 4);
 						set_key_def_qw(key_def, qw_counter,
@@ -2869,7 +2897,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2897,7 +2925,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					gtp_psc_mask->ext_hdr_len != 0) {
 					NT_LOG(ERR, FILTER,
 						"Requested GTP PSC field is not supported by running SW version");
-					flow_nic_set_error(ERR_FAILED, error);
+					nthw_flow_nic_set_error(ERR_FAILED, error);
 					return -1;
 				}
 
@@ -2912,7 +2940,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						sw_data[0] = ntohl(gtp_psc_spec->qfi) &
 							sw_mask[0];
 
-						km_add_match_elem(&fd->km, &sw_data[0],
+						nthw_km_add_match_elem(&fd->km, &sw_data[0],
 							&sw_mask[0], 1,
 							DYN_L4_PAYLOAD, 14);
 						set_key_def_sw(key_def, sw_counter,
@@ -2942,7 +2970,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 						qw_data[2] &= qw_mask[2];
 						qw_data[3] &= qw_mask[3];
 
-						km_add_match_elem(&fd->km, &qw_data[0],
+						nthw_km_add_match_elem(&fd->km, &qw_data[0],
 							&qw_mask[0], 4,
 							DYN_L4_PAYLOAD, 14);
 						set_key_def_qw(key_def, qw_counter,
@@ -2953,7 +2981,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 					} else {
 						NT_LOG(ERR, FILTER,
 							"Key size too big. Out of SW-QW resources.");
-						flow_nic_set_error(ERR_FAILED, error);
+						nthw_flow_nic_set_error(ERR_FAILED, error);
 						return -1;
 					}
 				}
@@ -2982,7 +3010,7 @@ static int interpret_flow_elements(const struct flow_eth_dev *dev,
 		default:
 			NT_LOG(ERR, FILTER, "Invalid or unsupported flow request: %d",
 				(int)elem[eidx].type);
-			flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM, error);
+			nthw_flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM, error);
 			return -1;
 		}
 	}
@@ -3130,7 +3158,7 @@ static int copy_fd_to_fh_flm(struct flow_handle *fh, const struct nic_flow_def *
 			break;
 
 		default:
-			NT_LOG(DBG, FILTER, "Unknown modify field: %d",
+			NT_LOG(DBG, FILTER, "Unknown modify field: %" PRIu32,
 				fd->modify_field[i].select);
 			break;
 		}
@@ -3152,7 +3180,7 @@ static int convert_fh_to_fh_flm(struct flow_handle *fh, const uint32_t *packet_d
 	if (fh->type != FLOW_HANDLE_TYPE_FLOW)
 		return -1;
 
-	memcpy(&fh_copy, fh, sizeof(struct flow_handle));
+	fh_copy = *fh;
 	memset(fh, 0x0, sizeof(struct flow_handle));
 	fd = fh_copy.fd;
 
@@ -3182,23 +3210,26 @@ static int convert_fh_to_fh_flm(struct flow_handle *fh, const uint32_t *packet_d
 static void setup_db_qsl_data(struct nic_flow_def *fd, struct hw_db_inline_qsl_data *qsl_data,
 	uint32_t num_dest_port, uint32_t num_queues)
 {
+	if (qsl_data == NULL)
+		return;
+
 	memset(qsl_data, 0x0, sizeof(struct hw_db_inline_qsl_data));
 
 	if (fd->dst_num_avail <= 0) {
 		qsl_data->drop = 1;
 
 	} else {
-		assert(fd->dst_num_avail < HW_DB_INLINE_MAX_QST_PER_QSL);
+		RTE_ASSERT(fd->dst_num_avail < HW_DB_INLINE_MAX_QST_PER_QSL);
 
-		uint32_t ports[fd->dst_num_avail];
-		uint32_t queues[fd->dst_num_avail];
+		uint32_t ports[HW_DB_INLINE_MAX_QST_PER_QSL];
+		uint32_t queues[HW_DB_INLINE_MAX_QST_PER_QSL];
 
 		uint32_t port_index = 0;
 		uint32_t queue_index = 0;
 		uint32_t max = num_dest_port > num_queues ? num_dest_port : num_queues;
 
-		memset(ports, 0, fd->dst_num_avail);
-		memset(queues, 0, fd->dst_num_avail);
+		memset(ports, 0, sizeof(ports));
+		memset(queues, 0, sizeof(queues));
 
 		qsl_data->table_size = max;
 		qsl_data->retransmit = num_dest_port > 0 ? 1 : 0;
@@ -3226,6 +3257,9 @@ static void setup_db_qsl_data(struct nic_flow_def *fd, struct hw_db_inline_qsl_d
 
 static void setup_db_hsh_data(struct nic_flow_def *fd, struct hw_db_inline_hsh_data *hsh_data)
 {
+	if (hsh_data == NULL)
+		return;
+
 	memset(hsh_data, 0x0, sizeof(struct hw_db_inline_hsh_data));
 
 	hsh_data->func = fd->hsh.func;
@@ -3261,34 +3295,34 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 		.frag_rcp = empty_pattern ? fd->flm_mtu_fragmentation_recipe : 0,
 	};
 	struct hw_db_cot_idx cot_idx =
-		hw_db_inline_cot_add(dev->ndev, dev->ndev->hw_db_handle, &cot_data);
+		nthw_db_inline_cot_add(dev->ndev, dev->ndev->hw_db_handle, &cot_data);
 	local_idxs[(*local_idx_counter)++] = cot_idx.raw;
 
 	if (cot_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference COT resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
 	/* Finalize QSL */
 	struct hw_db_qsl_idx qsl_idx =
-		hw_db_inline_qsl_add(dev->ndev, dev->ndev->hw_db_handle, qsl_data);
+		nthw_db_inline_qsl_add(dev->ndev, dev->ndev->hw_db_handle, qsl_data);
 	local_idxs[(*local_idx_counter)++] = qsl_idx.raw;
 
 	if (qsl_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference QSL resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
 	/* Setup HSH */
 	struct hw_db_hsh_idx hsh_idx =
-		hw_db_inline_hsh_add(dev->ndev, dev->ndev->hw_db_handle, hsh_data);
+		nthw_db_inline_hsh_add(dev->ndev, dev->ndev->hw_db_handle, hsh_data);
 	local_idxs[(*local_idx_counter)++] = hsh_idx.raw;
 
 	if (hsh_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference HSH resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
@@ -3302,19 +3336,19 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 			.head_slice_ofs = fd->header_strip_end_ofs,
 		};
 		slc_lr_idx =
-			hw_db_inline_slc_lr_add(dev->ndev, dev->ndev->hw_db_handle, &slc_lr_data);
+			nthw_db_inline_slc_lr_add(dev->ndev, dev->ndev->hw_db_handle, &slc_lr_data);
 		local_idxs[(*local_idx_counter)++] = slc_lr_idx.raw;
 
 		if (slc_lr_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference SLC LR resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			return -1;
 		}
 	}
 
 	/* Setup TPE EXT */
 	if (fd->tun_hdr.len > 0) {
-		assert(fd->tun_hdr.len <= HW_DB_INLINE_MAX_ENCAP_SIZE);
+		RTE_ASSERT(fd->tun_hdr.len <= HW_DB_INLINE_MAX_ENCAP_SIZE);
 
 		struct hw_db_inline_tpe_ext_data tpe_ext_data = {
 			.size = fd->tun_hdr.len,
@@ -3324,13 +3358,13 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 		memcpy(tpe_ext_data.hdr8, fd->tun_hdr.d.hdr8, (fd->tun_hdr.len + 15) & ~15);
 
 		struct hw_db_tpe_ext_idx tpe_ext_idx =
-			hw_db_inline_tpe_ext_add(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_tpe_ext_add(dev->ndev, dev->ndev->hw_db_handle,
 			&tpe_ext_data);
 		local_idxs[(*local_idx_counter)++] = tpe_ext_idx.raw;
 
 		if (tpe_ext_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference TPE EXT resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			return -1;
 		}
 
@@ -3339,7 +3373,7 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 	}
 
 	/* Setup TPE */
-	assert(fd->modify_field_count <= 6);
+	RTE_ASSERT(fd->modify_field_count <= 6);
 
 	struct hw_db_inline_tpe_data tpe_data = {
 		.insert_len = fd->tun_hdr.len,
@@ -3388,25 +3422,25 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 	}
 
 	struct hw_db_tpe_idx tpe_idx =
-		hw_db_inline_tpe_add(dev->ndev, dev->ndev->hw_db_handle, &tpe_data);
+		nthw_db_inline_tpe_add(dev->ndev, dev->ndev->hw_db_handle, &tpe_data);
 
 	local_idxs[(*local_idx_counter)++] = tpe_idx.raw;
 
 	if (tpe_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference TPE resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
 	/* Setup SCRUB profile */
 	struct hw_db_inline_scrub_data scrub_data = { .timeout = fd->age.timeout };
 	struct hw_db_flm_scrub_idx scrub_idx =
-		hw_db_inline_scrub_add(dev->ndev, dev->ndev->hw_db_handle, &scrub_data);
+		nthw_db_inline_scrub_add(dev->ndev, dev->ndev->hw_db_handle, &scrub_data);
 	local_idxs[(*local_idx_counter)++] = scrub_idx.raw;
 
 	if (scrub_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference FLM SCRUB resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
@@ -3424,12 +3458,12 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 		.scrub = scrub_idx,
 	};
 	struct hw_db_action_set_idx action_set_idx =
-		hw_db_inline_action_set_add(dev->ndev, dev->ndev->hw_db_handle, &action_set_data);
+		nthw_db_inline_action_set_add(dev->ndev, dev->ndev->hw_db_handle, &action_set_data);
 	local_idxs[(*local_idx_counter)++] = action_set_idx.raw;
 
 	if (action_set_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference Action Set resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
@@ -3440,13 +3474,13 @@ static int setup_flow_flm_actions(struct flow_eth_dev *dev,
 		.action_set = action_set_idx,
 	};
 	struct hw_db_flm_ft flm_ft_idx = empty_pattern
-		? hw_db_inline_flm_ft_default(dev->ndev, dev->ndev->hw_db_handle, &flm_ft_data)
-		: hw_db_inline_flm_ft_add(dev->ndev, dev->ndev->hw_db_handle, &flm_ft_data);
+		? nthw_db_inline_flm_ft_default(dev->ndev, dev->ndev->hw_db_handle, &flm_ft_data)
+		: nthw_db_inline_flm_ft_add(dev->ndev, dev->ndev->hw_db_handle, &flm_ft_data);
 	local_idxs[(*local_idx_counter)++] = flm_ft_idx.raw;
 
 	if (flm_ft_idx.error) {
 		NT_LOG(ERR, FILTER, "Could not reference FLM FT resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		return -1;
 	}
 
@@ -3465,6 +3499,12 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 	struct flm_flow_key_def_s *key_def)
 {
 	struct flow_handle *fh = calloc(1, sizeof(struct flow_handle));
+
+	if (fh == NULL) {
+		error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
+		error->message = "Failed to allocate flow_handle";
+		goto error_out;
+	}
 
 	fh->type = FLOW_HANDLE_TYPE_FLOW;
 	fh->port_id = port_id;
@@ -3511,13 +3551,13 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 		};
 		memcpy(flm_data.mask, packet_mask, sizeof(uint32_t) * 10);
 		struct hw_db_flm_idx flm_idx =
-			hw_db_inline_flm_add(dev->ndev, dev->ndev->hw_db_handle, &flm_data,
+			nthw_db_inline_flm_add(dev->ndev, dev->ndev->hw_db_handle, &flm_data,
 			attr->group);
 		fh->db_idxs[fh->db_idx_counter++] = flm_idx.raw;
 
 		if (flm_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference FLM RPC resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3535,7 +3575,7 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 		/* Program flow */
 		if (convert_fh_to_fh_flm(fh, packet_data, flm_idx.id1 + 2, flm_ft, flm_rpl_ext_ptr,
 				flm_scrub, attr->priority & 0x3) != 0) {
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 		flm_flow_programming(fh, NT_FLM_OP_LEARN);
@@ -3553,7 +3593,7 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 		/* SCRUB/AGE action is not supported for group 0 */
 		if (fd->age.timeout != 0 || fd->age.context != NULL) {
 			NT_LOG(ERR, FILTER, "Action AGE is not supported for flow in group 0");
-			flow_nic_set_error(ERR_ACTION_AGE_UNSUPPORTED_GROUP_0, error);
+			nthw_flow_nic_set_error(ERR_ACTION_AGE_UNSUPPORTED_GROUP_0, error);
 			goto error_out;
 		}
 
@@ -3575,7 +3615,7 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			/* Group 0 supports only modify action for TTL/Hop limit. */
 			if (fd->modify_field_count > 0) {
 				NT_LOG(ERR, FILTER, "Unsupported MODIFY ACTION for group 0");
-				flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+				nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 				goto error_out;
 			}
 
@@ -3585,40 +3625,40 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 				.frag_rcp = fd->flm_mtu_fragmentation_recipe,
 			};
 			struct hw_db_cot_idx cot_idx =
-				hw_db_inline_cot_add(dev->ndev, dev->ndev->hw_db_handle,
+				nthw_db_inline_cot_add(dev->ndev, dev->ndev->hw_db_handle,
 				&cot_data);
 			fh->db_idxs[fh->db_idx_counter++] = cot_idx.raw;
 			action_set_data.cot = cot_idx;
 
 			if (cot_idx.error) {
 				NT_LOG(ERR, FILTER, "Could not reference COT resource");
-				flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+				nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 				goto error_out;
 			}
 
 			/* Finalize QSL */
 			struct hw_db_qsl_idx qsl_idx =
-				hw_db_inline_qsl_add(dev->ndev, dev->ndev->hw_db_handle,
+				nthw_db_inline_qsl_add(dev->ndev, dev->ndev->hw_db_handle,
 				&qsl_data);
 			fh->db_idxs[fh->db_idx_counter++] = qsl_idx.raw;
 			action_set_data.qsl = qsl_idx;
 
 			if (qsl_idx.error) {
 				NT_LOG(ERR, FILTER, "Could not reference QSL resource");
-				flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+				nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 				goto error_out;
 			}
 
 			/* Setup HSH */
 			struct hw_db_hsh_idx hsh_idx =
-				hw_db_inline_hsh_add(dev->ndev, dev->ndev->hw_db_handle,
+				nthw_db_inline_hsh_add(dev->ndev, dev->ndev->hw_db_handle,
 				&hsh_data);
 			fh->db_idxs[fh->db_idx_counter++] = hsh_idx.raw;
 			action_set_data.hsh = hsh_idx;
 
 			if (hsh_idx.error) {
 				NT_LOG(ERR, FILTER, "Could not reference HSH resource");
-				flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+				nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 				goto error_out;
 			}
 
@@ -3634,28 +3674,29 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 					.ttl_ofs = fd->ttl_sub_ipv4 ? 8 : 7,
 				};
 				struct hw_db_tpe_idx tpe_idx =
-					hw_db_inline_tpe_add(dev->ndev, dev->ndev->hw_db_handle,
+					nthw_db_inline_tpe_add(dev->ndev, dev->ndev->hw_db_handle,
 					&tpe_data);
 				fh->db_idxs[fh->db_idx_counter++] = tpe_idx.raw;
 				action_set_data.tpe = tpe_idx;
 
 				if (tpe_idx.error) {
 					NT_LOG(ERR, FILTER, "Could not reference TPE resource");
-					flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+					nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION,
+						error);
 					goto error_out;
 				}
 			}
 		}
 
 		struct hw_db_action_set_idx action_set_idx =
-			hw_db_inline_action_set_add(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_action_set_add(dev->ndev, dev->ndev->hw_db_handle,
 			&action_set_data);
 
 		fh->db_idxs[fh->db_idx_counter++] = action_set_idx.raw;
 
 		if (action_set_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference Action Set resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3669,8 +3710,11 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			.ptc_mask_l4 = fd->l4_prot != -1 ? (1 << fd->l4_prot) : -1,
 			.err_mask_ttl = (fd->ttl_sub_enable &&
 				fd->ttl_sub_outer) ? -1 : 0x1,
+			.vlan_mask_tunnel = (0xf << fd->tunnel_vlans) & 0xf,
 			.ptc_mask_tunnel = fd->tunnel_prot !=
 			-1 ? (1 << (fd->tunnel_prot > 10 ? 10 : fd->tunnel_prot)) : -1,
+			.ptc_mask_l2_tunnel =
+				fd->tunnel_l2_prot != -1 ? (1 << fd->tunnel_l2_prot) : -1,
 			.ptc_mask_l3_tunnel =
 				fd->tunnel_l3_prot != -1 ? (1 << fd->tunnel_l3_prot) : -1,
 			.ptc_mask_l4_tunnel =
@@ -3681,12 +3725,12 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			.ip_prot_tunnel = fd->tunnel_ip_prot,
 		};
 		struct hw_db_cat_idx cat_idx =
-			hw_db_inline_cat_add(dev->ndev, dev->ndev->hw_db_handle, &cat_data);
+			nthw_db_inline_cat_add(dev->ndev, dev->ndev->hw_db_handle, &cat_data);
 		fh->db_idxs[fh->db_idx_counter++] = cat_idx.raw;
 
 		if (cat_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference CAT resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3696,9 +3740,9 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 		if (fd->km.num_ftype_elem) {
 			struct flow_handle *flow = dev->ndev->flow_base, *found_flow = NULL;
 
-			if (km_key_create(&fd->km, fh->port_id)) {
+			if (nthw_km_key_create(&fd->km, fh->port_id)) {
 				NT_LOG(ERR, FILTER, "KM creation failed");
-				flow_nic_set_error(ERR_MATCH_FAILED_BY_HW_LIMITS, error);
+				nthw_flow_nic_set_error(ERR_MATCH_FAILED_BY_HW_LIMITS, error);
 				goto error_out;
 			}
 
@@ -3708,7 +3752,7 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			while (flow) {
 				if (flow->type == FLOW_HANDLE_TYPE_FLOW &&
 					flow->fd->km.flow_type) {
-					int res = km_key_compare(&fd->km, &flow->fd->km);
+					int res = nthw_km_key_compare(&fd->km, &flow->fd->km);
 
 					if (res < 0) {
 						/* Flow rcp and match data is identical */
@@ -3726,51 +3770,54 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 				flow = flow->next;
 			}
 
-			km_attach_ndev_resource_management(&fd->km, &dev->ndev->km_res_handle);
+			nthw_km_attach_ndev_resource_management(&fd->km, &dev->ndev->km_res_handle);
 
 			if (found_flow != NULL) {
 				/* Reuse existing KM RCP */
 				const struct hw_db_inline_km_rcp_data *other_km_rcp_data =
-					hw_db_inline_find_data(dev->ndev, dev->ndev->hw_db_handle,
+					nthw_db_inline_find_data(dev->ndev, dev->ndev->hw_db_handle,
 					HW_DB_IDX_TYPE_KM_RCP,
 					(struct hw_db_idx *)
 					found_flow->flm_db_idxs,
 					found_flow->flm_db_idx_counter);
 
 				if (other_km_rcp_data == NULL ||
-					flow_nic_ref_resource(dev->ndev, RES_KM_CATEGORY,
+					nthw_flow_nic_ref_resource(dev->ndev, RES_KM_CATEGORY,
 					other_km_rcp_data->rcp)) {
 					NT_LOG(ERR, FILTER,
 						"Could not reference existing KM RCP resource");
-					flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+					nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION,
+						error);
 					goto error_out;
 				}
 
 				km_rcp_data.rcp = other_km_rcp_data->rcp;
 			} else {
 				/* Alloc new KM RCP */
-				int rcp = flow_nic_alloc_resource(dev->ndev, RES_KM_CATEGORY, 1);
+				int rcp = nthw_flow_nic_alloc_resource(dev->ndev,
+					RES_KM_CATEGORY, 1);
 
 				if (rcp < 0) {
 					NT_LOG(ERR, FILTER,
 						"Could not reference KM RCP resource (flow_nic_alloc)");
-					flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+					nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION,
+						error);
 					goto error_out;
 				}
 
-				km_rcp_set(&fd->km, rcp);
+				nthw_km_rcp_set(&fd->km, rcp);
 				km_rcp_data.rcp = (uint32_t)rcp;
 			}
 		}
 
 		struct hw_db_km_idx km_idx =
-			hw_db_inline_km_add(dev->ndev, dev->ndev->hw_db_handle, &km_rcp_data);
+			nthw_db_inline_km_add(dev->ndev, dev->ndev->hw_db_handle, &km_rcp_data);
 
 		fh->db_idxs[fh->db_idx_counter++] = km_idx.raw;
 
 		if (km_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference KM RCP resource (db_inline)");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3781,12 +3828,12 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			.action_set = action_set_idx,
 		};
 		struct hw_db_km_ft km_ft_idx =
-			hw_db_inline_km_ft_add(dev->ndev, dev->ndev->hw_db_handle, &km_ft_data);
+			nthw_db_inline_km_ft_add(dev->ndev, dev->ndev->hw_db_handle, &km_ft_data);
 		fh->db_idxs[fh->db_idx_counter++] = km_ft_idx.raw;
 
 		if (km_ft_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference KM FT resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3795,7 +3842,7 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			if (identical_km_entry_ft >= 0 && identical_km_entry_ft != km_ft_idx.id1) {
 				NT_LOG(ERR, FILTER,
 					"Identical KM matches cannot have different KM FTs");
-				flow_nic_set_error(ERR_MATCH_FAILED_BY_HW_LIMITS, error);
+				nthw_flow_nic_set_error(ERR_MATCH_FAILED_BY_HW_LIMITS, error);
 				goto error_out;
 			}
 
@@ -3803,16 +3850,16 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 
 			if (fd->km.target == KM_CAM) {
 				uint32_t ft_a_mask = 0;
-				hw_mod_km_rcp_get(&dev->ndev->be, HW_KM_RCP_FTM_A,
+				nthw_mod_km_rcp_get(&dev->ndev->be, HW_KM_RCP_FTM_A,
 					(int)km_rcp_data.rcp, 0, &ft_a_mask);
-				hw_mod_km_rcp_set(&dev->ndev->be, HW_KM_RCP_FTM_A,
+				nthw_mod_km_rcp_set(&dev->ndev->be, HW_KM_RCP_FTM_A,
 					(int)km_rcp_data.rcp, 0,
 					ft_a_mask | (1 << fd->km.flow_type));
 			}
 
-			hw_mod_km_rcp_flush(&dev->ndev->be, (int)km_rcp_data.rcp, 1);
+			nthw_mod_km_rcp_flush(&dev->ndev->be, (int)km_rcp_data.rcp, 1);
 
-			km_write_data_match_entry(&fd->km, 0);
+			nthw_km_write_data_match_entry(&fd->km, 0);
 		}
 
 		/* Setup Match Set */
@@ -3825,13 +3872,13 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 			.priority = attr->priority & 0xff,
 		};
 		struct hw_db_match_set_idx match_set_idx =
-			hw_db_inline_match_set_add(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_match_set_add(dev->ndev, dev->ndev->hw_db_handle,
 			&match_set_data);
 		fh->db_idxs[fh->db_idx_counter++] = match_set_idx.raw;
 
 		if (match_set_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference Match Set resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3843,12 +3890,12 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 
 		};
 		struct hw_db_flm_ft flm_ft_idx =
-			hw_db_inline_flm_ft_add(dev->ndev, dev->ndev->hw_db_handle, &flm_ft_data);
+			nthw_db_inline_flm_ft_add(dev->ndev, dev->ndev->hw_db_handle, &flm_ft_data);
 		fh->db_idxs[fh->db_idx_counter++] = flm_ft_idx.raw;
 
 		if (flm_ft_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference FLM FT resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -3860,12 +3907,12 @@ static struct flow_handle *create_flow_filter(struct flow_eth_dev *dev, struct n
 error_out:
 
 	if (fh->type == FLOW_HANDLE_TYPE_FLM) {
-		hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+		nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
 			(struct hw_db_idx *)fh->flm_db_idxs,
 			fh->flm_db_idx_counter);
 
 	} else {
-		hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+		nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
 			(struct hw_db_idx *)fh->db_idxs, fh->db_idx_counter);
 	}
 
@@ -3878,11 +3925,11 @@ error_out:
  * Public functions
  */
 
-int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
+int nthw_init_flow_mgmnt_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 {
 	if (!ndev->flow_mgnt_prepared) {
 		/* Check static arrays are big enough */
-		assert(ndev->be.tpe.nb_cpy_writers <= MAX_CPY_WRITERS_SUPPORTED);
+		RTE_ASSERT(ndev->be.tpe.nb_cpy_writers <= MAX_CPY_WRITERS_SUPPORTED);
 		/* KM Flow Type 0 is reserved */
 		flow_nic_mark_resource_used(ndev, RES_KM_FLOW_TYPE, 0);
 		flow_nic_mark_resource_used(ndev, RES_KM_CATEGORY, 0);
@@ -3895,25 +3942,25 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 		flow_nic_mark_resource_used(ndev, RES_FLM_RCP, 0);
 
 		/* COT is locked to CFN. Don't set color for CFN 0 */
-		hw_mod_cat_cot_set(&ndev->be, HW_CAT_COT_PRESET_ALL, 0, 0);
+		nthw_mod_cat_cot_set(&ndev->be, HW_CAT_COT_PRESET_ALL, 0, 0);
 
-		if (hw_mod_cat_cot_flush(&ndev->be, 0, 1) < 0)
+		if (nthw_mod_cat_cot_flush(&ndev->be, 0, 1) < 0)
 			goto err_exit0;
 
 		/* Initialize QSL with unmatched recipe index 0 - discard */
-		if (hw_mod_qsl_rcp_set(&ndev->be, HW_QSL_RCP_DISCARD, 0, 0x1) < 0)
+		if (nthw_mod_qsl_rcp_set(&ndev->be, HW_QSL_RCP_DISCARD, 0, 0x1) < 0)
 			goto err_exit0;
 
-		if (hw_mod_qsl_rcp_flush(&ndev->be, 0, 1) < 0)
+		if (nthw_mod_qsl_rcp_flush(&ndev->be, 0, 1) < 0)
 			goto err_exit0;
 
 		flow_nic_mark_resource_used(ndev, RES_QSL_RCP, 0);
 
 		/* Initialize QST with default index 0 */
-		if (hw_mod_qsl_qst_set(&ndev->be, HW_QSL_QST_PRESET_ALL, 0, 0x0) < 0)
+		if (nthw_mod_qsl_qst_set(&ndev->be, HW_QSL_QST_PRESET_ALL, 0, 0x0) < 0)
 			goto err_exit0;
 
-		if (hw_mod_qsl_qst_flush(&ndev->be, 0, 1) < 0)
+		if (nthw_mod_qsl_qst_flush(&ndev->be, 0, 1) < 0)
 			goto err_exit0;
 
 		flow_nic_mark_resource_used(ndev, RES_QSL_QST, 0);
@@ -3926,13 +3973,13 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 
 		/* PDB setup Direct Virtio Scatter-Gather descriptor of 12 bytes for its recipe 0
 		 */
-		if (hw_mod_pdb_rcp_set(&ndev->be, HW_PDB_RCP_DESCRIPTOR, 0, 7) < 0)
+		if (nthw_mod_pdb_rcp_set(&ndev->be, HW_PDB_RCP_DESCRIPTOR, 0, 7) < 0)
 			goto err_exit0;
 
-		if (hw_mod_pdb_rcp_set(&ndev->be, HW_PDB_RCP_DESC_LEN, 0, 6) < 0)
+		if (nthw_mod_pdb_rcp_set(&ndev->be, HW_PDB_RCP_DESC_LEN, 0, 6) < 0)
 			goto err_exit0;
 
-		if (hw_mod_pdb_rcp_flush(&ndev->be, 0, 1) < 0)
+		if (nthw_mod_pdb_rcp_flush(&ndev->be, 0, 1) < 0)
 			goto err_exit0;
 
 		flow_nic_mark_resource_used(ndev, RES_PDB_RCP, 0);
@@ -3946,16 +3993,16 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 			.rss_hf = RTE_ETH_RSS_IPV6 | RTE_ETH_RSS_PORT,
 			.algorithm = 0,
 		};
-		hsh_set(ndev, 0, hsh_5_tuple);
-		hw_mod_hsh_rcp_flush(&ndev->be, 0, 1);
+		nthw_hsh_set(ndev, 0, hsh_5_tuple);
+		nthw_mod_hsh_rcp_flush(&ndev->be, 0, 1);
 
 		flow_nic_mark_resource_used(ndev, RES_HSH_RCP, 0);
 
 		/* Initialize SCRUB with default index 0, i.e. flow will never AGE-out */
-		if (hw_mod_flm_scrub_set(&ndev->be, HW_FLM_SCRUB_PRESET_ALL, 0, 0) < 0)
+		if (nthw_mod_flm_scrub_set(&ndev->be, HW_FLM_SCRUB_PRESET_ALL, 0, 0) < 0)
 			goto err_exit0;
 
-		if (hw_mod_flm_scrub_flush(&ndev->be, 0, 1) < 0)
+		if (nthw_mod_flm_scrub_flush(&ndev->be, 0, 1) < 0)
 			goto err_exit0;
 
 		flow_nic_mark_resource_used(ndev, RES_SCRUB_RCP, 0);
@@ -3964,7 +4011,7 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 		flow_nic_mark_resource_used(ndev, RES_CAT_CFN, NT_VIOLATING_MBR_CFN);
 		flow_nic_mark_resource_used(ndev, RES_QSL_RCP, NT_VIOLATING_MBR_QSL);
 
-		if (hw_db_inline_setup_mbr_filter(ndev, NT_VIOLATING_MBR_CFN,
+		if (nthw_db_inline_setup_mbr_filter(ndev, NT_VIOLATING_MBR_CFN,
 			NT_FLM_VIOLATING_MBR_FLOW_TYPE,
 			NT_VIOLATING_MBR_QSL) < 0)
 			goto err_exit0;
@@ -3977,56 +4024,56 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 			goto err_exit0;
 
 		/* Learn done status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_LDS, 0);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_LDS, 0);
 		/* Learn fail status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_LFS, 1);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_LFS, 1);
 		/* Learn ignore status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_LIS, 1);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_LIS, 1);
 		/* Unlearn done status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_UDS, 0);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_UDS, 0);
 		/* Unlearn ignore status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_UIS, 0);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_UIS, 0);
 		/* Relearn done status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_RDS, 0);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_RDS, 0);
 		/* Relearn ignore status */
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_RIS, 0);
-		hw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_RBL, 4);
-		hw_mod_flm_control_flush(&ndev->be);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_RIS, 0);
+		nthw_mod_flm_control_set(&ndev->be, HW_FLM_CONTROL_RBL, 4);
+		nthw_mod_flm_control_flush(&ndev->be);
 
 		/* Set the sliding windows size for flm load */
 		uint32_t bin = (uint32_t)(((FLM_LOAD_WINDOWS_SIZE * 1000000000000ULL) /
 			(32ULL * ndev->be.flm.nb_rpp_clock_in_ps)) -
 			1ULL);
-		hw_mod_flm_load_bin_set(&ndev->be, HW_FLM_LOAD_BIN, bin);
-		hw_mod_flm_load_bin_flush(&ndev->be);
+		nthw_mod_flm_load_bin_set(&ndev->be, HW_FLM_LOAD_BIN, bin);
+		nthw_mod_flm_load_bin_flush(&ndev->be);
 
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT0,
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT0,
 			0);	/* Drop at 100% FIFO fill level */
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT0, 1);
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT1,
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT0, 1);
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT1,
 			14);	/* Drop at 87,5% FIFO fill level */
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT1, 1);
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT2,
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT1, 1);
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT2,
 			10);	/* Drop at 62,5% FIFO fill level */
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT2, 1);
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT3,
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT2, 1);
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_LIMIT3,
 			6);	/* Drop at 37,5% FIFO fill level */
-		hw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT3, 1);
-		hw_mod_flm_prio_flush(&ndev->be);
+		nthw_mod_flm_prio_set(&ndev->be, HW_FLM_PRIO_FT3, 1);
+		nthw_mod_flm_prio_flush(&ndev->be);
 
 		/* TODO How to set and use these limits */
 		for (uint32_t i = 0; i < ndev->be.flm.nb_pst_profiles; ++i) {
-			hw_mod_flm_pst_set(&ndev->be, HW_FLM_PST_BP, i,
+			nthw_mod_flm_pst_set(&ndev->be, HW_FLM_PST_BP, i,
 				NTNIC_FLOW_PERIODIC_STATS_BYTE_LIMIT);
-			hw_mod_flm_pst_set(&ndev->be, HW_FLM_PST_PP, i,
+			nthw_mod_flm_pst_set(&ndev->be, HW_FLM_PST_PP, i,
 				NTNIC_FLOW_PERIODIC_STATS_PKT_LIMIT);
-			hw_mod_flm_pst_set(&ndev->be, HW_FLM_PST_TP, i,
+			nthw_mod_flm_pst_set(&ndev->be, HW_FLM_PST_TP, i,
 				NTNIC_FLOW_PERIODIC_STATS_BYTE_TIMEOUT);
 		}
 
-		hw_mod_flm_pst_flush(&ndev->be, 0, ALL_ENTRIES);
+		nthw_mod_flm_pst_flush(&ndev->be, 0, ALL_ENTRIES);
 
-		ndev->id_table_handle = ntnic_id_table_create();
+		ndev->id_table_handle = nthw_id_table_create();
 
 		if (ndev->id_table_handle == NULL)
 			goto err_exit0;
@@ -4054,10 +4101,10 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 		flm_shared_stats->size = FLM_MTR_STAT_SIZE;
 		flm_shared_stats->shared = UINT8_MAX;
 
-		if (flow_group_handle_create(&ndev->group_handle, ndev->be.flm.nb_categories))
+		if (nthw_flow_group_handle_create(&ndev->group_handle, ndev->be.flm.nb_categories))
 			goto err_exit0;
 
-		if (hw_db_inline_create(ndev, &ndev->hw_db_handle))
+		if (nthw_db_inline_create(ndev, &ndev->hw_db_handle))
 			goto err_exit0;
 
 		ndev->flow_mgnt_prepared = 1;
@@ -4066,11 +4113,11 @@ int initialize_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 	return 0;
 
 err_exit0:
-	done_flow_management_of_ndev_profile_inline(ndev);
+	nthw_done_flow_mgmnt_of_ndev_profile_inline(ndev);
 	return -1;
 }
 
-int done_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
+int nthw_done_flow_mgmnt_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 {
 #ifdef FLOW_DEBUG
 	ndev->be.iface->set_debug_mode(ndev->be.be_dev, FLOW_BACKEND_DEBUG_MODE_WRITE);
@@ -4079,14 +4126,14 @@ int done_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 	if (ndev->flow_mgnt_prepared) {
 		flm_sdram_reset(ndev, 0);
 
-		flow_nic_free_resource(ndev, RES_KM_FLOW_TYPE, 0);
-		flow_nic_free_resource(ndev, RES_KM_CATEGORY, 0);
+		nthw_flow_nic_free_resource(ndev, RES_KM_FLOW_TYPE, 0);
+		nthw_flow_nic_free_resource(ndev, RES_KM_CATEGORY, 0);
 
-		hw_mod_flm_rcp_set(&ndev->be, HW_FLM_RCP_PRESET_ALL, 0, 0);
-		hw_mod_flm_rcp_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_FLM_FLOW_TYPE, 0);
-		flow_nic_free_resource(ndev, RES_FLM_FLOW_TYPE, 1);
-		flow_nic_free_resource(ndev, RES_FLM_RCP, 0);
+		nthw_mod_flm_rcp_set(&ndev->be, HW_FLM_RCP_PRESET_ALL, 0, 0);
+		nthw_mod_flm_rcp_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_FLM_FLOW_TYPE, 0);
+		nthw_flow_nic_free_resource(ndev, RES_FLM_FLOW_TYPE, 1);
+		nthw_flow_nic_free_resource(ndev, RES_FLM_RCP, 0);
 
 		for (uint32_t i = 0; i < UINT8_MAX; ++i) {
 			struct flm_flow_mtr_handle_s *handle = ndev->flm_mtr_handle;
@@ -4100,41 +4147,41 @@ int done_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 
 		free(ndev->flm_mtr_handle);
 
-		flow_group_handle_destroy(&ndev->group_handle);
-		ntnic_id_table_destroy(ndev->id_table_handle);
+		nthw_flow_group_handle_destroy(&ndev->group_handle);
+		nthw_id_table_destroy(ndev->id_table_handle);
 
-		hw_mod_cat_cfn_set(&ndev->be, HW_CAT_CFN_PRESET_ALL, 0, 0, 0);
-		hw_mod_cat_cfn_flush(&ndev->be, 0, 1);
-		hw_mod_cat_cot_set(&ndev->be, HW_CAT_COT_PRESET_ALL, 0, 0);
-		hw_mod_cat_cot_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_CAT_CFN, 0);
+		nthw_mod_cat_cfn_set(&ndev->be, HW_CAT_CFN_PRESET_ALL, 0, 0, 0);
+		nthw_mod_cat_cfn_flush(&ndev->be, 0, 1);
+		nthw_mod_cat_cot_set(&ndev->be, HW_CAT_COT_PRESET_ALL, 0, 0);
+		nthw_mod_cat_cot_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_CAT_CFN, 0);
 
-		hw_mod_qsl_rcp_set(&ndev->be, HW_QSL_RCP_PRESET_ALL, 0, 0);
-		hw_mod_qsl_rcp_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_QSL_RCP, 0);
+		nthw_mod_qsl_rcp_set(&ndev->be, HW_QSL_RCP_PRESET_ALL, 0, 0);
+		nthw_mod_qsl_rcp_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_QSL_RCP, 0);
 
-		hw_mod_slc_lr_rcp_set(&ndev->be, HW_SLC_LR_RCP_PRESET_ALL, 0, 0);
-		hw_mod_slc_lr_rcp_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_SLC_LR_RCP, 0);
+		nthw_mod_slc_lr_rcp_set(&ndev->be, HW_SLC_LR_RCP_PRESET_ALL, 0, 0);
+		nthw_mod_slc_lr_rcp_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_SLC_LR_RCP, 0);
 
-		hw_mod_tpe_reset(&ndev->be);
-		flow_nic_free_resource(ndev, RES_TPE_RCP, 0);
-		flow_nic_free_resource(ndev, RES_TPE_EXT, 0);
-		flow_nic_free_resource(ndev, RES_TPE_RPL, 0);
+		nthw_mod_tpe_reset(&ndev->be);
+		nthw_flow_nic_free_resource(ndev, RES_TPE_RCP, 0);
+		nthw_flow_nic_free_resource(ndev, RES_TPE_EXT, 0);
+		nthw_flow_nic_free_resource(ndev, RES_TPE_RPL, 0);
 
-		hw_mod_pdb_rcp_set(&ndev->be, HW_PDB_RCP_PRESET_ALL, 0, 0);
-		hw_mod_pdb_rcp_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_PDB_RCP, 0);
+		nthw_mod_pdb_rcp_set(&ndev->be, HW_PDB_RCP_PRESET_ALL, 0, 0);
+		nthw_mod_pdb_rcp_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_PDB_RCP, 0);
 
-		hw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_PRESET_ALL, 0, 0, 0);
-		hw_mod_hsh_rcp_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_HSH_RCP, 0);
+		nthw_mod_hsh_rcp_set(&ndev->be, HW_HSH_RCP_PRESET_ALL, 0, 0, 0);
+		nthw_mod_hsh_rcp_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_HSH_RCP, 0);
 
-		hw_mod_flm_scrub_set(&ndev->be, HW_FLM_SCRUB_PRESET_ALL, 0, 0);
-		hw_mod_flm_scrub_flush(&ndev->be, 0, 1);
-		flow_nic_free_resource(ndev, RES_SCRUB_RCP, 0);
+		nthw_mod_flm_scrub_set(&ndev->be, HW_FLM_SCRUB_PRESET_ALL, 0, 0);
+		nthw_mod_flm_scrub_flush(&ndev->be, 0, 1);
+		nthw_flow_nic_free_resource(ndev, RES_SCRUB_RCP, 0);
 
-		hw_db_inline_destroy(ndev->hw_db_handle);
+		nthw_db_inline_destroy(ndev->hw_db_handle);
 
 #ifdef FLOW_DEBUG
 		ndev->be.iface->set_debug_mode(ndev->be.be_dev, FLOW_BACKEND_DEBUG_MODE_NONE);
@@ -4146,7 +4193,7 @@ int done_flow_management_of_ndev_profile_inline(struct flow_nic_dev *ndev)
 	return 0;
 }
 
-struct flow_handle *flow_create_profile_inline(struct flow_eth_dev *dev __rte_unused,
+struct flow_handle *nthw_flow_create_profile_inline(struct flow_eth_dev *dev __rte_unused,
 	const struct rte_flow_attr *attr __rte_unused,
 	uint16_t forced_vlan_vid __rte_unused,
 	uint16_t caller_id __rte_unused,
@@ -4173,7 +4220,7 @@ struct flow_handle *flow_create_profile_inline(struct flow_eth_dev *dev __rte_un
 	if (attr_local.group > 0)
 		forced_vlan_vid_local = 0;
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	struct nic_flow_def *fd = allocate_nic_flow_def();
 
@@ -4195,18 +4242,18 @@ struct flow_handle *flow_create_profile_inline(struct flow_eth_dev *dev __rte_un
 
 	/* Translate group IDs */
 	if (fd->jump_to_group != UINT32_MAX &&
-		flow_group_translate_get(dev->ndev->group_handle, caller_id_local, dev->port,
+		nthw_flow_group_translate_get(dev->ndev->group_handle, caller_id_local, dev->port,
 		fd->jump_to_group, &fd->jump_to_group)) {
 		NT_LOG(ERR, FILTER, "ERROR: Could not get group resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		goto err_exit;
 	}
 
 	if (attr_local.group > 0 &&
-		flow_group_translate_get(dev->ndev->group_handle, caller_id_local, dev->port,
+		nthw_flow_group_translate_get(dev->ndev->group_handle, caller_id_local, dev->port,
 		attr_local.group, &attr_local.group)) {
 		NT_LOG(ERR, FILTER, "ERROR: Could not get group resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		goto err_exit;
 	}
 
@@ -4246,16 +4293,14 @@ err_exit0:
 	return NULL;
 }
 
-int flow_destroy_locked_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_destroy_locked_profile_inline(struct flow_eth_dev *dev,
 	struct flow_handle *fh,
 	struct rte_flow_error *error)
 {
-	assert(dev);
-	assert(fh);
+	RTE_ASSERT(dev);
+	RTE_ASSERT(fh);
 
-	int err = 0;
-
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	/* take flow out of ndev list - may not have been put there yet */
 	if (fh->type == FLOW_HANDLE_TYPE_FLM)
@@ -4270,7 +4315,7 @@ int flow_destroy_locked_profile_inline(struct flow_eth_dev *dev,
 
 	NT_LOG(DBG, FILTER, "removing flow :%p", fh);
 	if (fh->type == FLOW_HANDLE_TYPE_FLM) {
-		hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+		nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
 			(struct hw_db_idx *)fh->flm_db_idxs,
 			fh->flm_db_idx_counter);
 
@@ -4280,33 +4325,28 @@ int flow_destroy_locked_profile_inline(struct flow_eth_dev *dev,
 		NT_LOG(DBG, FILTER, "removing flow :%p", fh);
 
 		if (fh->fd->km.num_ftype_elem) {
-			km_clear_data_match_entry(&fh->fd->km);
+			nthw_km_clear_data_match_entry(&fh->fd->km);
 
 			const struct hw_db_inline_km_rcp_data *other_km_rcp_data =
-				hw_db_inline_find_data(dev->ndev, dev->ndev->hw_db_handle,
+				nthw_db_inline_find_data(dev->ndev, dev->ndev->hw_db_handle,
 				HW_DB_IDX_TYPE_KM_RCP,
 				(struct hw_db_idx *)fh->flm_db_idxs,
 				fh->flm_db_idx_counter);
 
 			if (other_km_rcp_data != NULL &&
-				flow_nic_deref_resource(dev->ndev, RES_KM_CATEGORY,
+				nthw_flow_nic_deref_resource(dev->ndev, RES_KM_CATEGORY,
 				(int)other_km_rcp_data->rcp) == 0) {
-				hw_mod_km_rcp_set(&dev->ndev->be, HW_KM_RCP_PRESET_ALL,
+				nthw_mod_km_rcp_set(&dev->ndev->be, HW_KM_RCP_PRESET_ALL,
 					(int)other_km_rcp_data->rcp, 0, 0);
-				hw_mod_km_rcp_flush(&dev->ndev->be, (int)other_km_rcp_data->rcp,
+				nthw_mod_km_rcp_flush(&dev->ndev->be, (int)other_km_rcp_data->rcp,
 					1);
 			}
 		}
 
-		hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+		nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
 			(struct hw_db_idx *)fh->db_idxs, fh->db_idx_counter);
 		free(fh->fd);
 		fh->fd = NULL;
-	}
-
-	if (err) {
-		NT_LOG(ERR, FILTER, "FAILED removing flow: %p", fh);
-		flow_nic_set_error(ERR_REMOVE_FLOW_FAILED, error);
 	}
 
 	free(fh);
@@ -4316,36 +4356,36 @@ int flow_destroy_locked_profile_inline(struct flow_eth_dev *dev,
 	dev->ndev->be.iface->set_debug_mode(dev->ndev->be.be_dev, FLOW_BACKEND_DEBUG_MODE_NONE);
 #endif
 
-	return err;
+	return 0;
 }
 
-int flow_destroy_profile_inline(struct flow_eth_dev *dev, struct flow_handle *flow,
+int nthw_flow_destroy_profile_inline(struct flow_eth_dev *dev, struct flow_handle *flow,
 	struct rte_flow_error *error)
 {
 	int err = 0;
 
 	if (flow && flow->type == FLOW_HANDLE_TYPE_FLM && flow->flm_async)
-		return flow_async_destroy_profile_inline(dev, 0, NULL, flow, NULL, error);
+		return nthw_flow_async_destroy_profile_inline(dev, 0, NULL, flow, NULL, error);
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	if (flow) {
 		/* Delete this flow */
 		rte_spinlock_lock(&dev->ndev->mtx);
-		err = flow_destroy_locked_profile_inline(dev, flow, error);
+		err = nthw_flow_destroy_locked_profile_inline(dev, flow, error);
 		rte_spinlock_unlock(&dev->ndev->mtx);
 	}
 
 	return err;
 }
 
-int flow_flush_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_flush_profile_inline(struct flow_eth_dev *dev,
 	uint16_t caller_id,
 	struct rte_flow_error *error)
 {
 	int err = 0;
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	/*
 	 * Delete all created FLM flows from this eth device.
@@ -4356,7 +4396,7 @@ int flow_flush_profile_inline(struct flow_eth_dev *dev,
 	while (flow && !err) {
 		if (flow->dev == dev && flow->caller_id == caller_id) {
 			struct flow_handle *flow_next = flow->next;
-			err = flow_destroy_profile_inline(dev, flow, error);
+			err = nthw_flow_destroy_profile_inline(dev, flow, error);
 			flow = flow_next;
 
 		} else {
@@ -4370,7 +4410,7 @@ int flow_flush_profile_inline(struct flow_eth_dev *dev,
 	while (flow && !err) {
 		if (flow->dev == dev && flow->caller_id == caller_id) {
 			struct flow_handle *flow_next = flow->next;
-			err = flow_destroy_profile_inline(dev, flow, error);
+			err = nthw_flow_destroy_profile_inline(dev, flow, error);
 			flow = flow_next;
 
 		} else {
@@ -4381,25 +4421,25 @@ int flow_flush_profile_inline(struct flow_eth_dev *dev,
 	return err;
 }
 
-int flow_actions_update_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_actions_update_profile_inline(struct flow_eth_dev *dev,
 	struct flow_handle *flow,
 	const struct rte_flow_action action[],
 	struct rte_flow_error *error)
 {
-	assert(dev);
-	assert(flow);
+	RTE_ASSERT(dev);
+	RTE_ASSERT(flow);
 
 	uint32_t num_dest_port = 0;
 	uint32_t num_queues = 0;
 
 	int group = (int)flow->flm_kid - 2;
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	if (flow->type != FLOW_HANDLE_TYPE_FLM) {
 		NT_LOG(ERR, FILTER,
 			"Flow actions update not supported for group 0 or default flows");
-		flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM, error);
+		nthw_flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM, error);
 		return -1;
 	}
 
@@ -4440,25 +4480,25 @@ int flow_actions_update_profile_inline(struct flow_eth_dev *dev,
 
 		/* Setup FLM RCP */
 		const struct hw_db_inline_flm_rcp_data *flm_data =
-			hw_db_inline_find_data(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_find_data(dev->ndev, dev->ndev->hw_db_handle,
 				HW_DB_IDX_TYPE_FLM_RCP,
 				(struct hw_db_idx *)flow->flm_db_idxs,
 				flow->flm_db_idx_counter);
 
 		if (flm_data == NULL) {
 			NT_LOG(ERR, FILTER, "Could not retrieve FLM RPC resource");
-			flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM, error);
+			nthw_flow_nic_set_error(ERR_MATCH_INVALID_OR_UNSUPPORTED_ELEM, error);
 			goto error_out;
 		}
 
 		struct hw_db_flm_idx flm_idx =
-			hw_db_inline_flm_add(dev->ndev, dev->ndev->hw_db_handle, flm_data, group);
+			nthw_db_inline_flm_add(dev->ndev, dev->ndev->hw_db_handle, flm_data, group);
 
 		local_idxs[local_idx_counter++] = flm_idx.raw;
 
 		if (flm_idx.error) {
 			NT_LOG(ERR, FILTER, "Could not reference FLM RPC resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			goto error_out;
 		}
 
@@ -4504,7 +4544,7 @@ int flow_actions_update_profile_inline(struct flow_eth_dev *dev,
 				break;
 
 			default:
-				NT_LOG(DBG, FILTER, "Unknown modify field: %d",
+				NT_LOG(DBG, FILTER, "Unknown modify field: %" PRIu32,
 					fd->modify_field[i].select);
 				break;
 			}
@@ -4517,7 +4557,7 @@ int flow_actions_update_profile_inline(struct flow_eth_dev *dev,
 		/* Program flow */
 		flm_flow_programming(flow, NT_FLM_OP_RELEARN);
 
-		hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+		nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
 			(struct hw_db_idx *)flow->flm_db_idxs,
 			flow->flm_db_idx_counter);
 		memset(flow->flm_db_idxs, 0x0, sizeof(struct hw_db_idx) * RES_COUNT);
@@ -4534,7 +4574,8 @@ int flow_actions_update_profile_inline(struct flow_eth_dev *dev,
 	return 0;
 
 error_out:
-	hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle, (struct hw_db_idx *)local_idxs,
+	nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+		(struct hw_db_idx *)local_idxs,
 		local_idx_counter);
 
 	rte_spinlock_unlock(&dev->ndev->mtx);
@@ -4552,16 +4593,16 @@ static void dump_flm_data(const uint32_t *data, FILE *file)
 	}
 }
 
-int flow_get_aged_flows_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_get_aged_flows_profile_inline(struct flow_eth_dev *dev,
 	uint16_t caller_id,
 	void **context,
 	uint32_t nb_contexts,
 	struct rte_flow_error *error)
 {
 	(void)dev;
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
-	unsigned int queue_size = flm_age_queue_get_size(caller_id);
+	unsigned int queue_size = nthw_flm_age_queue_get_size(caller_id);
 
 	if (queue_size == 0) {
 		error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
@@ -4569,7 +4610,7 @@ int flow_get_aged_flows_profile_inline(struct flow_eth_dev *dev,
 		return -1;
 	}
 
-	unsigned int queue_count = flm_age_queue_count(caller_id);
+	unsigned int queue_count = nthw_flm_age_queue_count(caller_id);
 
 	if (context == NULL)
 		return queue_count;
@@ -4590,7 +4631,7 @@ int flow_get_aged_flows_profile_inline(struct flow_eth_dev *dev,
 
 	for (idx = 0; idx < nb_contexts; ++idx) {
 		struct flm_age_event_s obj;
-		int ret = flm_age_queue_get(caller_id, &obj);
+		int ret = nthw_flm_age_queue_get(caller_id, &obj);
 
 		if (ret != 0)
 			break;
@@ -4601,13 +4642,13 @@ int flow_get_aged_flows_profile_inline(struct flow_eth_dev *dev,
 	return idx;
 }
 
-int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 	struct flow_handle *flow,
 	uint16_t caller_id,
 	FILE *file,
 	struct rte_flow_error *error)
 {
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	rte_spinlock_lock(&dev->ndev->mtx);
 
@@ -4617,7 +4658,7 @@ int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 				(int)flow->caller_id);
 			fprintf(file, "  FLM_DATA:\n");
 			dump_flm_data(flow->flm_data, file);
-			hw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
 				(struct hw_db_idx *)flow->flm_db_idxs,
 				flow->flm_db_idx_counter, file);
 			fprintf(file, "  Context: %p\n", flow->context);
@@ -4625,7 +4666,7 @@ int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 		} else {
 			fprintf(file, "Port %d, caller %d, flow type FLOW\n", (int)dev->port_id,
 				(int)flow->caller_id);
-			hw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
 				(struct hw_db_idx *)flow->db_idxs, flow->db_idx_counter,
 				file);
 		}
@@ -4633,7 +4674,7 @@ int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 	} else {
 		int max_flm_count = 1000;
 
-		hw_db_inline_dump_cfn(dev->ndev, dev->ndev->hw_db_handle, file);
+		nthw_db_inline_dump_cfn(dev->ndev, dev->ndev->hw_db_handle, file);
 
 		flow = dev->ndev->flow_base;
 
@@ -4641,7 +4682,7 @@ int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 			if (flow->caller_id == caller_id) {
 				fprintf(file, "Port %d, caller %d, flow type FLOW\n",
 					(int)dev->port_id, (int)flow->caller_id);
-				hw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
+				nthw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
 					(struct hw_db_idx *)flow->db_idxs,
 					flow->db_idx_counter, file);
 			}
@@ -4657,7 +4698,7 @@ int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 					(int)dev->port_id, (int)flow->caller_id);
 				fprintf(file, "  FLM_DATA:\n");
 				dump_flm_data(flow->flm_data, file);
-				hw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
+				nthw_db_inline_dump(dev->ndev, dev->ndev->hw_db_handle,
 					(struct hw_db_idx *)flow->flm_db_idxs,
 					flow->flm_db_idx_counter, file);
 				fprintf(file, "  Context: %p\n", flow->context);
@@ -4673,7 +4714,7 @@ int flow_dev_dump_profile_inline(struct flow_eth_dev *dev,
 	return 0;
 }
 
-int flow_get_flm_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size)
+int nthw_flow_get_flm_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data, uint64_t size)
 {
 	const enum hw_flm_e fields[] = {
 		HW_FLM_STAT_FLOWS, HW_FLM_STAT_LRN_DONE, HW_FLM_STAT_LRN_IGNORE,
@@ -4698,11 +4739,11 @@ int flow_get_flm_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data,
 	if (size < fields_cnt)
 		return -1;
 
-	hw_mod_flm_stat_update(&ndev->be);
+	nthw_mod_flm_stat_update(&ndev->be);
 
 	for (uint64_t i = 0; i < fields_cnt; ++i) {
 		uint32_t value = 0;
-		hw_mod_flm_stat_get(&ndev->be, fields[i], &value);
+		nthw_mod_flm_stat_get(&ndev->be, fields[i], &value);
 		data[i] = (fields[i] == HW_FLM_STAT_FLOWS || fields[i] == HW_FLM_LOAD_LPS ||
 				fields[i] == HW_FLM_LOAD_APS)
 			? value
@@ -4715,17 +4756,17 @@ int flow_get_flm_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data,
 	return 0;
 }
 
-int flow_get_ifr_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data,
+int nthw_flow_get_ifr_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data,
 	uint8_t port_count)
 {
 	/* IFR RCP 0 is reserved, port counters start from record 1 */
-	hw_mod_tpe_ifr_counters_update(&ndev->be, 1, port_count);
+	nthw_mod_tpe_ifr_counters_update(&ndev->be, 1, port_count);
 	uint8_t i = 0;
 
 	for (i = 0; i < port_count; ++i) {
 		uint8_t ifr_mtu_recipe = convert_port_to_ifr_mtu_recipe(i);
 		uint32_t drop_cnt = 0;
-		hw_mod_tpe_ifr_counters_get(&ndev->be, HW_TPE_IFR_COUNTERS_DROP, ifr_mtu_recipe,
+		nthw_mod_tpe_ifr_counters_get(&ndev->be, HW_TPE_IFR_COUNTERS_DROP, ifr_mtu_recipe,
 			&drop_cnt);
 		data[i] = data[i] + drop_cnt;
 	}
@@ -4733,7 +4774,7 @@ int flow_get_ifr_stats_profile_inline(struct flow_nic_dev *ndev, uint64_t *data,
 	return 0;
 }
 
-int flow_set_mtu_inline(struct flow_eth_dev *dev, uint32_t port, uint16_t mtu)
+int nthw_flow_set_mtu_inline(struct flow_eth_dev *dev, uint32_t port, uint16_t mtu)
 {
 	if (port >= 255)
 		return -1;
@@ -4766,35 +4807,35 @@ int flow_set_mtu_inline(struct flow_eth_dev *dev, uint32_t port, uint16_t mtu)
 	uint8_t ifr_mtu_recipe = convert_port_to_ifr_mtu_recipe(port);
 	struct flow_nic_dev *ndev = dev->ndev;
 
-	err |= hw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_EN, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_EN, ifr_mtu_recipe,
 			ipv4_en_frag);
-	err |= hw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_EN, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_EN, ifr_mtu_recipe,
 			ipv6_en_frag);
-	err |= hw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_MTU, ifr_mtu_recipe, mtu);
-	err |= hw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_DF_DROP, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_MTU, ifr_mtu_recipe, mtu);
+	err |= nthw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_DF_DROP, ifr_mtu_recipe,
 			ipv4_action);
-	err |= hw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_DROP, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_rpp_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_DROP, ifr_mtu_recipe,
 			ipv6_action);
 
-	err |= hw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_EN, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_EN, ifr_mtu_recipe,
 			ipv4_en_frag);
-	err |= hw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_EN, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_EN, ifr_mtu_recipe,
 			ipv6_en_frag);
-	err |= hw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_MTU, ifr_mtu_recipe, mtu);
-	err |= hw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_DF_DROP, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_MTU, ifr_mtu_recipe, mtu);
+	err |= nthw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV4_DF_DROP, ifr_mtu_recipe,
 			ipv4_action);
-	err |= hw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_DROP, ifr_mtu_recipe,
+	err |= nthw_mod_tpe_ifr_rcp_set(&ndev->be, HW_TPE_IFR_RCP_IPV6_DROP, ifr_mtu_recipe,
 			ipv6_action);
 
 	if (err == 0) {
-		err |= hw_mod_tpe_rpp_ifr_rcp_flush(&ndev->be, ifr_mtu_recipe, 1);
-		err |= hw_mod_tpe_ifr_rcp_flush(&ndev->be, ifr_mtu_recipe, 1);
+		err |= nthw_mod_tpe_rpp_ifr_rcp_flush(&ndev->be, ifr_mtu_recipe, 1);
+		err |= nthw_mod_tpe_ifr_rcp_flush(&ndev->be, ifr_mtu_recipe, 1);
 	}
 
 	return err;
 }
 
-int flow_info_get_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
+int nthw_flow_info_get_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
 	struct rte_flow_port_info *port_info,
 	struct rte_flow_queue_info *queue_info, struct rte_flow_error *error)
 {
@@ -4802,8 +4843,9 @@ int flow_info_get_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
 	(void)caller_id;
 	int res = 0;
 
-	flow_nic_set_error(ERR_SUCCESS, error);
-	memset(port_info, 0, sizeof(struct rte_flow_port_info));
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
+	if (port_info)
+		memset(port_info, 0, sizeof(struct rte_flow_port_info));
 
 	port_info->max_nb_aging_objects = dev->nb_aging_objects;
 
@@ -4815,7 +4857,7 @@ int flow_info_get_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
 	return res;
 }
 
-int flow_configure_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
+int nthw_flow_configure_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
 	const struct rte_flow_port_attr *port_attr, uint16_t nb_queue,
 	const struct rte_flow_queue_attr *queue_attr[],
 	struct rte_flow_error *error)
@@ -4824,16 +4866,17 @@ int flow_configure_profile_inline(struct flow_eth_dev *dev, uint8_t caller_id,
 	(void)queue_attr;
 	int res = 0;
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	if (port_attr->nb_aging_objects > 0) {
 		if (dev->nb_aging_objects > 0) {
-			flm_age_queue_free(dev->port_id, caller_id);
+			nthw_flm_age_queue_free(dev->port_id, caller_id);
 			dev->nb_aging_objects = 0;
 		}
 
 		struct rte_ring *age_queue =
-			flm_age_queue_create(dev->port_id, caller_id, port_attr->nb_aging_objects);
+			nthw_flm_age_queue_create(dev->port_id, caller_id,
+				port_attr->nb_aging_objects);
 
 		if (age_queue == NULL) {
 			error->message = "Failed to allocate aging objects";
@@ -4883,14 +4926,15 @@ error_out:
 	error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
 
 	if (port_attr->nb_aging_objects > 0) {
-		flm_age_queue_free(dev->port_id, caller_id);
+		nthw_flm_age_queue_free(dev->port_id, caller_id);
 		dev->nb_aging_objects = 0;
 	}
 
 	return -1;
 }
 
-struct flow_pattern_template *flow_pattern_template_create_profile_inline(struct flow_eth_dev *dev,
+struct flow_pattern_template *
+nthw_flow_pattern_template_create_profile_inline(struct flow_eth_dev *dev,
 	const struct rte_flow_pattern_template_attr *template_attr, uint16_t caller_id,
 	const struct rte_flow_item pattern[], struct rte_flow_error *error)
 {
@@ -4903,7 +4947,7 @@ struct flow_pattern_template *flow_pattern_template_create_profile_inline(struct
 
 	struct nic_flow_def *fd = allocate_nic_flow_def();
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	if (fd == NULL) {
 		error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
@@ -4922,17 +4966,24 @@ struct flow_pattern_template *flow_pattern_template_create_profile_inline(struct
 
 	struct flow_pattern_template *template = calloc(1, sizeof(struct flow_pattern_template));
 
+	if (template == NULL) {
+		error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
+		error->message = "Failed to allocate actions_template";
+		free(fd);
+		return NULL;
+	}
+
 	template->fd = fd;
 
 	return template;
 }
 
-int flow_pattern_template_destroy_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_pattern_template_destroy_profile_inline(struct flow_eth_dev *dev,
 	struct flow_pattern_template *pattern_template,
 	struct rte_flow_error *error)
 {
 	(void)dev;
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	free(pattern_template->fd);
 	free(pattern_template);
@@ -4941,7 +4992,7 @@ int flow_pattern_template_destroy_profile_inline(struct flow_eth_dev *dev,
 }
 
 struct flow_actions_template *
-flow_actions_template_create_profile_inline(struct flow_eth_dev *dev,
+nthw_flow_actions_template_create_profile_inline(struct flow_eth_dev *dev,
 	const struct rte_flow_actions_template_attr *template_attr, uint16_t caller_id,
 	const struct rte_flow_action actions[],
 	const struct rte_flow_action masks[],
@@ -4955,7 +5006,7 @@ flow_actions_template_create_profile_inline(struct flow_eth_dev *dev,
 
 	struct nic_flow_def *fd = allocate_nic_flow_def();
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	if (fd == NULL) {
 		error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
@@ -4973,19 +5024,26 @@ flow_actions_template_create_profile_inline(struct flow_eth_dev *dev,
 	/* Translate group IDs */
 	if (fd->jump_to_group != UINT32_MAX) {
 		rte_spinlock_lock(&dev->ndev->mtx);
-		res = flow_group_translate_get(dev->ndev->group_handle, caller_id,
+		res = nthw_flow_group_translate_get(dev->ndev->group_handle, caller_id,
 				dev->port, fd->jump_to_group, &fd->jump_to_group);
 		rte_spinlock_unlock(&dev->ndev->mtx);
 
 		if (res) {
 			NT_LOG(ERR, FILTER, "ERROR: Could not get group resource");
-			flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+			nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 			free(fd);
 			return NULL;
 		}
 	}
 
 	struct flow_actions_template *template = calloc(1, sizeof(struct flow_actions_template));
+
+	if (template == NULL) {
+		error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
+		error->message = "Failed to allocate actions_template";
+		free(fd);
+		return NULL;
+	}
 
 	template->fd = fd;
 	template->num_dest_port = num_dest_port;
@@ -4994,12 +5052,12 @@ flow_actions_template_create_profile_inline(struct flow_eth_dev *dev,
 	return template;
 }
 
-int flow_actions_template_destroy_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_actions_template_destroy_profile_inline(struct flow_eth_dev *dev,
 	struct flow_actions_template *actions_template,
 	struct rte_flow_error *error)
 {
 	(void)dev;
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	free(actions_template->fd);
 	free(actions_template);
@@ -5007,14 +5065,14 @@ int flow_actions_template_destroy_profile_inline(struct flow_eth_dev *dev,
 	return 0;
 }
 
-struct flow_template_table *flow_template_table_create_profile_inline(struct flow_eth_dev *dev,
+struct flow_template_table *nthw_flow_template_table_create_profile_inline(struct flow_eth_dev *dev,
 	const struct rte_flow_template_table_attr *table_attr, uint16_t forced_vlan_vid,
 	uint16_t caller_id,
 	struct flow_pattern_template *pattern_templates[], uint8_t nb_pattern_templates,
 	struct flow_actions_template *actions_templates[], uint8_t nb_actions_templates,
 	struct rte_flow_error *error)
 {
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	struct flow_template_table *template_table = calloc(1, sizeof(struct flow_template_table));
 
@@ -5055,14 +5113,14 @@ struct flow_template_table *flow_template_table_create_profile_inline(struct flo
 
 	rte_spinlock_lock(&dev->ndev->mtx);
 	int res =
-		flow_group_translate_get(dev->ndev->group_handle, caller_id, dev->port,
+		nthw_flow_group_translate_get(dev->ndev->group_handle, caller_id, dev->port,
 			template_table->attr.group, &template_table->attr.group);
 	rte_spinlock_unlock(&dev->ndev->mtx);
 
 	/* Translate group IDs */
 	if (res) {
 		NT_LOG(ERR, FILTER, "ERROR: Could not get group resource");
-		flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
+		nthw_flow_nic_set_error(ERR_MATCH_RESOURCE_EXHAUSTION, error);
 		goto error_out;
 	}
 
@@ -5080,11 +5138,11 @@ error_out:
 	return NULL;
 }
 
-int flow_template_table_destroy_profile_inline(struct flow_eth_dev *dev,
+int nthw_flow_template_table_destroy_profile_inline(struct flow_eth_dev *dev,
 	struct flow_template_table *template_table,
 	struct rte_flow_error *error)
 {
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	const uint32_t nb_cells =
 		template_table->nb_pattern_templates * template_table->nb_actions_templates;
@@ -5093,7 +5151,7 @@ int flow_template_table_destroy_profile_inline(struct flow_eth_dev *dev,
 		struct flow_template_table_cell *cell = &template_table->pattern_action_pairs[i];
 
 		if (cell->flm_db_idx_counter > 0) {
-			hw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
+			nthw_db_inline_deref_idxs(dev->ndev, dev->ndev->hw_db_handle,
 				(struct hw_db_idx *)cell->flm_db_idxs,
 				cell->flm_db_idx_counter);
 		}
@@ -5107,7 +5165,7 @@ int flow_template_table_destroy_profile_inline(struct flow_eth_dev *dev,
 	return 0;
 }
 
-struct flow_handle *flow_async_create_profile_inline(struct flow_eth_dev *dev,
+struct flow_handle *nthw_flow_async_create_profile_inline(struct flow_eth_dev *dev,
 	uint32_t queue_id,
 	const struct rte_flow_op_attr *op_attr,
 	struct flow_template_table *template_table,
@@ -5139,7 +5197,7 @@ struct flow_handle *flow_async_create_profile_inline(struct flow_eth_dev *dev,
 	uint32_t packet_mask[10];
 	struct flm_flow_key_def_s key_def;
 
-	flow_nic_set_error(ERR_SUCCESS, error);
+	nthw_flow_nic_set_error(ERR_SUCCESS, error);
 
 	struct nic_flow_def *fd = malloc(sizeof(struct nic_flow_def));
 
@@ -5211,7 +5269,7 @@ struct flow_handle *flow_async_create_profile_inline(struct flow_eth_dev *dev,
 				rte_spinlock_lock(&dev->ndev->mtx);
 
 				struct hw_db_idx *flm_ft_idx =
-					hw_db_inline_find_idx(dev->ndev, dev->ndev->hw_db_handle,
+					nthw_db_inline_find_idx(dev->ndev, dev->ndev->hw_db_handle,
 						HW_DB_IDX_TYPE_FLM_FT,
 						(struct hw_db_idx *)fh->flm_db_idxs,
 						fh->flm_db_idx_counter);
@@ -5243,12 +5301,12 @@ struct flow_handle *flow_async_create_profile_inline(struct flow_eth_dev *dev,
 
 		} else {
 			do {
-				nt_os_wait_usec(1);
+				nthw_os_wait_usec(1);
 				status = atomic_load(&pattern_action_pair->status);
 			} while (status == CELL_STATUS_INITIALIZING);
 
 			/* error handling in case that create_flow_filter() will fail in the other
-			 * thread
+			 * service
 			 */
 			if (status == CELL_STATUS_UNINITIALIZED)
 				goto err_exit;
@@ -5258,6 +5316,12 @@ struct flow_handle *flow_async_create_profile_inline(struct flow_eth_dev *dev,
 	/* FLM learn */
 	if (fh == NULL && status == CELL_STATUS_INITIALIZED_TYPE_FLM) {
 		fh = calloc(1, sizeof(struct flow_handle));
+
+		if (fh == NULL) {
+			error->type = RTE_FLOW_ERROR_TYPE_UNSPECIFIED;
+			error->message = "Failed to allocate flow_handle";
+			goto err_exit;
+		}
 
 		fh->type = FLOW_HANDLE_TYPE_FLM;
 		fh->dev = dev;
@@ -5311,7 +5375,7 @@ err_exit:
 	return NULL;
 }
 
-int flow_async_destroy_profile_inline(struct flow_eth_dev *dev, uint32_t queue_id,
+int nthw_flow_async_destroy_profile_inline(struct flow_eth_dev *dev, uint32_t queue_id,
 	const struct rte_flow_op_attr *op_attr, struct flow_handle *flow,
 	void *user_data, struct rte_flow_error *error)
 {
@@ -5320,11 +5384,11 @@ int flow_async_destroy_profile_inline(struct flow_eth_dev *dev, uint32_t queue_i
 	(void)user_data;
 
 	if (flow->type == FLOW_HANDLE_TYPE_FLOW)
-		return flow_destroy_profile_inline(dev, flow, error);
+		return nthw_flow_destroy_profile_inline(dev, flow, error);
 
 	if (flm_flow_programming(flow, NT_FLM_OP_UNLEARN)) {
 		NT_LOG(ERR, FILTER, "FAILED to destroy flow: %p", flow);
-		flow_nic_set_error(ERR_REMOVE_FLOW_FAILED, error);
+		nthw_flow_nic_set_error(ERR_REMOVE_FLOW_FAILED, error);
 		return -1;
 	}
 
@@ -5335,40 +5399,77 @@ int flow_async_destroy_profile_inline(struct flow_eth_dev *dev, uint32_t queue_i
 	return 0;
 }
 
+int nthw_flow_pull_profile_inline(struct flow_eth_dev *dev,
+							uint16_t caller_id,
+							uint32_t queue_id,
+							struct rte_flow_op_result res[],
+							uint16_t n_res,
+							struct rte_flow_error *error)
+{
+	(void)dev;
+	(void)queue_id;
+	(void)error;
+	struct flm_status_event_s obj;
+	struct flow_handle *fh;
+	int count = 0;
+	uint8_t port = 0;
+	bool remote_caller = is_remote_caller(caller_id, &port);
+
+	for (int i = 0; i < n_res; i++) {
+		if (nthw_flm_sta_queue_get(port, remote_caller, &obj) != 0)
+			break;
+
+		fh = obj.flow;
+		if (fh->type != FLOW_HANDLE_TYPE_FLM || !fh->flm_async)
+			continue;
+
+		res[i].status = obj.learn_done ? RTE_FLOW_OP_SUCCESS : RTE_FLOW_OP_ERROR;
+		res[i].user_data = fh->user_data;
+		count++;
+	}
+
+	return count;
+}
+
 static const struct profile_inline_ops ops = {
 	/*
 	 * Management
 	 */
-	.done_flow_management_of_ndev_profile_inline = done_flow_management_of_ndev_profile_inline,
-	.initialize_flow_management_of_ndev_profile_inline =
-		initialize_flow_management_of_ndev_profile_inline,
-	.flow_dev_dump_profile_inline = flow_dev_dump_profile_inline,
+	.nthw_done_flow_mgmnt_of_ndev_profile_inline = nthw_done_flow_mgmnt_of_ndev_profile_inline,
+	.nthw_init_flow_mgmnt_of_ndev_profile_inline =
+		nthw_init_flow_mgmnt_of_ndev_profile_inline,
+	.nthw_flow_dev_dump_profile_inline = nthw_flow_dev_dump_profile_inline,
 	/*
 	 * Flow functionality
 	 */
-	.flow_destroy_locked_profile_inline = flow_destroy_locked_profile_inline,
-	.flow_create_profile_inline = flow_create_profile_inline,
-	.flow_destroy_profile_inline = flow_destroy_profile_inline,
-	.flow_flush_profile_inline = flow_flush_profile_inline,
-	.flow_actions_update_profile_inline = flow_actions_update_profile_inline,
-	.flow_get_aged_flows_profile_inline = flow_get_aged_flows_profile_inline,
+	.nthw_flow_destroy_locked_profile_inline = nthw_flow_destroy_locked_profile_inline,
+	.nthw_flow_create_profile_inline = nthw_flow_create_profile_inline,
+	.nthw_flow_destroy_profile_inline = nthw_flow_destroy_profile_inline,
+	.nthw_flow_flush_profile_inline = nthw_flow_flush_profile_inline,
+	.nthw_flow_actions_update_profile_inline = nthw_flow_actions_update_profile_inline,
+	.nthw_flow_get_aged_flows_profile_inline = nthw_flow_get_aged_flows_profile_inline,
 	/*
 	 * Stats
 	 */
-	.flow_get_flm_stats_profile_inline = flow_get_flm_stats_profile_inline,
-	.flow_get_ifr_stats_profile_inline = flow_get_ifr_stats_profile_inline,
-	.flow_info_get_profile_inline = flow_info_get_profile_inline,
-	.flow_configure_profile_inline = flow_configure_profile_inline,
-	.flow_pattern_template_create_profile_inline = flow_pattern_template_create_profile_inline,
-	.flow_pattern_template_destroy_profile_inline =
-		flow_pattern_template_destroy_profile_inline,
-	.flow_actions_template_create_profile_inline = flow_actions_template_create_profile_inline,
-	.flow_actions_template_destroy_profile_inline =
-		flow_actions_template_destroy_profile_inline,
-	.flow_template_table_create_profile_inline = flow_template_table_create_profile_inline,
-	.flow_template_table_destroy_profile_inline = flow_template_table_destroy_profile_inline,
-	.flow_async_create_profile_inline = flow_async_create_profile_inline,
-	.flow_async_destroy_profile_inline = flow_async_destroy_profile_inline,
+	.nthw_flow_get_flm_stats_profile_inline = nthw_flow_get_flm_stats_profile_inline,
+	.nthw_flow_get_ifr_stats_profile_inline = nthw_flow_get_ifr_stats_profile_inline,
+	.nthw_flow_info_get_profile_inline = nthw_flow_info_get_profile_inline,
+	.nthw_flow_configure_profile_inline = nthw_flow_configure_profile_inline,
+	.nthw_flow_pattern_template_create_profile_inline =
+		nthw_flow_pattern_template_create_profile_inline,
+	.nthw_flow_pattern_template_destroy_profile_inline =
+		nthw_flow_pattern_template_destroy_profile_inline,
+	.nthw_flow_actions_template_create_profile_inline =
+		nthw_flow_actions_template_create_profile_inline,
+	.nthw_flow_actions_template_destroy_profile_inline =
+		nthw_flow_actions_template_destroy_profile_inline,
+	.nthw_flow_template_table_create_profile_inline =
+		nthw_flow_template_table_create_profile_inline,
+	.nthw_flow_template_table_destroy_profile_inline =
+		nthw_flow_template_table_destroy_profile_inline,
+	.nthw_flow_async_create_profile_inline = nthw_flow_async_create_profile_inline,
+	.nthw_flow_async_destroy_profile_inline = nthw_flow_async_destroy_profile_inline,
+	.nthw_flow_pull_profile_inline = nthw_flow_pull_profile_inline,
 	/*
 	 * NT Flow FLM Meter API
 	 */
@@ -5389,10 +5490,10 @@ static const struct profile_inline_ops ops = {
 	/*
 	 * Config API
 	 */
-	.flow_set_mtu_inline = flow_set_mtu_inline,
+	.nthw_flow_set_mtu_inline = nthw_flow_set_mtu_inline,
 };
 
-void profile_inline_init(void)
+void nthw_profile_inline_init(void)
 {
-	register_profile_inline_ops(&ops);
+	nthw_reg_profile_inline_ops(&ops);
 }

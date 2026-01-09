@@ -36,6 +36,15 @@
 extern uint8_t cl_quit;
 extern volatile uint8_t f_quit;
 
+/* Max number of cmdline files we can take on testpmd cmdline */
+#define MAX_CMDLINE_FILENAMES 16
+
+/* Structure to track cmdline files and their echo settings */
+struct cmdline_file_info {
+	char filename[PATH_MAX];  /**< Path to the cmdline file */
+	bool echo;                /**< Whether to echo commands from this file */
+};
+
 /*
  * It is used to allocate the memory for hash key.
  * The hash key size is NIC dependent.
@@ -475,6 +484,10 @@ extern cmdline_parse_inst_t cmd_show_set_raw_all;
 extern cmdline_parse_inst_t cmd_set_flex_is_pattern;
 extern cmdline_parse_inst_t cmd_set_flex_spec_pattern;
 
+#define DEFAULT_DCB_FWD_TC_MASK	0xFF
+extern uint8_t dcb_fwd_tc_mask;
+extern uint8_t dcb_fwd_tc_cores;
+
 extern uint16_t mempool_flags;
 
 /**
@@ -509,8 +522,8 @@ extern int testpmd_logtype; /**< Log type for testpmd logs */
 extern uint8_t  interactive;
 extern uint8_t  auto_start;
 extern uint8_t  tx_first;
-extern char cmdline_filename[PATH_MAX]; /**< offline commands file */
-extern bool echo_cmdline_file;  /** unset if cmdline-file-noecho is used */
+extern struct cmdline_file_info cmdline_files[MAX_CMDLINE_FILENAMES]; /**< offline commands files */
+extern unsigned int cmdline_file_count; /**< number of cmdline files */
 extern uint8_t  numa_support; /**< set by "--numa" parameter */
 extern uint16_t port_topology; /**< set by "--port-topology" parameter */
 extern uint8_t no_flush_rx; /**<set by "--no-flush-rx" parameter */
@@ -576,6 +589,7 @@ extern struct rte_eth_rxmode rx_mode;
 extern struct rte_eth_txmode tx_mode;
 
 extern uint64_t rss_hf;
+extern bool force_rss;
 
 extern queueid_t nb_hairpinq;
 extern queueid_t nb_rxq;
@@ -928,7 +942,7 @@ unsigned int parse_hdrs_list(const char *str, const char *item_name,
 			unsigned int *parsed_items);
 void launch_args_parse(int argc, char** argv);
 void cmd_reconfig_device_queue(portid_t id, uint8_t dev, uint8_t queue);
-void cmdline_read_from_file(const char *filename);
+int cmdline_read_from_file(const char *filename, bool echo);
 int init_cmdline(void);
 void prompt(void);
 void prompt_exit(void);
@@ -1151,7 +1165,10 @@ uint8_t port_is_bonding_member(portid_t member_pid);
 
 int init_port_dcb_config(portid_t pid, enum dcb_mode_enable dcb_mode,
 		     enum rte_eth_nb_tcs num_tcs,
-		     uint8_t pfc_en);
+		     uint8_t pfc_en,
+		     uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES],
+		     uint8_t prio_tc_en,
+		     uint8_t keep_qnum);
 int start_port(portid_t pid);
 void stop_port(portid_t pid);
 void close_port(portid_t pid);

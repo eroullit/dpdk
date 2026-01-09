@@ -8,6 +8,7 @@
 #include <rte_event_timer_adapter.h>
 #include <rte_eventdev.h>
 
+#include "cn20k_cryptodev_event_dp.h"
 #include "cn20k_eventdev.h"
 #include "cn20k_rx.h"
 #include "cnxk_worker.h"
@@ -53,12 +54,12 @@ cn20k_process_vwqe(uintptr_t vwqe, uint16_t port_id, const uint32_t flags, struc
 	struct cnxk_timesync_info *tstamp = ws->tstamp[port_id];
 	uint8_t m_sz = sizeof(struct rte_mbuf);
 	void *lookup_mem = ws->lookup_mem;
+	uint64_t meta_aura = 0, laddr = 0;
 	uintptr_t lbase = ws->lmt_base;
-	uint64_t meta_aura = 0, laddr;
+	uint16_t lmt_id = 0, d_off = 0;
 	struct rte_event_vector *vec;
 	uint16_t nb_mbufs, non_vec;
 	struct rte_mempool *mp;
-	uint16_t lmt_id, d_off;
 	struct rte_mbuf **wqe;
 	struct rte_mbuf *mbuf;
 	uint64_t sa_base = 0;
@@ -166,7 +167,14 @@ cn20k_sso_hws_post_process(struct cn20k_sso_hws *ws, uint64_t *u64, const uint32
 
 	u64[0] = (u64[0] & (0x3ull << 32)) << 6 | (u64[0] & (0x3FFull << 36)) << 4 |
 		 (u64[0] & 0xffffffff);
-	if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_ETHDEV) {
+	if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_CRYPTODEV) {
+		u64[1] = cn20k_cpt_crypto_adapter_dequeue(u64[1]);
+	} else if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_CRYPTODEV_VECTOR) {
+		__uint128_t vwqe_hdr = *(__uint128_t *)u64[1];
+		vwqe_hdr = ((vwqe_hdr >> 64) & 0xFFF) | BIT_ULL(31) | ((vwqe_hdr & 0xFFFF) << 48);
+		*(uint64_t *)u64[1] = (uint64_t)vwqe_hdr;
+		u64[1] = cn20k_cpt_crypto_adapter_vector_dequeue(u64[1]);
+	} else if (CNXK_EVENT_TYPE_FROM_TAG(u64[0]) == RTE_EVENT_TYPE_ETHDEV) {
 		uint8_t port = CNXK_SUB_EVENT_FROM_TAG(u64[0]);
 		uintptr_t cpth = 0;
 		uint64_t mbuf;

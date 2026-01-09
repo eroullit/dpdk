@@ -191,7 +191,7 @@ static __rte_always_inline int
 cnxk_ae_fill_ec_params(struct cnxk_ae_sess *sess, struct rte_crypto_asym_xform *xform)
 {
 	struct roc_ae_ec_ctx *ec = &sess->ec_ctx;
-	union cpt_inst_w4 w4;
+	union cpt_inst_w4 w4 = {0};
 
 	switch (xform->ec.curve_id) {
 	case RTE_CRYPTO_EC_GROUP_SECP192R1:
@@ -1090,6 +1090,9 @@ cnxk_ae_sm2_sign_prep(struct rte_crypto_sm2_op_param *sm2,
 	if (order_len > ROC_AE_EC_DATA_MAX)
 		order_len = ROC_AE_EC_DATA_MAX;
 
+	if (pkey_len > ROC_AE_EC_DATA_MAX)
+		pkey_len = ROC_AE_EC_DATA_MAX;
+
 	/* Truncate input length to curve prime length */
 	if (message_len > prime_len)
 		message_len = prime_len;
@@ -1180,6 +1183,12 @@ cnxk_ae_sm2_verify_prep(struct rte_crypto_sm2_op_param *sm2,
 	order_len = ec_grp->order.length;
 	if (order_len > ROC_AE_EC_DATA_MAX)
 		order_len = ROC_AE_EC_DATA_MAX;
+
+	if (qx_len > ROC_AE_EC_DATA_MAX)
+		qx_len = ROC_AE_EC_DATA_MAX;
+
+	if (qy_len > ROC_AE_EC_DATA_MAX)
+		qy_len = ROC_AE_EC_DATA_MAX;
 
 	/* Truncate input length to curve prime length */
 	if (message_len > prime_len)
@@ -1583,20 +1592,17 @@ cnxk_ae_dequeue_rsa_op(struct rte_crypto_op *cop, uint8_t *rptr,
 	case RTE_CRYPTO_ASYM_OP_VERIFY:
 		if (rsa_ctx->padding.type == RTE_CRYPTO_RSA_PADDING_NONE) {
 			rsa->sign.length = rsa_ctx->n.length;
-			memcpy(rsa->sign.data, rptr, rsa->sign.length);
+			if (memcmp(rptr, rsa->message.data, rsa->message.length))
+				cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		} else {
 			/* Get length of signed output */
-			rsa->sign.length =
-				rte_cpu_to_be_16(*((uint16_t *)rptr));
+			rsa->sign.length = rte_cpu_to_be_16(*((uint16_t *)rptr));
 			/*
 			 * Offset output data pointer by length field
-			 * (2 bytes) and copy signed data.
+			 * (2 bytes) and compare signed data.
 			 */
-			memcpy(rsa->sign.data, rptr + 2, rsa->sign.length);
-		}
-		if (memcmp(rsa->sign.data, rsa->message.data,
-			   rsa->message.length)) {
-			cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
+			if (memcmp(rptr + 2, rsa->message.data, rsa->message.length))
+				cop->status = RTE_CRYPTO_OP_STATUS_ERROR;
 		}
 		break;
 	default:

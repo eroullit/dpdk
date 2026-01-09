@@ -173,7 +173,7 @@ wireless_slice_support(uint16_t pci_dev_id)
  * other than the equals sign is ignored. It will not work with other conversion
  * functions like strt*.
  */
-char *qat_dev_cmdline_get_val(struct qat_pci_device *qat_dev,
+const char *qat_dev_cmdline_get_val(struct qat_pci_device *qat_dev,
 	const char *key)
 {
 	if (qat_dev->command_line == NULL)
@@ -185,8 +185,9 @@ char *qat_dev_cmdline_get_val(struct qat_pci_device *qat_dev,
 
 static int cmdline_validate(const char *arg)
 {
+	const char *eq_sign = strchr(arg, '=');
 	int i, len;
-	char *eq_sign = strchr(arg, '=');
+
 	/* Check for the equal sign */
 	if (eq_sign == NULL) {
 		QAT_LOG(ERR, "malformed string, no equals sign, %s", arg);
@@ -229,6 +230,7 @@ qat_dev_parse_command_line(struct qat_pci_device *qat_dev,
 	len = strlen(devargs->drv_str);
 	if (len == 0)
 		return 0;
+	++len;
 	/* Allocate per-device command line */
 	qat_dev->command_line = rte_malloc(NULL, len, 0);
 	if (qat_dev->command_line == NULL) {
@@ -262,7 +264,7 @@ qat_pci_device_allocate(struct rte_pci_device *pci_dev)
 	struct rte_mem_resource *mem_resource;
 	const struct rte_memzone *qat_dev_mz;
 	int qat_dev_size, extra_size;
-	char *cmdline = NULL;
+	const char *cmdline = NULL;
 
 	rte_pci_device_name(&pci_dev->addr, name, sizeof(name));
 	snprintf(name+strlen(name), QAT_DEV_NAME_MAX_LEN-strlen(name), "_qat");

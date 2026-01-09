@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include <eventdev_pmd.h>
+#include <eal_export.h>
 #include <rte_alarm.h>
 #include <rte_branch_prediction.h>
 #include <bus_vdev_driver.h>
@@ -44,6 +45,7 @@ struct octeontx_vdev_init_params {
 	uint8_t	nr_port;
 };
 
+RTE_EXPORT_SYMBOL(rte_octeontx_pchan_map)
 uint16_t
 rte_octeontx_pchan_map[OCTEONTX_MAX_BGX_PORTS][OCTEONTX_MAX_LMAC_PER_BGX];
 
@@ -1020,7 +1022,8 @@ octeontx_dev_xstats_get(struct rte_eth_dev *dev,
 }
 
 static int
-octeontx_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+octeontx_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		       struct eth_queue_stats *qstats __rte_unused)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 

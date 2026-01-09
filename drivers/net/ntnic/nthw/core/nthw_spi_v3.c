@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -39,10 +38,10 @@ static int wait_for_tx_data_sent(nthw_spim_t *p_spim_mod, uint64_t time_out)
 	bool empty;
 	uint64_t start_time;
 	uint64_t cur_time;
-	start_time = nt_os_get_time_monotonic_counter();
+	start_time = nthw_os_get_time_monotonic_counter();
 
 	while (true) {
-		nt_os_wait_usec(1000);	/* Every 1ms */
+		nthw_os_wait_usec(1000);	/* Every 1ms */
 
 		result = nthw_spim_get_tx_fifo_empty(p_spim_mod, &empty);
 
@@ -54,7 +53,7 @@ static int wait_for_tx_data_sent(nthw_spim_t *p_spim_mod, uint64_t time_out)
 		if (empty)
 			break;
 
-		cur_time = nt_os_get_time_monotonic_counter();
+		cur_time = nthw_os_get_time_monotonic_counter();
 
 		if ((cur_time - start_time) > time_out) {
 			NT_LOG(WRN, NTHW, "%s: Timed out", __func__);
@@ -74,11 +73,11 @@ static int wait_for_rx_data_ready(nthw_spis_t *p_spis_mod, uint64_t time_out)
 	bool empty;
 	uint64_t start_time;
 	uint64_t cur_time;
-	start_time = nt_os_get_time_monotonic_counter();
+	start_time = nthw_os_get_time_monotonic_counter();
 
 	/* Wait for data to become ready in the Rx FIFO */
 	while (true) {
-		nt_os_wait_usec(10000);	/* Every 10ms */
+		nthw_os_wait_usec(10000);	/* Every 10ms */
 
 		result = nthw_spis_get_rx_fifo_empty(p_spis_mod, &empty);
 
@@ -90,7 +89,7 @@ static int wait_for_rx_data_ready(nthw_spis_t *p_spis_mod, uint64_t time_out)
 		if (!empty)
 			break;
 
-		cur_time = nt_os_get_time_monotonic_counter();
+		cur_time = nthw_os_get_time_monotonic_counter();
 
 		if ((cur_time - start_time) > time_out) {
 			NT_LOG(WRN, NTHW, "%s: Timed out", __func__);
@@ -125,7 +124,7 @@ static void dump_hex(uint8_t *p_data, uint16_t count)
 int nthw_spi_v3_init(nthw_spi_v3_t *p, nthw_fpga_t *p_fpga, int n_instance_no)
 {
 	const char *const p_adapter_id_str = p_fpga->p_fpga_info->mp_adapter_id_str;
-	uint32_t result;
+	int result;
 
 	p->mn_instance_no = n_instance_no;
 
@@ -171,26 +170,23 @@ int nthw_spi_v3_transfer(nthw_spi_v3_t *p, uint16_t opcode, struct tx_rx_buf *tx
 	const uint16_t max_payload_rx_size = rx_buf->size;
 	int result = 0;
 
-#pragma pack(push, 1)
-	union {
+	union __rte_packed_begin {
 		uint32_t raw;
 
 		struct {
 			uint16_t opcode;
 			uint16_t size;
 		};
-	} spi_tx_hdr;
+	} __rte_packed_end spi_tx_hdr;
 
-	union {
+	union __rte_packed_begin {
 		uint32_t raw;
 
 		struct {
 			uint16_t error_code;
 			uint16_t size;
 		};
-	} spi_rx_hdr;
-
-#pragma pack(pop)
+	} __rte_packed_end spi_rx_hdr;
 
 #ifdef SPI_V3_DEBUG_PRINT
 	NT_LOG_DBG(DBG, NTHW, "Started");
@@ -294,7 +290,9 @@ int nthw_spi_v3_transfer(nthw_spi_v3_t *p, uint16_t opcode, struct tx_rx_buf *tx
 				if (result != 0)
 					return result;
 
-				result = nthw_spis_read_rx_fifo(p->mp_spis_mod, &spi_rx_hdr.raw);
+				typeof(spi_rx_hdr.raw) raw;
+				result = nthw_spis_read_rx_fifo(p->mp_spis_mod, &raw);
+				spi_rx_hdr.raw = raw;
 
 				if (result != 0) {
 					NT_LOG(WRN, NTHW, "nthw_spis_read_rx_fifo failed");

@@ -1,12 +1,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright (c) 2022 Marvell.
 
-if is_ms_compiler
-    build = false
-    reason = 'not supported building with Visual Studio Toolset'
-    subdir_done()
-endif
-
 sources = files(
         'rte_mldev_pmd.c',
         'rte_mldev.c',
@@ -32,11 +26,8 @@ headers = files(
         'rte_mldev.h',
 )
 
-indirect_headers += files(
-        'rte_mldev_core.h',
-)
-
 driver_sdk_headers += files(
+        'rte_mldev_core.h',
         'rte_mldev_pmd.h',
         'mldev_utils.h',
 )

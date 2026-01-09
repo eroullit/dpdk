@@ -16,6 +16,7 @@
 #include <rte_event_eth_rx_adapter.h>
 #include <rte_event_eth_tx_adapter.h>
 #include <rte_event_timer_adapter.h>
+#include <rte_event_vector_adapter.h>
 #include <rte_eventdev.h>
 #include <rte_lcore.h>
 #include <rte_malloc.h>
@@ -33,6 +34,7 @@ struct test_perf;
 
 struct __rte_cache_aligned worker_data {
 	uint64_t processed_pkts;
+	uint64_t processed_vecs;
 	uint64_t latency;
 	uint8_t dev_id;
 	uint8_t port_id;
@@ -50,12 +52,17 @@ struct dma_adptr_data {
 	uint16_t vchan_id;
 };
 
+struct vector_adptr_data {
+	struct rte_event_vector_adapter *vector_adptr;
+};
+
 struct __rte_cache_aligned prod_data {
 	uint8_t dev_id;
 	uint8_t port_id;
 	uint8_t queue_id;
 	struct crypto_adptr_data ca;
 	struct dma_adptr_data da;
+	struct vector_adptr_data va;
 	struct test_perf *t;
 };
 
@@ -139,7 +146,7 @@ perf_mark_fwd_latency(enum evt_prod_type prod_type, struct rte_event *const ev)
 		}
 		pe->timestamp = rte_get_timer_cycles();
 	} else if (prod_type == EVT_PROD_TYPE_EVENT_DMA_ADPTR) {
-		struct rte_event_dma_adapter_op *op = ev->event_ptr;
+		struct rte_dma_op *op = ev->event_ptr;
 
 		op->user_meta = rte_get_timer_cycles();
 	} else {
@@ -297,7 +304,7 @@ perf_process_last_stage_latency(struct rte_mempool *const pool, enum evt_prod_ty
 		tstamp = pe->timestamp;
 		rte_crypto_op_free(op);
 	} else if (prod_type == EVT_PROD_TYPE_EVENT_DMA_ADPTR) {
-		struct rte_event_dma_adapter_op *op = ev->event_ptr;
+		struct rte_dma_op *op = ev->event_ptr;
 
 		to_free_in_bulk = op;
 		tstamp = op->user_meta;
@@ -320,9 +327,9 @@ perf_process_last_stage_latency(struct rte_mempool *const pool, enum evt_prod_ty
 }
 
 static __rte_always_inline void
-perf_process_vector_last_stage(struct rte_mempool *const pool,
-		struct rte_mempool *const ca_pool, struct rte_event *const ev,
-		struct worker_data *const w, const bool enable_fwd_latency)
+perf_process_crypto_vector_last_stage(struct rte_mempool *const pool,
+				      struct rte_mempool *const ca_pool, struct rte_event *const ev,
+				      struct worker_data *const w, const bool enable_fwd_latency)
 {
 	struct rte_event_vector *vec = ev->vec;
 	struct rte_crypto_op *cop;

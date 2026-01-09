@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -34,7 +33,7 @@ struct nthw_virt_queue;
 /*
  * Split Ring virtq Descriptor
  */
-struct __rte_aligned(8) virtq_desc {
+struct __rte_packed_begin virtq_desc {
 	/* Address (guest-physical). */
 	uint64_t addr;
 	/* Length. */
@@ -43,7 +42,7 @@ struct __rte_aligned(8) virtq_desc {
 	uint16_t flags;
 	/* Next field if flags & NEXT */
 	uint16_t next;
-};
+} __rte_packed_end;
 
 
 /*

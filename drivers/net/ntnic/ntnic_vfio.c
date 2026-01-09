@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -20,7 +19,7 @@
 #define ONE_G_MASK (ONE_G_SIZE - 1)
 #define START_VF_IOVA 0x220000000000
 
-int
+static int
 nt_vfio_vf_num(const struct rte_pci_device *pdev)
 {
 	return ((pdev->addr.devid & 0x1f) << 3) + ((pdev->addr.function) & 0x7);
@@ -47,7 +46,7 @@ vfio_get(int vf_num)
 
 /* External API */
 int
-nt_vfio_setup(struct rte_pci_device *dev)
+nthw_vfio_setup(struct rte_pci_device *dev)
 {
 	int ret;
 	char devname[RTE_DEV_NAME_MAX_LEN] = { 0 };
@@ -68,7 +67,6 @@ nt_vfio_setup(struct rte_pci_device *dev)
 
 	vfio->dev_fd = -1;
 	vfio->group_fd = -1;
-	vfio->container_fd = -1;
 	vfio->iova_addr = START_VF_IOVA;
 
 	rte_pci_device_name(&dev->addr, devname, RTE_DEV_NAME_MAX_LEN);
@@ -124,7 +122,7 @@ err:
 }
 
 int
-nt_vfio_remove(int vf_num)
+nthw_vfio_remove(int vf_num)
 {
 	struct vfio_dev *vfio;
 
@@ -142,7 +140,7 @@ nt_vfio_remove(int vf_num)
 }
 
 int
-nt_vfio_dma_map(int vf_num, void *virt_addr, uint64_t *iova_addr, uint64_t size)
+nthw_vfio_dma_map(int vf_num, void *virt_addr, uint64_t *iova_addr, uint64_t size)
 {
 	uint64_t gp_virt_base;
 	uint64_t gp_offset;
@@ -190,7 +188,7 @@ nt_vfio_dma_map(int vf_num, void *virt_addr, uint64_t *iova_addr, uint64_t size)
 }
 
 int
-nt_vfio_dma_unmap(int vf_num, void *virt_addr, uint64_t iova_addr, uint64_t size)
+nthw_vfio_dma_unmap(int vf_num, void *virt_addr, uint64_t iova_addr, uint64_t size)
 {
 	uint64_t gp_virt_base;
 	struct vfio_dev *vfio;
@@ -212,9 +210,6 @@ nt_vfio_dma_unmap(int vf_num, void *virt_addr, uint64_t iova_addr, uint64_t size
 		return -1;
 	}
 
-	if (vfio->container_fd == -1)
-		return 0;
-
 	int res = rte_vfio_container_dma_unmap(vfio->container_fd, gp_virt_base, iova_addr, size);
 
 	if (res != 0) {
@@ -229,10 +224,10 @@ nt_vfio_dma_unmap(int vf_num, void *virt_addr, uint64_t iova_addr, uint64_t size
 }
 
 void
-nt_vfio_init(void)
+nthw_vfio_init(void)
 {
-	struct nt_util_vfio_impl s = { .vfio_dma_map = nt_vfio_dma_map,
-		       .vfio_dma_unmap = nt_vfio_dma_unmap
+	struct nt_util_vfio_impl s = { .vfio_dma_map = nthw_vfio_dma_map,
+		       .vfio_dma_unmap = nthw_vfio_dma_unmap
 	};
-	nt_util_vfio_init(&s);
+	nthw_util_vfio_init(&s);
 }

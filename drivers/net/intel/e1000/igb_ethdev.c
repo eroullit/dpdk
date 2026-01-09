@@ -86,7 +86,7 @@ static int  eth_igb_allmulticast_disable(struct rte_eth_dev *dev);
 static int  eth_igb_link_update(struct rte_eth_dev *dev,
 				int wait_to_complete);
 static int eth_igb_stats_get(struct rte_eth_dev *dev,
-				struct rte_eth_stats *rte_stats);
+				struct rte_eth_stats *rte_stats, struct eth_queue_stats *qstats);
 static int eth_igb_xstats_get(struct rte_eth_dev *dev,
 			      struct rte_eth_xstat *xstats, unsigned n);
 static int eth_igb_xstats_get_by_id(struct rte_eth_dev *dev,
@@ -163,7 +163,7 @@ static int igbvf_allmulticast_enable(struct rte_eth_dev *dev);
 static int igbvf_allmulticast_disable(struct rte_eth_dev *dev);
 static int eth_igbvf_link_update(struct e1000_hw *hw);
 static int eth_igbvf_stats_get(struct rte_eth_dev *dev,
-				struct rte_eth_stats *rte_stats);
+				struct rte_eth_stats *rte_stats, struct eth_queue_stats *qstats);
 static int eth_igbvf_xstats_get(struct rte_eth_dev *dev,
 				struct rte_eth_xstat *xstats, unsigned n);
 static int eth_igbvf_xstats_get_names(struct rte_eth_dev *dev,
@@ -237,6 +237,10 @@ static void eth_igb_configure_msix_intr(struct rte_eth_dev *dev);
 static void eth_igbvf_interrupt_handler(void *param);
 static void igbvf_mbx_process(struct rte_eth_dev *dev);
 static int igb_filter_restore(struct rte_eth_dev *dev);
+static int igb_tx_burst_mode_get(struct rte_eth_dev *dev,
+	__rte_unused uint16_t queue_id, struct rte_eth_burst_mode *mode);
+static int igb_rx_burst_mode_get(struct rte_eth_dev *dev,
+	__rte_unused uint16_t queue_id, struct rte_eth_burst_mode *mode);
 
 /*
  * Define VF Stats MACRO for Non "cleared on read" register
@@ -367,6 +371,8 @@ static const struct eth_dev_ops eth_igb_ops = {
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
 	.tx_queue_release     = eth_igb_tx_queue_release,
 	.tx_done_cleanup      = eth_igb_tx_done_cleanup,
+	.rx_burst_mode_get    = igb_rx_burst_mode_get,
+	.tx_burst_mode_get    = igb_tx_burst_mode_get,
 	.dev_led_on           = eth_igb_led_on,
 	.dev_led_off          = eth_igb_led_off,
 	.flow_ctrl_get        = eth_igb_flow_ctrl_get,
@@ -425,6 +431,8 @@ static const struct eth_dev_ops igbvf_eth_dev_ops = {
 	.tx_queue_setup       = eth_igb_tx_queue_setup,
 	.tx_queue_release     = eth_igb_tx_queue_release,
 	.tx_done_cleanup      = eth_igb_tx_done_cleanup,
+	.rx_burst_mode_get    = igb_rx_burst_mode_get,
+	.tx_burst_mode_get    = igb_tx_burst_mode_get,
 	.set_mc_addr_list     = eth_igb_set_mc_addr_list,
 	.rxq_info_get         = igb_rxq_info_get,
 	.txq_info_get         = igb_txq_info_get,
@@ -486,7 +494,7 @@ static const struct rte_igb_xstats_name_off rte_igb_stats_strings[] = {
 	{"tx_size_256_to_511_packets", offsetof(struct e1000_hw_stats, ptc511)},
 	{"tx_size_512_to_1023_packets", offsetof(struct e1000_hw_stats,
 		ptc1023)},
-	{"tx_size_1023_to_max_packets", offsetof(struct e1000_hw_stats,
+	{"tx_size_1024_to_max_packets", offsetof(struct e1000_hw_stats,
 		ptc1522)},
 	{"tx_multicast_packets", offsetof(struct e1000_hw_stats, mptc)},
 	{"tx_broadcast_packets", offsetof(struct e1000_hw_stats, bptc)},
@@ -713,6 +721,62 @@ static int igb_flex_filter_uninit(struct rte_eth_dev *eth_dev)
 	filter_info->flex_mask = 0;
 
 	return 0;
+}
+
+static const struct {
+	eth_tx_burst_t pkt_burst;
+	const char *info;
+} igb_tx_burst_info[] = {
+	{	eth_igb_xmit_pkts, "Scalar igb"},
+	{	eth_em_xmit_pkts, "Scalar em"},
+};
+
+int
+igb_tx_burst_mode_get(struct rte_eth_dev *dev,
+				__rte_unused uint16_t queue_id,
+				struct rte_eth_burst_mode *mode)
+{
+	eth_tx_burst_t pkt_burst = dev->tx_pkt_burst;
+	size_t i;
+
+	for (i = 0; i < RTE_DIM(igb_tx_burst_info); i++) {
+		if (pkt_burst == igb_tx_burst_info[i].pkt_burst) {
+			snprintf(mode->info, sizeof(mode->info), "%s",
+				 igb_tx_burst_info[i].info);
+			return 0;
+		}
+	}
+
+	return -EINVAL;
+}
+
+static const struct {
+	eth_rx_burst_t pkt_burst;
+	const char *info;
+} igb_rx_burst_info[] = {
+	{	eth_igb_recv_pkts, "Scalar igb"},
+	{	eth_igb_recv_scattered_pkts, "Scalar igb scattered"},
+	{	eth_em_recv_pkts, "Scalar em"},
+	{	eth_em_recv_scattered_pkts, "Scalar em scattered"},
+};
+
+int
+igb_rx_burst_mode_get(struct rte_eth_dev *dev,
+				__rte_unused uint16_t queue_id,
+				struct rte_eth_burst_mode *mode)
+{
+	eth_rx_burst_t pkt_burst = dev->rx_pkt_burst;
+	size_t i;
+
+	for (i = 0; i < RTE_DIM(igb_rx_burst_info); i++) {
+		if (pkt_burst == igb_rx_burst_info[i].pkt_burst) {
+			snprintf(mode->info, sizeof(mode->info), "%s",
+				 igb_rx_burst_info[i].info);
+			return 0;
+		}
+	}
+
+	return -EINVAL;
 }
 
 static int
@@ -1879,7 +1943,8 @@ igb_read_stats_registers(struct e1000_hw *hw, struct e1000_hw_stats *stats)
 }
 
 static int
-eth_igb_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
+eth_igb_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats,
+		struct eth_queue_stats *qstats __rte_unused)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct e1000_hw_stats *stats =
@@ -1912,7 +1977,7 @@ eth_igb_stats_reset(struct rte_eth_dev *dev)
 			E1000_DEV_PRIVATE_TO_STATS(dev->data->dev_private);
 
 	/* HW registers are cleared on read */
-	eth_igb_stats_get(dev, NULL);
+	eth_igb_stats_get(dev, NULL, NULL);
 
 	/* Reset software totals */
 	memset(hw_stats, 0, sizeof(*hw_stats));
@@ -2148,7 +2213,8 @@ eth_igbvf_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 }
 
 static int
-eth_igbvf_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
+eth_igbvf_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats,
+		struct eth_queue_stats *qstats __rte_unused)
 {
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct e1000_vf_stats *hw_stats = (struct e1000_vf_stats *)
@@ -2173,7 +2239,7 @@ eth_igbvf_stats_reset(struct rte_eth_dev *dev)
 			E1000_DEV_PRIVATE_TO_STATS(dev->data->dev_private);
 
 	/* Sync HW register to the last stats */
-	eth_igbvf_stats_get(dev, NULL);
+	eth_igbvf_stats_get(dev, NULL, NULL);
 
 	/* reset HW current stats*/
 	memset(&hw_stats->gprc, 0, sizeof(*hw_stats) -
@@ -4204,7 +4270,8 @@ eth_igb_add_del_flex_filter(struct rte_eth_dev *dev,
 	flex_filter->filter_info.len = filter->len;
 	flex_filter->filter_info.priority = filter->priority;
 	memcpy(flex_filter->filter_info.dwords, filter->bytes, filter->len);
-	for (i = 0; i < RTE_ALIGN(filter->len, CHAR_BIT) / CHAR_BIT; i++) {
+	for (i = 0; i < RTE_ALIGN(filter->len, CHAR_BIT) / CHAR_BIT &&
+			i < E1000_FLEX_FILTERS_MASK_SIZE; i++) {
 		mask = 0;
 		/* reverse bits in flex filter's mask*/
 		for (shift = 0; shift < CHAR_BIT; shift++) {
@@ -5219,7 +5286,7 @@ eth_igb_get_eeprom(struct rte_eth_dev *dev,
 	first = in_eeprom->offset >> 1;
 	length = in_eeprom->length >> 1;
 	if ((first >= hw->nvm.word_size) ||
-	    ((first + length) >= hw->nvm.word_size))
+	    ((first + length) > hw->nvm.word_size))
 		return -EINVAL;
 
 	in_eeprom->magic = hw->vendor_id |

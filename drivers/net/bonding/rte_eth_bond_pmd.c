@@ -1904,12 +1904,13 @@ member_start(struct rte_eth_dev *bonding_eth_dev,
 		}
 	}
 
-	/* If RSS is enabled for bonding, synchronize RETA */
-	if (bonding_eth_dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS) {
+	/*
+	 * If flow-isolation is not enabled, then check whether RSS is enabled for
+	 * bonding, synchronize RETA
+	 */
+	if (internals->flow_isolated_valid == 0 &&
+		(bonding_eth_dev->data->dev_conf.rxmode.mq_mode & RTE_ETH_MQ_RX_RSS)) {
 		int i;
-		struct bond_dev_private *internals;
-
-		internals = bonding_eth_dev->data->dev_private;
 
 		for (i = 0; i < internals->member_count; i++) {
 			if (internals->members[i].port_id == member_port_id) {
@@ -2635,11 +2636,12 @@ bond_ethdev_link_update(struct rte_eth_dev *ethdev, int wait_to_complete)
 
 
 static int
-bond_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+bond_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		      struct eth_queue_stats *qstats __rte_unused)
 {
 	struct bond_dev_private *internals = dev->data->dev_private;
 	struct rte_eth_stats member_stats;
-	int i, j;
+	int i;
 
 	for (i = 0; i < internals->member_count; i++) {
 		rte_eth_stats_get(internals->members[i].port_id, &member_stats);
@@ -2652,15 +2654,6 @@ bond_ethdev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->ierrors += member_stats.ierrors;
 		stats->oerrors += member_stats.oerrors;
 		stats->rx_nombuf += member_stats.rx_nombuf;
-
-		for (j = 0; j < RTE_ETHDEV_QUEUE_STAT_CNTRS; j++) {
-			stats->q_ipackets[j] += member_stats.q_ipackets[j];
-			stats->q_opackets[j] += member_stats.q_opackets[j];
-			stats->q_ibytes[j] += member_stats.q_ibytes[j];
-			stats->q_obytes[j] += member_stats.q_obytes[j];
-			stats->q_errors[j] += member_stats.q_errors[j];
-		}
-
 	}
 
 	return 0;
@@ -3222,7 +3215,7 @@ bond_ethdev_rss_hash_update(struct rte_eth_dev *dev,
 	struct bond_dev_private *internals = dev->data->dev_private;
 	struct rte_eth_rss_conf bond_rss_conf;
 
-	memcpy(&bond_rss_conf, rss_conf, sizeof(struct rte_eth_rss_conf));
+	bond_rss_conf = *rss_conf;
 
 	bond_rss_conf.rss_hf &= internals->flow_type_rss_offloads;
 

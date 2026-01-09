@@ -10,17 +10,22 @@
 #include <rte_malloc.h>
 #include <rte_errno.h>
 #include <rte_vect.h>
+#include <rte_cpuflags.h>
 
 #include <rte_rib.h>
 #include <rte_fib.h>
 #include "dir24_8.h"
 #include "fib_log.h"
 
-#ifdef CC_DIR24_8_AVX512_SUPPORT
+#ifdef CC_AVX512_SUPPORT
 
 #include "dir24_8_avx512.h"
 
-#endif /* CC_DIR24_8_AVX512_SUPPORT */
+#elif defined(RTE_RISCV_FEATURE_V)
+
+#include "dir24_8_rvv.h"
+
+#endif /* CC_AVX512_SUPPORT */
 
 #define DIR24_8_NAMESIZE	64
 
@@ -63,7 +68,7 @@ get_scalar_fn_inlined(enum rte_fib_dir24_8_nh_sz nh_sz, bool be_addr)
 static inline rte_fib_lookup_fn_t
 get_vector_fn(enum rte_fib_dir24_8_nh_sz nh_sz, bool be_addr)
 {
-#ifdef CC_DIR24_8_AVX512_SUPPORT
+#ifdef CC_AVX512_SUPPORT
 	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) <= 0 ||
 			rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512DQ) <= 0 ||
 			rte_vect_get_max_simd_bitwidth() < RTE_VECT_SIMD_512)
@@ -85,6 +90,22 @@ get_vector_fn(enum rte_fib_dir24_8_nh_sz nh_sz, bool be_addr)
 	case RTE_FIB_DIR24_8_8B:
 		return be_addr ? rte_dir24_8_vec_lookup_bulk_8b_be :
 			rte_dir24_8_vec_lookup_bulk_8b;
+	default:
+		return NULL;
+	}
+#elif defined(RTE_RISCV_FEATURE_V)
+	RTE_SET_USED(be_addr);
+	if (rte_cpu_get_flag_enabled(RTE_CPUFLAG_RISCV_ISA_V) <= 0)
+		return NULL;
+	switch (nh_sz) {
+	case RTE_FIB_DIR24_8_1B:
+		return rte_dir24_8_vec_lookup_bulk_1b;
+	case RTE_FIB_DIR24_8_2B:
+		return rte_dir24_8_vec_lookup_bulk_2b;
+	case RTE_FIB_DIR24_8_4B:
+		return rte_dir24_8_vec_lookup_bulk_4b;
+	case RTE_FIB_DIR24_8_8B:
+		return rte_dir24_8_vec_lookup_bulk_8b;
 	default:
 		return NULL;
 	}

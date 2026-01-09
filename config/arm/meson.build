@@ -13,7 +13,6 @@ flags_common = [
         #    ['RTE_ARM64_MEMCPY_UNALIGNED_THRESHOLD', 512],
         # Leave below RTE_ARM64_MEMCPY_xxx options commented out,
         # unless there are strong reasons.
-        #    ['RTE_ARM64_MEMCPY_SKIP_GCC_VER_CHECK', false],
         #    ['RTE_ARM64_MEMCPY_ALIGN_MASK', 0xF],
         #    ['RTE_ARM64_MEMCPY_STRICT_ALIGN', false],
 
@@ -84,8 +83,7 @@ part_number_config_arm = {
         ]
     },
     '0xd42': {
-        'march': 'armv8.4-a',
-        'mcpu' : 'cortex-a78ae',
+        'mcpu' : 'mcpu_cortex-a78ae',
         'flags': [
             ['RTE_MAX_LCORE', 16],
             ['RTE_MAX_NUMA_NODES', 1]
@@ -110,22 +108,22 @@ part_number_config_arm = {
         ]
     },
     '0xd8e': {
-        # Only when -march=armv9-a+wfxt is used will the WFET
-        # feature be compiled with armv9 instructions.
-        # However, +wfxt is not supported by GCC at the moment.
-        # Although armv9-a is the fitting version of Arm ISA for
-        # Neoverse N3, it cannot be used when enabling wfxt for
-        # the above reasons.
-        # The workaround for this is to use armv8.7-a, which
-        # doesn't require +wfxt for binutils version 2.36 or greater.
-        'march': 'armv8.7-a',
-        'march_features': ['sve2'],
-        'fallback_march': 'armv8.5-a',
+        'mcpu' : 'neoverse-n3',
         'flags': [
             ['RTE_MACHINE', '"neoverse-n3"'],
             ['RTE_ARM_FEATURE_ATOMICS', true],
             ['RTE_ARM_FEATURE_WFXT', true],
             ['RTE_MAX_LCORE', 192],
+            ['RTE_MAX_NUMA_NODES', 2]
+        ]
+    },
+    '0xd84': {
+        'mcpu' : 'neoverse-v3',
+        'flags': [
+            ['RTE_MACHINE', '"neoverse-v3"'],
+            ['RTE_ARM_FEATURE_ATOMICS', true],
+            ['RTE_ARM_FEATURE_WFXT', true],
+            ['RTE_MAX_LCORE', 128],
             ['RTE_MAX_NUMA_NODES', 2]
         ]
     }
@@ -257,6 +255,15 @@ implementer_hisilicon = {
                 ['RTE_MAX_LCORE', 1280],
                 ['RTE_MAX_NUMA_NODES', 16]
             ]
+        },
+        '0xd06': {
+            'mcpu': 'mcpu_hip12',
+            'flags': [
+                ['RTE_MACHINE', '"hip12"'],
+                ['RTE_ARM_FEATURE_ATOMICS', true],
+                ['RTE_MAX_LCORE', 1280],
+                ['RTE_MAX_NUMA_NODES', 16]
+            ]
         }
     }
 }
@@ -285,6 +292,22 @@ implementer_ionic = {
                 ['RTE_LIBRTE_IONIC_PMD_BARRIER_ERRATA', true],
             ]
         }
+    }
+}
+
+implementer_microsoft = {
+    'description': 'Microsoft Corporation',
+    'flags': [],
+    'part_number_config': {
+        '0xd49': {
+            'mcpu': 'cobalt-100',
+            'flags': [
+                ['RTE_MACHINE', '"neoverse-n2"'],
+                ['RTE_ARM_FEATURE_ATOMICS', true],
+                ['RTE_MAX_LCORE', 128],
+                ['RTE_MAX_NUMA_NODES', 2]
+            ]
+        },
     }
 }
 
@@ -344,6 +367,7 @@ implementers = {
     '0x48': implementer_hisilicon,
     '0x50': implementer_ampere,
     '0x51': implementer_qualcomm,
+    '0x6d': implementer_microsoft,
     '0x70': implementer_phytium,
     '0x75': implementer_ionic,
     '0xc0': implementer_ampere,
@@ -446,6 +470,7 @@ soc_cn9k = {
     'description': 'Marvell OCTEON 9',
     'implementer': '0x43',
     'part_number': '0xb2',
+    'extra_march_features': ['crypto'],
     'numa': false,
 }
 
@@ -461,6 +486,14 @@ soc_cn10k = {
     'extra_march_features': ['crypto'],
     'numa': false,
     'sve_acle': false
+}
+
+soc_cobalt100 = {
+    'description' : 'Microsoft Azure Cobalt 100',
+    'implementer' : '0x6d',
+    'part_number': '0xd49',
+    'extra_march_features': ['crypto'],
+    'numa': true
 }
 
 soc_dpaa = {
@@ -539,6 +572,25 @@ soc_hip10 = {
     'numa': true
 }
 
+soc_hip12 = {
+    'description': 'HiSilicon HIP12',
+    'implementer': '0x48',
+    'part_number': '0xd06',
+    'numa': true
+}
+
+soc_imx = {
+    'description': 'NXP IMX',
+    'implementer': '0x41',
+    'part_number': '0xd05',
+    'flags': [
+        ['RTE_MACHINE', '"armv8a"'],
+        ['RTE_MAX_LCORE', 6],
+        ['RTE_MAX_NUMA_NODES', 1],
+    ],
+    'numa': false,
+}
+
 soc_kunpeng920 = {
     'description': 'HiSilicon Kunpeng 920',
     'implementer': '0x48',
@@ -567,7 +619,7 @@ soc_n2 = {
     'description': 'Arm Neoverse N2',
     'implementer': '0x41',
     'part_number': '0xd49',
-    'numa': false
+    'numa': true
 }
 
 soc_n3 = {
@@ -640,16 +692,31 @@ soc_v2 = {
     'numa': true
 }
 
+soc_v3 = {
+    'description': 'Arm Neoverse V3',
+    'implementer': '0x41',
+    'part_number': '0xd84',
+    'numa': true
+}
+
 mcpu_defs = {
     'mcpu_centriq2400': {
         'march': 'armv8-a',
         'march_extensions': ['crc']
+    },
+    'mcpu_cortex-a78ae': {
+        'march': 'armv8.4-a',
+        'march_extensions': ['crypto']
     },
     'mcpu_ft2000plus': {
         'march': 'armv8-a',
         'march_extensions': ['crc']
     },
     'mcpu_hip10': {
+        'march': 'armv8.5-a',
+        'march_extensions': ['crypto', 'sve']
+    },
+    'mcpu_hip12': {
         'march': 'armv8.5-a',
         'march_extensions': ['crypto', 'sve']
     },
@@ -698,6 +765,7 @@ cdx:             AMD CDX
 centriq2400:     Qualcomm Centriq 2400
 cn9k:            Marvell OCTEON 9
 cn10k:           Marvell OCTEON 10
+cobalt100:       Microsoft Azure Cobalt 100
 dpaa:            NXP DPAA
 elba:            AMD Pensando Elba
 emag:            Ampere eMAG
@@ -707,10 +775,13 @@ graviton2:       AWS Graviton2
 graviton3:       AWS Graviton3
 graviton4:       AWS Graviton4
 hip10:           HiSilicon HIP10
+hip12:           HiSilicon HIP12
+imx:             NXP IMX
 kunpeng920:      HiSilicon Kunpeng 920
 kunpeng930:      HiSilicon Kunpeng 930
 n1sdp:           Arm Neoverse N1SDP
 n2:              Arm Neoverse N2
+n3:              Arm Neoverse N3
 odyssey:         Marvell Odyssey
 stingray:        Broadcom Stingray
 thunderx2:       Marvell ThunderX2 T99
@@ -719,6 +790,7 @@ thunderxt88:     Marvell ThunderX T88
 tys2500:         Phytium TengYun S2500
 tys5000c:        Phytium TengYun S5000c
 v2:              Arm Neoverse V2
+v3:              Arm Neoverse V3
 End of SoCs list
 '''
 # The string above is included in the documentation, keep it in sync with the
@@ -737,6 +809,7 @@ socs = {
     'centriq2400': soc_centriq2400,
     'cn9k': soc_cn9k,
     'cn10k' : soc_cn10k,
+    'cobalt100' : soc_cobalt100,
     'dpaa': soc_dpaa,
     'elba': soc_elba,
     'emag': soc_emag,
@@ -746,6 +819,8 @@ socs = {
     'graviton3': soc_graviton3,
     'graviton4': soc_graviton4,
     'hip10': soc_hip10,
+    'hip12': soc_hip12,
+    'imx': soc_imx,
     'kunpeng920': soc_kunpeng920,
     'kunpeng930': soc_kunpeng930,
     'n1sdp': soc_n1sdp,
@@ -759,6 +834,7 @@ socs = {
     'tys2500': soc_tys2500,
     'tys5000c': soc_tys5000c,
     'v2': soc_v2,
+    'v3': soc_v3,
 }
 
 dpdk_conf.set('RTE_ARCH_ARM', 1)
@@ -766,6 +842,7 @@ dpdk_conf.set('RTE_FORCE_INTRINSICS', 1)
 
 update_flags = false
 soc_flags = []
+extra_features = []
 if dpdk_conf.get('RTE_ARCH_32')
     # 32-bit build
     dpdk_conf.set('RTE_CACHE_LINE_SIZE', 64)
@@ -841,6 +918,7 @@ if update_flags
         implementer_config = implementers[implementer_id]
         part_number = soc_config['part_number']
         soc_flags = soc_config.get('flags', [])
+        extra_features = soc_config.get('extra_march_features', [])
         if not soc_config.get('numa', true)
             has_libnuma = false
         endif
@@ -909,11 +987,15 @@ if update_flags
         machine_args += march
     else
         candidate_mcpu = '-mcpu=' + mcpu
-        if (cc.has_argument(candidate_mcpu))
-            machine_args += candidate_mcpu
-        else
+        if not cc.has_argument(candidate_mcpu)
             error('Compiler does not support -mcpu=@0@.'.format(mcpu))
         endif
+        foreach flag: extra_features
+            if cc.has_argument('+'.join([candidate_mcpu, flag]))
+                candidate_mcpu = '+'.join([candidate_mcpu, flag])
+            endif
+        endforeach
+        machine_args += candidate_mcpu
     endif
 
     # apply supported compiler options

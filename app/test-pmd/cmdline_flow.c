@@ -788,6 +788,7 @@ enum index {
 	ACTION_NAT64_MODE,
 	ACTION_JUMP_TO_TABLE_INDEX,
 	ACTION_JUMP_TO_TABLE_INDEX_TABLE,
+	ACTION_JUMP_TO_TABLE_INDEX_TABLE_VALUE,
 	ACTION_JUMP_TO_TABLE_INDEX_INDEX,
 };
 
@@ -2862,6 +2863,9 @@ static int parse_template_destroy(struct context *, const struct token *,
 static int parse_table(struct context *, const struct token *,
 		       const char *, unsigned int, void *, unsigned int);
 static int parse_table_destroy(struct context *, const struct token *,
+			       const char *, unsigned int,
+			       void *, unsigned int);
+static int parse_jump_table_id(struct context *, const struct token *,
 			       const char *, unsigned int,
 			       void *, unsigned int);
 static int parse_qo(struct context *, const struct token *,
@@ -5591,7 +5595,7 @@ static const struct token token_list[] = {
 		.next = NEXT(item_random, NEXT_ENTRY(COMMON_UNSIGNED),
 			     item_param),
 		.args = ARGS(ARGS_ENTRY_MASK(struct rte_flow_item_random,
-					     value, "\xff\xff")),
+					     value, "\xff\xff\xff\xff")),
 	},
 	[ITEM_GRE_KEY] = {
 		.name = "gre_key",
@@ -7634,10 +7638,18 @@ static const struct token token_list[] = {
 	},
 	[ACTION_JUMP_TO_TABLE_INDEX_TABLE] = {
 		.name = "table",
-		.help = "table to redirect traffic to",
-		.next = NEXT(action_jump_to_table_index, NEXT_ENTRY(COMMON_UNSIGNED)),
+		.help = "table id to redirect traffic to",
+		.next = NEXT(action_jump_to_table_index,
+			NEXT_ENTRY(ACTION_JUMP_TO_TABLE_INDEX_TABLE_VALUE)),
 		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_jump_to_table_index, table)),
 		.call = parse_vc_conf,
+	},
+	[ACTION_JUMP_TO_TABLE_INDEX_TABLE_VALUE] = {
+		.name = "{table_id}",
+		.type = "TABLE_ID",
+		.help = "table id for jump action",
+		.call = parse_jump_table_id,
+		.comp = comp_table_id,
 	},
 	[ACTION_JUMP_TO_TABLE_INDEX_INDEX] = {
 		.name = "index",
@@ -8333,8 +8345,10 @@ parse_prefix(struct context *ctx, const struct token *token,
 		if (!ctx->object)
 			return len;
 		extra -= u;
-		while (u--)
-			(v <<= 1, v |= 1);
+		while (u--) {
+			v <<= 1;
+			v |= 1;
+		}
 		v <<= extra;
 		if (!arg_entry_bf_fill(ctx->object, v, arg) ||
 		    !arg_entry_bf_fill(ctx->objmask, -1, arg))
@@ -8832,8 +8846,6 @@ parse_vc_spec(struct context *ctx, const struct token *token,
 		return -1;
 	/* Parse parameter types. */
 	switch (ctx->curr) {
-		static const enum index prefix[] = NEXT_ENTRY(COMMON_PREFIX);
-
 	case ITEM_PARAM_IS:
 		index = 0;
 		objmask = 1;
@@ -8848,7 +8860,7 @@ parse_vc_spec(struct context *ctx, const struct token *token,
 		/* Modify next token to expect a prefix. */
 		if (ctx->next_num < 2)
 			return -1;
-		ctx->next[ctx->next_num - 2] = prefix;
+		ctx->next[ctx->next_num - 2] = NEXT_ENTRY(COMMON_PREFIX);
 		/* Fall through. */
 	case ITEM_PARAM_MASK:
 		index = 2;
@@ -9290,7 +9302,6 @@ parse_vc_action_rss_type(struct context *ctx, const struct token *token,
 			  const char *str, unsigned int len,
 			  void *buf, unsigned int size)
 {
-	static const enum index next[] = NEXT_ENTRY(ACTION_RSS_TYPE);
 	struct action_rss_data *action_rss_data;
 	unsigned int i;
 
@@ -9316,7 +9327,7 @@ parse_vc_action_rss_type(struct context *ctx, const struct token *token,
 	/* Repeat token. */
 	if (ctx->next_num == RTE_DIM(ctx->next))
 		return -1;
-	ctx->next[ctx->next_num++] = next;
+	ctx->next[ctx->next_num++] = NEXT_ENTRY(ACTION_RSS_TYPE);
 	if (!ctx->object)
 		return len;
 	action_rss_data = ctx->object;
@@ -9334,7 +9345,6 @@ parse_vc_action_rss_queue(struct context *ctx, const struct token *token,
 			  const char *str, unsigned int len,
 			  void *buf, unsigned int size)
 {
-	static const enum index next[] = NEXT_ENTRY(ACTION_RSS_QUEUE);
 	struct action_rss_data *action_rss_data;
 	const struct arg *arg;
 	int ret;
@@ -9367,7 +9377,7 @@ parse_vc_action_rss_queue(struct context *ctx, const struct token *token,
 	/* Repeat token. */
 	if (ctx->next_num == RTE_DIM(ctx->next))
 		return -1;
-	ctx->next[ctx->next_num++] = next;
+	ctx->next[ctx->next_num++] = NEXT_ENTRY(ACTION_RSS_QUEUE);
 end:
 	if (!ctx->object)
 		return len;
@@ -11183,6 +11193,49 @@ parse_table_destroy(struct context *ctx, const struct token *token,
 	ctx->objdata = 0;
 	ctx->object = table_id;
 	ctx->objmask = NULL;
+	return len;
+}
+
+/** Parse table id and convert to table pointer for jump_to_table_index action. */
+static int
+parse_jump_table_id(struct context *ctx, const struct token *token,
+		    const char *str, unsigned int len,
+		    void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+	struct rte_port *port;
+	struct port_table *pt;
+	uint32_t table_id;
+	const struct arg *arg;
+	void *entry_ptr;
+
+	/* Get the arg before parse_int consumes it */
+	arg = pop_args(ctx);
+	if (!arg)
+		return -1;
+	/* Push it back and do the standard integer parsing */
+	if (push_args(ctx, arg) < 0)
+		return -1;
+	if (parse_int(ctx, token, str, len, buf, size) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer */
+	if (!out || !ctx->object)
+		return len;
+	/* Get the parsed table ID from where parse_int stored it */
+	entry_ptr = (uint8_t *)ctx->object + arg->offset;
+	memcpy(&table_id, entry_ptr, sizeof(uint32_t));
+	/* Look up the table using table ID */
+	port = &ports[ctx->port];
+	for (pt = port->table_list; pt != NULL; pt = pt->next) {
+		if (pt->id == table_id)
+			break;
+	}
+	if (!pt || !pt->table) {
+		printf("Table #%u not found on port %u\n", table_id, ctx->port);
+		return -1;
+	}
+	/* Replace the table ID with the table pointer */
+	memcpy(entry_ptr, &pt->table, sizeof(struct rte_flow_template_table *));
 	return len;
 }
 
@@ -13622,8 +13675,8 @@ update_fields(uint8_t *buf, struct rte_flow_item *item, uint16_t next_proto)
 		if (next_proto && ipv6->proto == 0)
 			ipv6->proto = (uint8_t)next_proto;
 		ipv6_vtc_flow = rte_be_to_cpu_32(ipv6->vtc_flow);
-		ipv6_vtc_flow &= 0x0FFFFFFF; /*< reset version bits. */
-		ipv6_vtc_flow |= 0x60000000; /*< set ipv6 version. */
+		ipv6_vtc_flow &= 0x0FFFFFFF; /* reset version bits. */
+		ipv6_vtc_flow |= 0x60000000; /* set ipv6 version. */
 		ipv6->vtc_flow = rte_cpu_to_be_32(ipv6_vtc_flow);
 		break;
 	case RTE_FLOW_ITEM_TYPE_VXLAN:
@@ -13965,7 +14018,7 @@ cmd_set_raw_parsed_sample(const struct buffer *in)
 			fprintf(stderr, "Error - Not supported action\n");
 			return;
 		}
-		rte_memcpy(data, action, sizeof(struct rte_flow_action));
+		*data = *action;
 		data++;
 	}
 }
@@ -13987,11 +14040,15 @@ cmd_set_raw_parsed(const struct buffer *in)
 	int gtp_psc = -1; /* GTP PSC option index. */
 	const void *src_spec;
 
-	if (in->command == SET_SAMPLE_ACTIONS)
-		return cmd_set_raw_parsed_sample(in);
+	if (in->command == SET_SAMPLE_ACTIONS) {
+		cmd_set_raw_parsed_sample(in);
+		return;
+	}
 	else if (in->command == SET_IPV6_EXT_PUSH ||
-		 in->command == SET_IPV6_EXT_REMOVE)
-		return cmd_set_ipv6_ext_parsed(in);
+			 in->command == SET_IPV6_EXT_REMOVE) {
+		cmd_set_ipv6_ext_parsed(in);
+		return;
+	}
 	RTE_ASSERT(in->command == SET_RAW_ENCAP ||
 		   in->command == SET_RAW_DECAP);
 	if (in->command == SET_RAW_ENCAP) {

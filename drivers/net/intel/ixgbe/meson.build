@@ -4,9 +4,8 @@
 cflags += ['-DRTE_LIBRTE_IXGBE_BYPASS']
 
 subdir('base')
-objs = [base_objs]
 
-sources = files(
+sources += files(
         'ixgbe_82599_bypass.c',
         'ixgbe_bypass.c',
         'ixgbe_ethdev.c',
@@ -25,16 +24,13 @@ testpmd_sources = files('ixgbe_testpmd.c')
 deps += ['hash', 'security']
 
 if arch_subdir == 'x86'
+    sources += files('ixgbe_rxtx_vec_common.c')
     sources += files('ixgbe_rxtx_vec_sse.c')
-    sources += files('ixgbe_recycle_mbufs_vec_common.c')
-    if is_windows and cc.get_id() != 'clang'
-        cflags += ['-fno-asynchronous-unwind-tables']
-    endif
+    cflags += ['-DIXGBE_VPMD_SUPPORTED']
 elif arch_subdir == 'arm'
+    sources += files('ixgbe_rxtx_vec_common.c')
     sources += files('ixgbe_rxtx_vec_neon.c')
-    sources += files('ixgbe_recycle_mbufs_vec_common.c')
+    cflags += ['-DIXGBE_VPMD_SUPPORTED']
 endif
-
-includes += include_directories('base')
 
 headers = files('rte_pmd_ixgbe.h')

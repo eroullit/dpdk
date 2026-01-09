@@ -26,18 +26,19 @@
 #include "r8169_hw.h"
 #include "r8169_dash.h"
 
-static int rtl_dev_configure(struct rte_eth_dev *dev);
+static int rtl_dev_configure(struct rte_eth_dev *dev __rte_unused);
 static int rtl_dev_start(struct rte_eth_dev *dev);
 static int rtl_dev_stop(struct rte_eth_dev *dev);
 static int rtl_dev_reset(struct rte_eth_dev *dev);
 static int rtl_dev_close(struct rte_eth_dev *dev);
-static int rtl_dev_link_update(struct rte_eth_dev *dev, int wait);
+static int rtl_dev_link_update(struct rte_eth_dev *dev, int wait __rte_unused);
 static int rtl_dev_set_link_up(struct rte_eth_dev *dev);
 static int rtl_dev_set_link_down(struct rte_eth_dev *dev);
 static int rtl_dev_infos_get(struct rte_eth_dev *dev,
 			     struct rte_eth_dev_info *dev_info);
 static int rtl_dev_stats_get(struct rte_eth_dev *dev,
-			     struct rte_eth_stats *rte_stats);
+			     struct rte_eth_stats *rte_stats,
+			     struct eth_queue_stats *qstats);
 static int rtl_dev_stats_reset(struct rte_eth_dev *dev);
 static int rtl_promiscuous_enable(struct rte_eth_dev *dev);
 static int rtl_promiscuous_disable(struct rte_eth_dev *dev);
@@ -46,7 +47,16 @@ static int rtl_allmulticast_disable(struct rte_eth_dev *dev);
 static int rtl_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int rtl_fw_version_get(struct rte_eth_dev *dev, char *fw_version,
 			      size_t fw_size);
-
+static int rtl_reta_update(struct rte_eth_dev *dev,
+			   struct rte_eth_rss_reta_entry64 *reta_conf,
+			   uint16_t reta_size);
+static int rtl_reta_query(struct rte_eth_dev *dev,
+			  struct rte_eth_rss_reta_entry64 *reta_conf,
+			  uint16_t reta_size);
+static int rtl_rss_hash_update(struct rte_eth_dev *dev,
+			       struct rte_eth_rss_conf *rss_conf);
+static int rtl_rss_hash_conf_get(struct rte_eth_dev *dev,
+				 struct rte_eth_rss_conf *rss_conf);
 /*
  * The set of PCI devices this driver supports
  */
@@ -55,6 +65,9 @@ static const struct rte_pci_id pci_id_r8169_map[] = {
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8162) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8126) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x5000) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8168) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x8127) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_REALTEK, 0x0E10) },
 	{.vendor_id = 0, /* sentinel */ },
 };
 
@@ -104,6 +117,11 @@ static const struct eth_dev_ops rtl_eth_dev_ops = {
 	.tx_queue_release     = rtl_tx_queue_release,
 	.tx_done_cleanup      = rtl_tx_done_cleanup,
 	.txq_info_get         = rtl_txq_info_get,
+
+	.reta_update          = rtl_reta_update,
+	.reta_query           = rtl_reta_query,
+	.rss_hash_update      = rtl_rss_hash_update,
+	.rss_hash_conf_get    = rtl_rss_hash_conf_get,
 };
 
 static int
@@ -116,15 +134,23 @@ static void
 rtl_disable_intr(struct rtl_hw *hw)
 {
 	PMD_INIT_FUNC_TRACE();
-	RTL_W32(hw, IMR0_8125, 0x0000);
-	RTL_W32(hw, ISR0_8125, RTL_R32(hw, ISR0_8125));
+	if (rtl_is_8125(hw)) {
+		RTL_W32(hw, IMR0_8125, 0x0000);
+		RTL_W32(hw, ISR0_8125, RTL_R32(hw, ISR0_8125));
+	} else {
+		RTL_W16(hw, IntrMask, 0x0000);
+		RTL_W16(hw, IntrStatus, RTL_R16(hw, IntrStatus));
+	}
 }
 
 static void
 rtl_enable_intr(struct rtl_hw *hw)
 {
 	PMD_INIT_FUNC_TRACE();
-	RTL_W32(hw, IMR0_8125, LinkChg);
+	if (rtl_is_8125(hw))
+		RTL_W32(hw, IMR0_8125, LinkChg);
+	else
+		RTL_W16(hw, IntrMask, LinkChg);
 }
 
 static int
@@ -134,15 +160,38 @@ _rtl_setup_link(struct rte_eth_dev *dev)
 	struct rtl_hw *hw = &adapter->hw;
 	u64 adv = 0;
 	u32 *link_speeds = &dev->data->dev_conf.link_speeds;
+	unsigned int speed_mode;
 
 	/* Setup link speed and duplex */
 	if (*link_speeds == RTE_ETH_LINK_SPEED_AUTONEG) {
-		rtl_set_link_option(hw, AUTONEG_ENABLE, SPEED_5000, DUPLEX_FULL, rtl_fc_full);
+		switch (hw->chipset_name) {
+		case RTL8125A:
+		case RTL8125B:
+		case RTL8168KB:
+		case RTL8125BP:
+		case RTL8125D:
+		case RTL8125CP:
+			speed_mode = SPEED_2500;
+			break;
+		case RTL8126A:
+			speed_mode = SPEED_5000;
+			break;
+		case RTL8127:
+			speed_mode = SPEED_10000;
+			break;
+		default:
+			speed_mode = SPEED_1000;
+			break;
+		}
+
+		rtl_set_link_option(hw, AUTONEG_ENABLE, speed_mode, DUPLEX_FULL,
+				    rtl_fc_full);
 	} else if (*link_speeds != 0) {
 		if (*link_speeds & ~(RTE_ETH_LINK_SPEED_10M_HD | RTE_ETH_LINK_SPEED_10M |
 				     RTE_ETH_LINK_SPEED_100M_HD | RTE_ETH_LINK_SPEED_100M |
 				     RTE_ETH_LINK_SPEED_1G | RTE_ETH_LINK_SPEED_2_5G |
-				     RTE_ETH_LINK_SPEED_5G | RTE_ETH_LINK_SPEED_FIXED))
+				     RTE_ETH_LINK_SPEED_5G | RTE_ETH_LINK_SPEED_10G |
+				     RTE_ETH_LINK_SPEED_FIXED))
 			goto error_invalid_config;
 
 		if (*link_speeds & RTE_ETH_LINK_SPEED_10M_HD) {
@@ -179,6 +228,11 @@ _rtl_setup_link(struct rte_eth_dev *dev)
 			hw->speed = SPEED_5000;
 			hw->duplex = DUPLEX_FULL;
 			adv |= ADVERTISE_5000_FULL;
+		}
+		if (*link_speeds & RTE_ETH_LINK_SPEED_10G) {
+			hw->speed = SPEED_10000;
+			hw->duplex = DUPLEX_FULL;
+			adv |= ADVERTISE_10000_FULL;
 		}
 
 		hw->autoneg = AUTONEG_ENABLE;
@@ -225,6 +279,18 @@ rtl_setup_link(struct rte_eth_dev *dev)
 	return 0;
 }
 
+/* Set PCI configuration space offset 0x79 to setting */
+static void
+set_offset79(struct rte_pci_device *pdev, u8 setting)
+{
+	u8 device_control;
+
+	PCI_READ_CONFIG_BYTE(pdev, &device_control, 0x79);
+	device_control &= ~0x70;
+	device_control |= setting;
+	PCI_WRITE_CONFIG_BYTE(pdev, &device_control, 0x79);
+}
+
 /*
  * Configure device link speed and setup link.
  * It returns 0 on success.
@@ -248,6 +314,9 @@ rtl_dev_start(struct rte_eth_dev *dev)
 	rtl_hw_phy_config(hw);
 
 	rtl_hw_config(hw);
+
+	if (!rtl_is_8125(hw))
+		set_offset79(pci_dev, 0x40);
 
 	/* Initialize transmission unit */
 	rtl_tx_init(dev);
@@ -294,12 +363,8 @@ rtl_dev_stop(struct rte_eth_dev *dev)
 
 	rtl_nic_reset(hw);
 
-	switch (hw->mcfg) {
-	case CFG_METHOD_48 ... CFG_METHOD_57:
-	case CFG_METHOD_69 ... CFG_METHOD_71:
+	if (rtl_is_8125(hw))
 		rtl_mac_ocp_write(hw, 0xE00A, hw->mcu_pme_setting);
-		break;
-	}
 
 	rtl_powerdown_pll(hw);
 
@@ -332,12 +397,8 @@ rtl_dev_set_link_down(struct rte_eth_dev *dev)
 	struct rtl_hw *hw = &adapter->hw;
 
 	/* mcu pme intr masks */
-	switch (hw->mcfg) {
-	case CFG_METHOD_48 ... CFG_METHOD_57:
-	case CFG_METHOD_69 ... CFG_METHOD_71:
+	if (rtl_is_8125(hw))
 		rtl_mac_ocp_write(hw, 0xE00A, hw->mcu_pme_setting & ~(BIT_11 | BIT_14));
-		break;
-	}
 
 	rtl_powerdown_pll(hw);
 
@@ -354,8 +415,13 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->max_rx_pktlen = JUMBO_FRAME_9K;
 	dev_info->max_mac_addrs = 1;
 
-	dev_info->max_rx_queues = 1;
-	dev_info->max_tx_queues = 1;
+	if (hw->mcfg >= CFG_METHOD_69) {
+		dev_info->max_rx_queues = 4;
+		dev_info->max_tx_queues = 2;
+	} else {
+		dev_info->max_rx_queues = 1;
+		dev_info->max_tx_queues = 1;
+	}
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_free_thresh = RTL_RX_FREE_THRESH,
@@ -373,6 +439,9 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 			       RTE_ETH_LINK_SPEED_1G;
 
 	switch (hw->chipset_name) {
+	case RTL8127:
+		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_10G;
+	/* fallthrough */
 	case RTL8126A:
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_5G;
 	/* fallthrough */
@@ -380,6 +449,7 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	case RTL8125B:
 	case RTL8125BP:
 	case RTL8125D:
+	case RTL8125CP:
 		dev_info->speed_capa |= RTE_ETH_LINK_SPEED_2_5G;
 		break;
 	}
@@ -387,9 +457,13 @@ rtl_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *dev_info)
 	dev_info->min_mtu = RTE_ETHER_MIN_MTU;
 	dev_info->max_mtu = dev_info->max_rx_pktlen - RTL_ETH_OVERHEAD;
 
-	dev_info->rx_offload_capa = (rtl_get_rx_port_offloads() |
+	dev_info->rx_offload_capa = (rtl_get_rx_port_offloads(hw) |
 				     dev_info->rx_queue_offload_capa);
 	dev_info->tx_offload_capa = rtl_get_tx_port_offloads();
+
+	dev_info->hash_key_size = RTL_RSS_KEY_SIZE;
+	dev_info->reta_size = RTL_MAX_INDIRECTION_TABLE_ENTRIES;
+	dev_info->flow_type_rss_offloads = RTL_RSS_CTRL_OFFLOAD_ALL;
 
 	return 0;
 }
@@ -476,7 +550,8 @@ rtl_sw_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
 }
 
 static int
-rtl_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats)
+rtl_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *rte_stats,
+		  struct eth_queue_stats *qstats __rte_unused)
 {
 	struct rtl_adapter *adapter = RTL_DEV_PRIVATE(dev);
 	struct rtl_hw *hw = &adapter->hw;
@@ -515,20 +590,25 @@ rtl_dev_link_update(struct rte_eth_dev *dev, int wait __rte_unused)
 
 		if (status & FullDup) {
 			link.link_duplex = RTE_ETH_LINK_FULL_DUPLEX;
-			if (hw->mcfg == CFG_METHOD_2)
+			if (!rtl_is_8125(hw) || hw->mcfg == CFG_METHOD_48)
 				RTL_W32(hw, TxConfig, (RTL_R32(hw, TxConfig) |
-						       (BIT_24 | BIT_25)) & ~BIT_19);
-
+						      (BIT_24 | BIT_25)) & ~BIT_19);
 		} else {
 			link.link_duplex = RTE_ETH_LINK_HALF_DUPLEX;
-			if (hw->mcfg == CFG_METHOD_2)
+			if (!rtl_is_8125(hw) || hw->mcfg == CFG_METHOD_48)
 				RTL_W32(hw, TxConfig, (RTL_R32(hw, TxConfig) | BIT_25) &
-					~(BIT_19 | BIT_24));
+						      ~(BIT_19 | BIT_24));
 		}
 
-		if (status & _5000bpsF)
+		/*
+		 * The PHYstatus register for the RTL8168 is 8 bits,
+		 * while for the RTL8125, RTL8126 and RTL8127, it is 16 bits.
+		 */
+		if (status & _10000bpsF && rtl_is_8125(hw))
+			speed = 10000;
+		else if (status & _5000bpsF && rtl_is_8125(hw))
 			speed = 5000;
-		else if (status & _2500bpsF)
+		else if (status & _2500bpsF && rtl_is_8125(hw))
 			speed = 2500;
 		else if (status & _1000bpsF)
 			speed = 1000;
@@ -556,7 +636,10 @@ rtl_dev_interrupt_handler(void *param)
 	struct rtl_hw *hw = &adapter->hw;
 	uint32_t intr;
 
-	intr = RTL_R32(hw, ISR0_8125);
+	if (rtl_is_8125(hw))
+		intr = RTL_R32(hw, ISR0_8125);
+	else
+		intr = RTL_R16(hw, IntrStatus);
 
 	/* Clear all cause mask */
 	rtl_disable_intr(hw);
@@ -586,7 +669,7 @@ rtl_dev_close(struct rte_eth_dev *dev)
 		return 0;
 
 	if (HW_DASH_SUPPORT_DASH(hw))
-		rtl8125_driver_stop(hw);
+		rtl_driver_stop(hw);
 
 	ret_stp = rtl_dev_stop(dev);
 
@@ -643,6 +726,160 @@ rtl_fw_version_get(struct rte_eth_dev *dev, char *fw_version, size_t fw_size)
 }
 
 static int
+rtl_reta_update(struct rte_eth_dev *dev,
+		struct rte_eth_rss_reta_entry64 *reta_conf, uint16_t reta_size)
+{
+	struct rtl_adapter *adapter = RTL_DEV_PRIVATE(dev);
+	struct rtl_hw *hw = &adapter->hw;
+	u32 reta;
+	u16 idx, shift;
+	u8 mask, rss_indir_tbl;
+	int i, j;
+
+	if (reta_size != RTL_MAX_INDIRECTION_TABLE_ENTRIES) {
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%d) doesn't match the number hardware can supported "
+			"(%d)", reta_size, RTL_MAX_INDIRECTION_TABLE_ENTRIES);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < reta_size; i += 4) {
+		idx = i / RTE_ETH_RETA_GROUP_SIZE;
+		shift = i % RTE_ETH_RETA_GROUP_SIZE;
+		mask = (reta_conf[idx].mask >> shift) & 0xf;
+
+		if (!mask)
+			continue;
+
+		for (j = 0, reta = 0; j < 4; j++) {
+			rss_indir_tbl = (u8)reta_conf[idx].reta[shift + j];
+			reta |= rss_indir_tbl << (j * 8);
+
+			if (!(mask & (1 << j)))
+				continue;
+
+			hw->rss_indir_tbl[i + j] = rss_indir_tbl;
+		}
+
+		RTL_W32(hw, RSS_INDIRECTION_TBL_8125_V2 + i, reta);
+	}
+
+	return 0;
+}
+
+static int
+rtl_reta_query(struct rte_eth_dev *dev,
+	       struct rte_eth_rss_reta_entry64 *reta_conf, uint16_t reta_size)
+{
+	struct rtl_adapter *adapter = RTL_DEV_PRIVATE(dev);
+	struct rtl_hw *hw = &adapter->hw;
+	u16 idx, shift;
+	int i;
+
+	if (reta_size != RTL_MAX_INDIRECTION_TABLE_ENTRIES) {
+		PMD_DRV_LOG(ERR, "The size of hash lookup table configured "
+			"(%d) doesn't match the number hardware can supported "
+			"(%d)", reta_size, RTL_MAX_INDIRECTION_TABLE_ENTRIES);
+		return -EINVAL;
+	}
+
+	for (i = 0; i < reta_size; i++) {
+		idx = i / RTE_ETH_RETA_GROUP_SIZE;
+		shift = i % RTE_ETH_RETA_GROUP_SIZE;
+
+		if (reta_conf[idx].mask & (1ULL << shift))
+			reta_conf[idx].reta[shift] = hw->rss_indir_tbl[i];
+	}
+
+	return 0;
+}
+
+static int
+rtl_rss_hash_update(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf)
+{
+	struct rtl_adapter *adapter = RTL_DEV_PRIVATE(dev);
+	struct rtl_hw *hw = &adapter->hw;
+	u32 rss_ctrl_8125;
+
+	if (!hw->EnableRss || !(rss_conf->rss_hf & RTL_RSS_OFFLOAD_ALL))
+		return -EINVAL;
+
+	if (rss_conf->rss_key)
+		memcpy(hw->rss_key, rss_conf->rss_key, RTL_RSS_KEY_SIZE);
+
+	rtl8125_store_rss_key(hw);
+
+	rss_ctrl_8125 = RTL_R32(hw, RSS_CTRL_8125) & ~RTL_RSS_CTRL_OFFLOAD_ALL;
+
+	if (rss_conf->rss_hf & RTE_ETH_RSS_IPV4)
+		rss_ctrl_8125 |= RSS_CTRL_IPV4_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_NONFRAG_IPV4_TCP)
+		rss_ctrl_8125 |= RSS_CTRL_TCP_IPV4_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_NONFRAG_IPV6_TCP)
+		rss_ctrl_8125 |= RSS_CTRL_TCP_IPV6_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_IPV6)
+		rss_ctrl_8125 |= RSS_CTRL_IPV6_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_IPV6_EX)
+		rss_ctrl_8125 |= RSS_CTRL_IPV6_EXT_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_IPV6_TCP_EX)
+		rss_ctrl_8125 |= RSS_CTRL_TCP_IPV6_EXT_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_NONFRAG_IPV4_UDP)
+		rss_ctrl_8125 |= RSS_CTRL_UDP_IPV4_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_NONFRAG_IPV6_UDP)
+		rss_ctrl_8125 |= RSS_CTRL_UDP_IPV6_SUPP;
+	if (rss_conf->rss_hf & RTE_ETH_RSS_IPV6_UDP_EX)
+		rss_ctrl_8125 |= RSS_CTRL_UDP_IPV6_EXT_SUPP;
+
+	RTL_W32(hw, RSS_CTRL_8125, rss_ctrl_8125);
+
+	return 0;
+}
+
+static int
+rtl_rss_hash_conf_get(struct rte_eth_dev *dev, struct rte_eth_rss_conf *rss_conf)
+{
+	struct rtl_adapter *adapter = RTL_DEV_PRIVATE(dev);
+	struct rtl_hw *hw = &adapter->hw;
+	u64 rss_hf = 0;
+	u32 rss_ctrl_8125;
+
+	if (!hw->EnableRss) {
+		rss_conf->rss_hf = rss_hf;
+		return 0;
+	}
+
+	if (rss_conf->rss_key) {
+		rss_conf->rss_key_len = RTL_RSS_KEY_SIZE;
+		memcpy(rss_conf->rss_key, hw->rss_key, RTL_RSS_KEY_SIZE);
+	}
+
+	rss_ctrl_8125 = RTL_R32(hw, RSS_CTRL_8125);
+
+	if (rss_ctrl_8125 & RSS_CTRL_IPV4_SUPP)
+		rss_hf |= RTE_ETH_RSS_IPV4;
+	if (rss_ctrl_8125 & RSS_CTRL_TCP_IPV4_SUPP)
+		rss_hf |= RTE_ETH_RSS_NONFRAG_IPV4_TCP;
+	if (rss_ctrl_8125 & RSS_CTRL_TCP_IPV6_SUPP)
+		rss_hf |= RTE_ETH_RSS_NONFRAG_IPV6_TCP;
+	if (rss_ctrl_8125 & RSS_CTRL_IPV6_SUPP)
+		rss_hf |= RTE_ETH_RSS_IPV6;
+	if (rss_ctrl_8125 & RSS_CTRL_IPV6_EXT_SUPP)
+		rss_hf |= RTE_ETH_RSS_IPV6_EX;
+	if (rss_ctrl_8125 & RSS_CTRL_TCP_IPV6_EXT_SUPP)
+		rss_hf |= RTE_ETH_RSS_IPV6_TCP_EX;
+	if (rss_ctrl_8125 & RSS_CTRL_UDP_IPV4_SUPP)
+		rss_hf |= RTE_ETH_RSS_NONFRAG_IPV4_UDP;
+	if (rss_ctrl_8125 & RSS_CTRL_UDP_IPV6_SUPP)
+		rss_hf |= RTE_ETH_RSS_NONFRAG_IPV6_UDP;
+	if (rss_ctrl_8125 & RSS_CTRL_UDP_IPV6_EXT_SUPP)
+		rss_hf |= RTE_ETH_RSS_IPV6_UDP_EX;
+
+	rss_conf->rss_hf = rss_hf;
+
+	return 0;
+}
+
+static int
 rtl_dev_init(struct rte_eth_dev *dev)
 {
 	struct rte_pci_device *pci_dev = RTE_ETH_DEV_TO_PCI(dev);
@@ -656,14 +893,15 @@ rtl_dev_init(struct rte_eth_dev *dev)
 	dev->tx_pkt_burst = &rtl_xmit_pkts;
 	dev->rx_pkt_burst = &rtl_recv_pkts;
 
-	/* For secondary processes, the primary process has done all the work */
+	/* For secondary processes, the primary process has done all the work. */
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
 		if (dev->data->scattered_rx)
 			dev->rx_pkt_burst = &rtl_recv_scattered_pkts;
 		return 0;
 	}
 
-	hw->mmio_addr = (u8 *)pci_dev->mem_resource[2].addr; /* RTL8169 uses BAR2 */
+	/* R8169 uses BAR2 */
+	hw->mmio_addr = (u8 *)pci_dev->mem_resource[2].addr;
 
 	rtl_get_mac_version(hw, pci_dev);
 

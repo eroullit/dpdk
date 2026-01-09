@@ -1,9 +1,9 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
 #include "hw_mod_backend.h"
+#include "rte_debug.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -17,21 +17,21 @@ static const struct {
 	int (*reset)(struct flow_api_backend_s *be);
 	bool (*present)(struct flow_api_backend_s *be);
 } module[] = {
-	{ "CAT", hw_mod_cat_alloc, hw_mod_cat_free, hw_mod_cat_reset, hw_mod_cat_present },
-	{ "KM", hw_mod_km_alloc, hw_mod_km_free, hw_mod_km_reset, hw_mod_km_present },
-	{ "FLM", hw_mod_flm_alloc, hw_mod_flm_free, hw_mod_flm_reset, hw_mod_flm_present },
-	{ "HSH", hw_mod_hsh_alloc, hw_mod_hsh_free, hw_mod_hsh_reset, hw_mod_hsh_present },
-	{ "QSL", hw_mod_qsl_alloc, hw_mod_qsl_free, hw_mod_qsl_reset, hw_mod_qsl_present },
+	{ "CAT", nthw_mod_cat_alloc, nthw_mod_cat_free, nthw_mod_cat_reset, nthw_mod_cat_present },
+	{ "KM", nthw_mod_km_alloc, nthw_mod_km_free, nthw_mod_km_reset, nthw_mod_km_present },
+	{ "FLM", nthw_mod_flm_alloc, nthw_mod_flm_free, nthw_mod_flm_reset, nthw_mod_flm_present },
+	{ "HSH", nthw_mod_hsh_alloc, nthw_mod_hsh_free, nthw_mod_hsh_reset, nthw_mod_hsh_present },
+	{ "QSL", nthw_mod_qsl_alloc, nthw_mod_qsl_free, nthw_mod_qsl_reset, nthw_mod_qsl_present },
 	{
-		"SLC LR", hw_mod_slc_lr_alloc, hw_mod_slc_lr_free, hw_mod_slc_lr_reset,
-		hw_mod_slc_lr_present
+		"SLC LR", nthw_mod_slc_lr_alloc, nthw_mod_slc_lr_free, nthw_mod_slc_lr_reset,
+		nthw_mod_slc_lr_present
 	},
-	{ "PDB", hw_mod_pdb_alloc, hw_mod_pdb_free, hw_mod_pdb_reset, hw_mod_pdb_present },
-	{ "TPE", hw_mod_tpe_alloc, hw_mod_tpe_free, hw_mod_tpe_reset, hw_mod_tpe_present },
+	{ "PDB", nthw_mod_pdb_alloc, nthw_mod_pdb_free, nthw_mod_pdb_reset, nthw_mod_pdb_present },
+	{ "TPE", nthw_mod_tpe_alloc, nthw_mod_tpe_free, nthw_mod_tpe_reset, nthw_mod_tpe_present },
 };
 #define MOD_COUNT (ARRAY_SIZE(module))
 
-void *callocate_mod(struct common_func_s *mod, int sets, ...)
+void *nthw_callocate_mod(struct common_func_s *mod, int sets, ...)
 {
 #define MAX_SETS 38
 	void *base = NULL;
@@ -41,8 +41,8 @@ void *callocate_mod(struct common_func_s *mod, int sets, ...)
 	unsigned int total_bytes = 0;
 	int cnt, elem_size;
 
-	assert(sets <= MAX_SETS);
-	assert(sets > 0);
+	RTE_ASSERT(sets <= MAX_SETS);
+	RTE_ASSERT(sets > 0);
 
 	va_list args;
 	va_start(args, sets);
@@ -78,21 +78,22 @@ void *callocate_mod(struct common_func_s *mod, int sets, ...)
 	va_end(args);
 
 	mod->base = base;
-	mod->alloced_size = total_bytes;
+	mod->allocated_size = total_bytes;
 
 	return base;
 }
 
-void zero_module_cache(struct common_func_s *mod)
+void nthw_zero_module_cache(struct common_func_s *mod)
 {
-	memset(mod->base, 0, mod->alloced_size);
+	if (mod)
+		memset(mod->base, 0, mod->allocated_size);
 }
 
-int flow_api_backend_init(struct flow_api_backend_s *dev,
+int nthw_flow_api_backend_init(struct flow_api_backend_s *dev,
 	const struct flow_api_backend_ops *iface,
 	void *be_dev)
 {
-	assert(dev);
+	RTE_ASSERT(dev);
 	dev->iface = iface;
 	dev->be_dev = be_dev;
 	dev->num_phy_ports = iface->get_nb_phy_port(be_dev);
@@ -120,7 +121,7 @@ int flow_api_backend_init(struct flow_api_backend_s *dev,
 			FILTER,
 			"ERROR: Initialization of NIC module failed : [ %s ]",
 			module[mod].name);
-		flow_api_backend_done(dev);
+		nthw_flow_api_backend_done(dev);
 		NT_LOG(ERR,
 			FILTER,
 			"*************** Failed to create Binary Flow API *******************");
@@ -136,7 +137,7 @@ int flow_api_backend_init(struct flow_api_backend_s *dev,
 	return 0;
 }
 
-int flow_api_backend_done(struct flow_api_backend_s *dev)
+int nthw_flow_api_backend_done(struct flow_api_backend_s *dev)
 {
 	for (unsigned int mod = 0; mod < MOD_COUNT; mod++)
 		module[mod].free(dev);

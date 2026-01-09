@@ -645,7 +645,8 @@ mana_dev_link_update(struct rte_eth_dev *dev,
 }
 
 static int
-mana_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+mana_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		   struct eth_queue_stats *qstats)
 {
 	unsigned int i;
 
@@ -659,9 +660,9 @@ mana_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		stats->obytes += txq->stats.bytes;
 		stats->oerrors += txq->stats.errors;
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_opackets[i] = txq->stats.packets;
-			stats->q_obytes[i] = txq->stats.bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_opackets[i] = txq->stats.packets;
+			qstats->q_obytes[i] = txq->stats.bytes;
 		}
 	}
 
@@ -678,9 +679,9 @@ mana_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 		/* There is no good way to get stats->imissed, not setting it */
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_ipackets[i] = rxq->stats.packets;
-			stats->q_ibytes[i] = rxq->stats.bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_ipackets[i] = rxq->stats.packets;
+			qstats->q_ibytes[i] = rxq->stats.bytes;
 		}
 
 		stats->rx_nombuf += rxq->stats.nombuf;
@@ -1490,6 +1491,20 @@ mana_pci_probe_mac(struct rte_pci_device *pci_dev,
 			continue;
 		}
 
+		if (dev_attr.orig_attr.vendor_part_id) {
+			if (dev_attr.orig_attr.vendor_part_id !=
+			    GDMA_DEVICE_MANA) {
+				DRV_LOG(INFO, "Skip device vendor part id %x",
+					dev_attr.orig_attr.vendor_part_id);
+				continue;
+			}
+			if (!dev_attr.raw_packet_caps) {
+				DRV_LOG(INFO,
+					"Skip device without RAW support");
+				continue;
+			}
+		}
+
 		for (port = 1; port <= dev_attr.orig_attr.phys_port_cnt;
 		     port++) {
 			struct rte_ether_addr addr;
@@ -1635,6 +1650,10 @@ static const struct rte_pci_id mana_pci_id_map[] = {
 	{
 		RTE_PCI_DEVICE(PCI_VENDOR_ID_MICROSOFT,
 			       PCI_DEVICE_ID_MICROSOFT_MANA)
+	},
+	{
+		RTE_PCI_DEVICE(PCI_VENDOR_ID_MICROSOFT,
+			       PCI_DEVICE_ID_MICROSOFT_MANA_PF)
 	},
 	{
 		.vendor_id = 0

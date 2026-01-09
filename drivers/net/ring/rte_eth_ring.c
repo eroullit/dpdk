@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 
+#include <eal_export.h>
 #include "rte_eth_ring.h"
 #include <rte_mbuf.h>
 #include <ethdev_driver.h>
@@ -195,7 +196,8 @@ eth_dev_info(struct rte_eth_dev *dev,
 }
 
 static int
-eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+	      struct eth_queue_stats *qstats)
 {
 	unsigned int i;
 	unsigned long rx_total = 0, tx_total = 0;
@@ -203,14 +205,16 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 	for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS &&
 			i < dev->data->nb_rx_queues; i++) {
-		stats->q_ipackets[i] = internal->rx_ring_queues[i].rx_pkts;
-		rx_total += stats->q_ipackets[i];
+		if (qstats != NULL)
+			qstats->q_ipackets[i] = internal->rx_ring_queues[i].rx_pkts;
+		rx_total += internal->rx_ring_queues[i].rx_pkts;
 	}
 
 	for (i = 0; i < RTE_ETHDEV_QUEUE_STAT_CNTRS &&
 			i < dev->data->nb_tx_queues; i++) {
-		stats->q_opackets[i] = internal->tx_ring_queues[i].tx_pkts;
-		tx_total += stats->q_opackets[i];
+		if (qstats != NULL)
+			qstats->q_opackets[i] = internal->tx_ring_queues[i].tx_pkts;
+		tx_total += internal->tx_ring_queues[i].tx_pkts;
 	}
 
 	stats->ipackets = rx_total;
@@ -456,6 +460,7 @@ error:
 	return -1;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_from_rings)
 int
 rte_eth_from_rings(const char *name, struct rte_ring *const rx_queues[],
 		const unsigned int nb_rx_queues,
@@ -514,6 +519,7 @@ rte_eth_from_rings(const char *name, struct rte_ring *const rx_queues[],
 	return port_id;
 }
 
+RTE_EXPORT_SYMBOL(rte_eth_from_ring)
 int
 rte_eth_from_ring(struct rte_ring *r)
 {

@@ -767,7 +767,8 @@ int __roc_api roc_npa_dev_init(struct roc_npa *roc_npa);
 int __roc_api roc_npa_dev_fini(struct roc_npa *roc_npa);
 
 /* Flags to pool create */
-#define ROC_NPA_ZERO_AURA_F BIT(0)
+#define ROC_NPA_ZERO_AURA_F	    BIT(0)
+#define ROC_NPA_FORCE_OPAQUE_MODE_F BIT(1)
 
 /* Enumerations */
 enum roc_npa_buf_type {
@@ -815,6 +816,8 @@ uint64_t __roc_api roc_npa_buf_type_mask(uint64_t aura_handle);
 uint64_t __roc_api roc_npa_buf_type_limit_get(uint64_t type_mask);
 int __roc_api roc_npa_aura_bp_configure(uint64_t aura_id, uint16_t bpid, uint8_t bp_intf,
 					uint8_t bp_thresh, bool enable);
+int __roc_api roc_npa_pool_bp_configure(uint64_t pool_id, uint16_t bpid, uint8_t bp_thresh,
+					uint8_t bp_class, bool enable);
 
 /* Init callbacks */
 typedef int (*roc_npa_lf_init_cb_t)(struct plt_pci_device *pci_dev);

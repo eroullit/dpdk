@@ -50,7 +50,7 @@ int idpf_vc_one_msg_read(struct idpf_adapter *adapter, uint32_t ops,
 __rte_internal
 int idpf_vc_rxq_config(struct idpf_vport *vport, struct idpf_rx_queue *rxq);
 __rte_internal
-int idpf_vc_txq_config(struct idpf_vport *vport, struct idpf_tx_queue *txq);
+int idpf_vc_txq_config(struct idpf_vport *vport, struct ci_tx_queue *txq);
 __rte_internal
 int idpf_vc_stats_query(struct idpf_vport *vport,
 			struct virtchnl2_vport_stats **pstats);
@@ -74,6 +74,9 @@ int idpf_vc_txq_config_by_info(struct idpf_vport *vport, struct virtchnl2_txq_in
 			       uint16_t num_qs);
 __rte_internal
 int idpf_vc_ena_dis_one_queue(struct idpf_vport *vport, uint16_t qid,
+			      uint32_t type, bool on);
+__rte_internal
+int idpf_vc_ena_dis_one_queue_vcpf(struct idpf_adapter *adapter, uint16_t qid,
 			      uint32_t type, bool on);
 __rte_internal
 int idpf_vc_queue_grps_del(struct idpf_vport *vport,

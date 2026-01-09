@@ -8,6 +8,7 @@
 
 #include <ethdev_driver.h>
 #include <ethdev_vdev.h>
+#include <eal_export.h>
 #include <rte_malloc.h>
 #include <bus_vdev_driver.h>
 #include <rte_kvargs.h>
@@ -311,7 +312,6 @@ pmd_ethdev_register(struct rte_vdev_device *vdev,
 	/* dev */
 	dev->rx_pkt_burst = pmd_rx_pkt_burst;
 	dev->tx_pkt_burst = pmd_tx_pkt_burst;
-	dev->tx_pkt_prepare = NULL;
 	dev->dev_ops = &pmd_ops;
 	dev->device = &vdev->device;
 
@@ -516,6 +516,7 @@ RTE_PMD_REGISTER_PARAM_STRING(net_softnic,
 	PMD_PARAM_CPU_ID "=<uint32> "
 );
 
+RTE_EXPORT_SYMBOL(rte_pmd_softnic_manage)
 int
 rte_pmd_softnic_manage(uint16_t port_id)
 {

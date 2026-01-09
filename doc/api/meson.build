@@ -14,7 +14,7 @@ endif
 generate_doxygen = py3 + files('generate_doxygen.py')
 generate_examples = py3 + files('generate_examples.py')
 
-htmldir = join_paths(get_option('datadir'), 'doc', 'dpdk')
+htmldir = join_paths(get_option('datadir'), 'doc', 'dpdk', 'api')
 
 # due to the following bug: https://github.com/mesonbuild/meson/issues/4107
 # if install is set to true it will override build_by_default and it will
@@ -27,6 +27,7 @@ example = custom_target('examples.dox',
         depfile: 'examples.dox.d',
         install: get_option('enable_docs'),
         install_dir: htmldir,
+        install_tag: 'doc',
         build_by_default: get_option('enable_docs'))
 
 # set up common Doxygen configuration
@@ -76,6 +77,7 @@ doxy_html_build = custom_target('doxygen-html',
         command: [generate_doxygen, '@OUTPUT@', doxygen, '@INPUT@'],
         install: get_option('enable_docs'),
         install_dir: htmldir,
+        install_tag: 'doc',
         build_by_default: get_option('enable_docs'))
 
 doc_targets += doxy_html_build
@@ -90,6 +92,7 @@ doxy_man_build = custom_target('doxygen-man',
         command: [generate_doxygen, '@OUTPUT@', doxygen, '@INPUT@'],
         install: get_option('enable_docs'),
         install_dir: get_option('datadir'),
+        install_tag: 'doc',
         build_by_default: get_option('enable_docs'))
 
 doc_targets += doxy_man_build

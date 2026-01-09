@@ -32,7 +32,6 @@ REGEX_FOR_PCI_ADDRESS: str = r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}.[0-9
 _REGEX_FOR_COLON_OR_HYPHEN_SEP_MAC: str = r"(?:[\da-fA-F]{2}[:-]){5}[\da-fA-F]{2}"
 _REGEX_FOR_DOT_SEP_MAC: str = r"(?:[\da-fA-F]{4}.){2}[\da-fA-F]{4}"
 REGEX_FOR_MAC_ADDRESS: str = rf"{_REGEX_FOR_COLON_OR_HYPHEN_SEP_MAC}|{_REGEX_FOR_DOT_SEP_MAC}"
-REGEX_FOR_BASE64_ENCODING: str = r"[-a-zA-Z0-9+\\/]*={0,3}"
 REGEX_FOR_IDENTIFIER: str = r"\w+(?:[\w -]*\w+)?"
 REGEX_FOR_PORT_LINK: str = (
     rf"(?:(sut|tg)\.)?({REGEX_FOR_IDENTIFIER})"  # left side
@@ -112,7 +111,7 @@ class MesonArgs:
         Example:
             ::
 
-                meson_args = MesonArgs(enable_kmods=True).
+                meson_args = MesonArgs(check_includes=True).
         """
         self._default_library = f"--default-library={default_library}" if default_library else ""
         self._dpdk_args = " ".join(
@@ -148,14 +147,14 @@ class TarCompressionFormat(StrEnum):
     zstd = "zst"
 
     @property
-    def extension(self):
+    def extension(self) -> str:
         """Return the extension associated with the compression format.
 
         If the compression format is 'none', the extension will be in the format 'tar'.
         For other compression formats, the extension will be in the format
         'tar.{compression format}'.
         """
-        return f"{self.value}" if self == self.none else f"{self.none.value}.{self.value}"
+        return f"{self.value}" if self == self.none else f"{type(self).none.value}.{self.value}"
 
 
 def convert_to_list_of_string(value: Any | list[Any]) -> list[str]:
@@ -214,7 +213,7 @@ def create_tarball(
     return target_tarball_path
 
 
-def extract_tarball(tar_path: str | Path):
+def extract_tarball(tar_path: str | Path) -> None:
     """Extract the contents of a tarball.
 
     The tarball will be extracted in the same path as `tar_path` parent path.
@@ -297,20 +296,6 @@ def generate_random_packets(
         return packet / random.randbytes(usable_payload_size)
 
     return [_make_packet() for _ in range(number_of)]
-
-
-class MultiInheritanceBaseClass:
-    """A base class for classes utilizing multiple inheritance.
-
-    This class enables it's subclasses to support both single and multiple inheritance by acting as
-    a stopping point in the tree of calls to the constructors of superclasses. This class is able
-    to exist at the end of the Method Resolution Order (MRO) so that subclasses can call
-    :meth:`super.__init__` without repercussion.
-    """
-
-    def __init__(self) -> None:
-        """Call the init method of :class:`object`."""
-        super().__init__()
 
 
 def to_pascal_case(text: str) -> str:

@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <eal_export.h>
 #include <rte_errno.h>
 
 #include "mlx5_nl.h"
@@ -27,8 +28,6 @@
 #endif
 
 
-/* Size of the buffer to receive kernel messages */
-#define MLX5_NL_BUF_SIZE (32 * 1024)
 /* Send buffer size for the Netlink socket */
 #define MLX5_SEND_BUF_SIZE 32768
 /* Receive buffer size for the Netlink socket */
@@ -195,6 +194,7 @@ RTE_ATOMIC(uint32_t) atomic_sn;
  *   A file descriptor on success, a negative errno value otherwise and
  *   rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_init)
 int
 mlx5_nl_init(int protocol, int groups)
 {
@@ -641,6 +641,7 @@ error:
  * @return
  *    0 on success, a negative errno value otherwise and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_vf_mac_addr_modify)
 int
 mlx5_nl_vf_mac_addr_modify(int nlsk_fd, unsigned int iface_idx,
 			   struct rte_ether_addr *mac, int vf_index)
@@ -718,8 +719,6 @@ error:
  *   Netlink socket file descriptor.
  * @param[in] iface_idx
  *   Net device interface index.
- * @param mac_own
- *   BITFIELD_DECLARE array to store the mac.
  * @param mac
  *   MAC address to register.
  * @param index
@@ -728,10 +727,10 @@ error:
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_mac_addr_add)
 int
 mlx5_nl_mac_addr_add(int nlsk_fd, unsigned int iface_idx,
-		     uint64_t *mac_own, struct rte_ether_addr *mac,
-		     uint32_t index)
+		     struct rte_ether_addr *mac, uint32_t index)
 {
 	int ret;
 
@@ -740,8 +739,6 @@ mlx5_nl_mac_addr_add(int nlsk_fd, unsigned int iface_idx,
 		MLX5_ASSERT(index < MLX5_MAX_MAC_ADDRESSES);
 		if (index >= MLX5_MAX_MAC_ADDRESSES)
 			return -EINVAL;
-
-		BITFIELD_SET(mac_own, index);
 	}
 	if (ret == -EEXIST)
 		return 0;
@@ -755,8 +752,6 @@ mlx5_nl_mac_addr_add(int nlsk_fd, unsigned int iface_idx,
  *   Netlink socket file descriptor.
  * @param[in] iface_idx
  *   Net device interface index.
- * @param mac_own
- *   BITFIELD_DECLARE array to store the mac.
  * @param mac
  *   MAC address to remove.
  * @param index
@@ -765,15 +760,15 @@ mlx5_nl_mac_addr_add(int nlsk_fd, unsigned int iface_idx,
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_mac_addr_remove)
 int
-mlx5_nl_mac_addr_remove(int nlsk_fd, unsigned int iface_idx, uint64_t *mac_own,
+mlx5_nl_mac_addr_remove(int nlsk_fd, unsigned int iface_idx,
 			struct rte_ether_addr *mac, uint32_t index)
 {
 	MLX5_ASSERT(index < MLX5_MAX_MAC_ADDRESSES);
 	if (index >= MLX5_MAX_MAC_ADDRESSES)
 		return -EINVAL;
 
-	BITFIELD_RESET(mac_own, index);
 	return mlx5_nl_mac_addr_modify(nlsk_fd, iface_idx, mac, 0);
 }
 
@@ -789,6 +784,7 @@ mlx5_nl_mac_addr_remove(int nlsk_fd, unsigned int iface_idx, uint64_t *mac_own,
  * @param n
  *   @p mac_addrs array size.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_mac_addr_sync)
 void
 mlx5_nl_mac_addr_sync(int nlsk_fd, unsigned int iface_idx,
 		      struct rte_ether_addr *mac_addrs, int n)
@@ -844,11 +840,14 @@ mlx5_nl_mac_addr_sync(int nlsk_fd, unsigned int iface_idx,
  *   @p mac_addrs array size.
  * @param mac_own
  *   BITFIELD_DECLARE array to store the mac.
+ * @param vf
+ *   Flag for a VF device.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_mac_addr_flush)
 void
 mlx5_nl_mac_addr_flush(int nlsk_fd, unsigned int iface_idx,
 		       struct rte_ether_addr *mac_addrs, int n,
-		       uint64_t *mac_own)
+		       uint64_t *mac_own, bool vf)
 {
 	int i;
 
@@ -858,9 +857,13 @@ mlx5_nl_mac_addr_flush(int nlsk_fd, unsigned int iface_idx,
 	for (i = n - 1; i >= 0; --i) {
 		struct rte_ether_addr *m = &mac_addrs[i];
 
-		if (BITFIELD_ISSET(mac_own, i))
-			mlx5_nl_mac_addr_remove(nlsk_fd, iface_idx, mac_own, m,
-						i);
+		if (BITFIELD_ISSET(mac_own, i)) {
+			if (vf)
+				mlx5_nl_mac_addr_remove(nlsk_fd,
+							iface_idx,
+							m, i);
+			BITFIELD_RESET(mac_own, i);
+		}
 	}
 }
 
@@ -923,6 +926,7 @@ mlx5_nl_device_flags(int nlsk_fd, unsigned int iface_idx, uint32_t flags,
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_promisc)
 int
 mlx5_nl_promisc(int nlsk_fd, unsigned int iface_idx, int enable)
 {
@@ -949,6 +953,7 @@ mlx5_nl_promisc(int nlsk_fd, unsigned int iface_idx, int enable)
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_allmulti)
 int
 mlx5_nl_allmulti(int nlsk_fd, unsigned int iface_idx, int enable)
 {
@@ -1138,6 +1143,7 @@ error:
  *   A valid (nonzero) interface index on success, 0 otherwise and rte_errno
  *   is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_ifindex)
 unsigned int
 mlx5_nl_ifindex(int nl, const char *name, uint32_t pindex, struct mlx5_dev_info *dev_info)
 {
@@ -1161,8 +1167,12 @@ mlx5_nl_ifindex(int nl, const char *name, uint32_t pindex, struct mlx5_dev_info 
 			data.ibindex = dev_info->ibindex;
 	}
 
+	/* Update should be done via monitor thread to avoid race condition */
+	if (dev_info->async_mon_ready) {
+		rte_errno = ENODEV;
+		return 0;
+	}
 	ret = mlx5_nl_port_info(nl, pindex, &data);
-
 	if (dev_info->probe_opt && !strcmp(dev_info->ibname, name)) {
 		if ((!ret || ret == -ENODEV) && dev_info->port_info &&
 		    pindex <= dev_info->port_num) {
@@ -1172,7 +1182,6 @@ mlx5_nl_ifindex(int nl, const char *name, uint32_t pindex, struct mlx5_dev_info 
 			dev_info->port_info[pindex].valid = 1;
 		}
 	}
-
 	return ret ? 0 : data.ifindex;
 }
 
@@ -1194,6 +1203,7 @@ mlx5_nl_ifindex(int nl, const char *name, uint32_t pindex, struct mlx5_dev_info 
  *   Port state (ibv_port_state) on success, negative on error
  *   and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_port_state)
 int
 mlx5_nl_port_state(int nl, const char *name, uint32_t pindex, struct mlx5_dev_info *dev_info)
 {
@@ -1229,6 +1239,7 @@ mlx5_nl_port_state(int nl, const char *name, uint32_t pindex, struct mlx5_dev_in
  *   A valid (nonzero) number of ports on success, 0 otherwise
  *   and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_portnum)
 unsigned int
 mlx5_nl_portnum(int nl, const char *name, struct mlx5_dev_info *dev_info)
 {
@@ -1435,6 +1446,7 @@ error:
  * @return
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_switch_info)
 int
 mlx5_nl_switch_info(int nl, unsigned int ifindex,
 		    struct mlx5_switch_info *info)
@@ -1485,6 +1497,7 @@ mlx5_nl_switch_info(int nl, unsigned int ifindex,
  * @param[in] ifindex
  *   Interface index of network device to delete.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_vlan_vmwa_delete)
 void
 mlx5_nl_vlan_vmwa_delete(struct mlx5_nl_vlan_vmwa_context *vmwa,
 		      uint32_t ifindex)
@@ -1562,6 +1575,7 @@ nl_attr_nest_end(struct nlmsghdr *nlh, struct nlattr *nest)
  * @param[in] tag
  *   VLAN tag for VLAN network device to create.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_vlan_vmwa_create)
 uint32_t
 mlx5_nl_vlan_vmwa_create(struct mlx5_nl_vlan_vmwa_context *vmwa,
 			 uint32_t ifindex, uint16_t tag)
@@ -1714,6 +1728,7 @@ mlx5_nl_generic_family_id_get(int nlsk_fd, const char *name)
  *   otherwise and rte_errno is set.
  */
 
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_devlink_family_id_get)
 int
 mlx5_nl_devlink_family_id_get(int nlsk_fd)
 {
@@ -1940,6 +1955,7 @@ mlx5_nl_enable_roce_set(int nlsk_fd, int family_id, const char *pci_addr,
  * @return
  *  0 on success, negative on failure.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_parse_link_status_update)
 int
 mlx5_nl_parse_link_status_update(struct nlmsghdr *hdr, uint32_t *ifindex)
 {
@@ -1971,6 +1987,7 @@ mlx5_nl_parse_link_status_update(struct nlmsghdr *hdr, uint32_t *ifindex)
  *  0 on success, including the case when there are no events.
  *  Negative on failure and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_read_events)
 int
 mlx5_nl_read_events(int nlsk_fd, mlx5_nl_event_cb *cb, void *cb_arg)
 {
@@ -2058,6 +2075,7 @@ mlx5_nl_esw_multiport_cb(struct nlmsghdr *nh, void *arg)
 
 #define NL_ESW_MULTIPORT_PARAM "esw_multiport"
 
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_devlink_esw_multiport_get)
 int
 mlx5_nl_devlink_esw_multiport_get(int nlsk_fd, int family_id, const char *pci_addr, int *enable)
 {
@@ -2096,12 +2114,14 @@ mlx5_nl_devlink_esw_multiport_get(int nlsk_fd, int family_id, const char *pci_ad
 	return ret;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_rdma_monitor_init)
 int
 mlx5_nl_rdma_monitor_init(void)
 {
 	return mlx5_nl_init(NETLINK_RDMA, RDMA_NL_GROUP_NOTIFICATION);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_rdma_monitor_info_get)
 void
 mlx5_nl_rdma_monitor_info_get(struct nlmsghdr *hdr, struct mlx5_nl_port_info *data)
 {
@@ -2196,6 +2216,7 @@ error:
  * @return
  *   0 on success, negative on error and rte_errno is set.
  */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_rdma_monitor_cap_get)
 int
 mlx5_nl_rdma_monitor_cap_get(int nl, uint8_t *cap)
 {
@@ -2224,4 +2245,113 @@ mlx5_nl_rdma_monitor_cap_get(int nl, uint8_t *cap)
 		return ret;
 	}
 	return 0;
+}
+
+struct mlx5_mtu {
+	uint32_t min_mtu;
+	bool min_mtu_set;
+	uint32_t max_mtu;
+	bool max_mtu_set;
+};
+
+static int
+mlx5_nl_get_mtu_bounds_cb(struct nlmsghdr *nh, void *arg)
+{
+	size_t off = NLMSG_LENGTH(sizeof(struct ifinfomsg));
+	struct mlx5_mtu *out = arg;
+
+	while (off < nh->nlmsg_len) {
+		struct rtattr *ra = RTE_PTR_ADD(nh, off);
+		uint32_t *payload;
+
+		switch (ra->rta_type) {
+		case IFLA_MIN_MTU:
+			payload = RTA_DATA(ra);
+			out->min_mtu = *payload;
+			out->min_mtu_set = true;
+			break;
+		case IFLA_MAX_MTU:
+			payload = RTA_DATA(ra);
+			out->max_mtu = *payload;
+			out->max_mtu_set = true;
+			break;
+		default:
+			/* Nothing to do for other attributes. */
+			break;
+		}
+		off += RTA_ALIGN(ra->rta_len);
+	}
+
+	return 0;
+}
+
+/**
+ * Query minimum and maximum allowed MTU values for given Linux network interface.
+ *
+ * This function queries the following interface attributes exposed in netlink since Linux 4.18:
+ *
+ * - IFLA_MIN_MTU - minimum allowed MTU
+ * - IFLA_MAX_MTU - maximum allowed MTU
+ *
+ * @param[in] nl
+ *   Netlink socket of the ROUTE kind (NETLINK_ROUTE).
+ * @param[in] ifindex
+ *   Linux network device index.
+ * @param[out] min_mtu
+ *   Pointer to minimum allowed MTU. Populated only if both minimum and maximum MTU was queried.
+ * @param[out] max_mtu
+ *   Pointer to maximum allowed MTU. Populated only if both minimum and maximum MTU was queried.
+ *
+ * @return
+ *   0 on success, negative on error and rte_errno is set.
+ *
+ *   Known errors:
+ *
+ *   - (-EINVAL) - either @p min_mtu or @p max_mtu is NULL.
+ *   - (-ENOENT) - either minimum or maximum allowed MTU was not found in interface attributes.
+ */
+RTE_EXPORT_INTERNAL_SYMBOL(mlx5_nl_get_mtu_bounds)
+int
+mlx5_nl_get_mtu_bounds(int nl, unsigned int ifindex, uint16_t *min_mtu, uint16_t *max_mtu)
+{
+	struct mlx5_mtu out = { 0 };
+	struct {
+		struct nlmsghdr nh;
+		struct ifinfomsg info;
+	} req = {
+		.nh = {
+			.nlmsg_len = NLMSG_LENGTH(sizeof(req.info)),
+			.nlmsg_type = RTM_GETLINK,
+			.nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK,
+		},
+		.info = {
+			.ifi_family = AF_UNSPEC,
+			.ifi_index = ifindex,
+		},
+	};
+	uint32_t sn = MLX5_NL_SN_GENERATE;
+	int ret;
+
+	if (min_mtu == NULL || max_mtu == NULL) {
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+
+	ret = mlx5_nl_send(nl, &req.nh, sn);
+	if (ret < 0)
+		return ret;
+
+	ret = mlx5_nl_recv(nl, sn, mlx5_nl_get_mtu_bounds_cb, &out);
+	if (ret < 0)
+		return ret;
+
+	if (!out.min_mtu_set || !out.max_mtu_set) {
+		rte_errno = ENOENT;
+		return -rte_errno;
+	}
+
+	*min_mtu = out.min_mtu;
+	*max_mtu = out.max_mtu;
+
+	return ret;
 }

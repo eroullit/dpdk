@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -12,36 +11,36 @@
 
 #include "flow_nthw_tx_cpy.h"
 
-void tx_cpy_nthw_set_debug_mode(struct tx_cpy_nthw *p, unsigned int n_debug_mode)
+void nthw_tx_cpy_set_debug_mode(struct tx_cpy_nthw *p, unsigned int n_debug_mode)
 {
 	nthw_module_set_debug_mode(p->m_tx_cpy, n_debug_mode);
 }
 
-struct tx_cpy_nthw *tx_cpy_nthw_new(void)
+struct tx_cpy_nthw *nthw_tx_cpy_new(void)
 {
 	struct tx_cpy_nthw *p = malloc(sizeof(struct tx_cpy_nthw));
 
 	if (p)
-		(void)memset(p, 0, sizeof(*p));
+		memset(p, 0, sizeof(*p));
 
 	return p;
 }
 
-void tx_cpy_nthw_delete(struct tx_cpy_nthw *p)
+void nthw_tx_cpy_delete(struct tx_cpy_nthw *p)
 {
 	if (p) {
 		free(p->m_writers);
-		(void)memset(p, 0, sizeof(*p));
+		memset(p, 0, sizeof(*p));
 		free(p);
 	}
 }
 
-int tx_cpy_nthw_init(struct tx_cpy_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
+int nthw_tx_cpy_init(struct tx_cpy_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
 {
 	const char *const p_adapter_id_str = p_fpga->p_fpga_info->mp_adapter_id_str;
 	nthw_module_t *p_mod = nthw_fpga_query_module(p_fpga, MOD_TX_CPY, n_instance);
 
-	assert(n_instance >= 0 && n_instance < 256);
+	RTE_ASSERT(n_instance >= 0 && n_instance < 256);
 
 	if (p == NULL)
 		return p_mod == NULL ? -1 : 0;
@@ -343,46 +342,46 @@ int tx_cpy_nthw_init(struct tx_cpy_nthw *p, nthw_fpga_t *p_fpga, int n_instance)
 	return 0;
 }
 
-void tx_cpy_nthw_writer_select(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
+void nthw_tx_cpy_writer_select(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_field_set_val32(p->m_writers[index].mp_writer_ctrl_addr, val);
 }
 
-void tx_cpy_nthw_writer_cnt(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
+void nthw_tx_cpy_writer_cnt(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_field_set_val32(p->m_writers[index].mp_writer_ctrl_cnt, val);
 }
 
-void tx_cpy_nthw_writer_reader_select(const struct tx_cpy_nthw *p, unsigned int index,
+void nthw_tx_cpy_writer_reader_select(const struct tx_cpy_nthw *p, unsigned int index,
 	uint32_t val)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_field_set_val32(p->m_writers[index].mp_writer_data_reader_select, val);
 }
 
-void tx_cpy_nthw_writer_dyn(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
+void nthw_tx_cpy_writer_dyn(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_field_set_val32(p->m_writers[index].mp_writer_data_dyn, val);
 }
 
-void tx_cpy_nthw_writer_ofs(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
+void nthw_tx_cpy_writer_ofs(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_field_set_val32(p->m_writers[index].mp_writer_data_ofs, val);
 }
 
-void tx_cpy_nthw_writer_len(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
+void nthw_tx_cpy_writer_len(const struct tx_cpy_nthw *p, unsigned int index, uint32_t val)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_field_set_val32(p->m_writers[index].mp_writer_data_len, val);
 }
 
-void tx_cpy_nthw_writer_flush(const struct tx_cpy_nthw *p, unsigned int index)
+void nthw_tx_cpy_writer_flush(const struct tx_cpy_nthw *p, unsigned int index)
 {
-	assert(index < p->m_writers_cnt);
+	RTE_ASSERT(index < p->m_writers_cnt);
 	nthw_register_flush(p->m_writers[index].mp_writer_ctrl, 1);
 	nthw_register_flush(p->m_writers[index].mp_writer_data, 1);
 }

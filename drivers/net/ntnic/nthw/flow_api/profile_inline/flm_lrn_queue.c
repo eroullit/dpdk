@@ -1,9 +1,7 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2024 Napatech A/S
  */
 
-#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -17,7 +15,7 @@
 
 #define ELEM_SIZE sizeof(struct flm_v25_lrn_data_s)
 
-void *flm_lrn_queue_create(void)
+void *nthw_flm_lrn_queue_create(void)
 {
 	static_assert((ELEM_SIZE & ~(size_t)3) == ELEM_SIZE, "FLM LEARN struct size");
 	struct rte_ring *q = rte_ring_create_elem("RFQ",
@@ -25,28 +23,28 @@ void *flm_lrn_queue_create(void)
 		QUEUE_SIZE,
 		SOCKET_ID_ANY,
 		RING_F_MP_HTS_ENQ | RING_F_SC_DEQ);
-	assert(q != NULL);
+	RTE_ASSERT(q != NULL);
 	return q;
 }
 
-void flm_lrn_queue_free(void *q)
+void nthw_flm_lrn_queue_free(void *q)
 {
 	rte_ring_free(q);
 }
 
-uint32_t *flm_lrn_queue_get_write_buffer(void *q)
+uint32_t *nthw_flm_lrn_queue_get_write_buffer(void *q)
 {
 	struct rte_ring_zc_data zcd;
 	unsigned int n = rte_ring_enqueue_zc_burst_elem_start(q, ELEM_SIZE, 1, &zcd, NULL);
 	return (n == 0) ? NULL : zcd.ptr1;
 }
 
-void flm_lrn_queue_release_write_buffer(void *q)
+void nthw_flm_lrn_queue_release_write_buffer(void *q)
 {
 	rte_ring_enqueue_zc_elem_finish(q, 1);
 }
 
-read_record flm_lrn_queue_get_read_buffer(void *q)
+read_record nthw_flm_lrn_queue_get_read_buffer(void *q)
 {
 	struct rte_ring_zc_data zcd;
 	read_record rr;
@@ -63,7 +61,7 @@ read_record flm_lrn_queue_get_read_buffer(void *q)
 	return rr;
 }
 
-void flm_lrn_queue_release_read_buffer(void *q, uint32_t num)
+void nthw_flm_lrn_queue_release_read_buffer(void *q, uint32_t num)
 {
 	rte_ring_dequeue_zc_elem_finish(q, num);
 }

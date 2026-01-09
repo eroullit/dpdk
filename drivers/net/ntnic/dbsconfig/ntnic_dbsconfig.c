@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -177,13 +176,13 @@ static void dbs_init_rx_queue(nthw_dbs_t *p_nthw_dbs, uint32_t queue, uint32_t s
 	uint32_t dummy;
 
 	do {
-		get_rx_init(p_nthw_dbs, &init, &dummy, &busy);
+		nthw_get_rx_init(p_nthw_dbs, &init, &dummy, &busy);
 	} while (busy != 0);
 
-	set_rx_init(p_nthw_dbs, start_idx, start_ptr, INIT_QUEUE, queue);
+	nthw_set_rx_init(p_nthw_dbs, start_idx, start_ptr, INIT_QUEUE, queue);
 
 	do {
-		get_rx_init(p_nthw_dbs, &init, &dummy, &busy);
+		nthw_get_rx_init(p_nthw_dbs, &init, &dummy, &busy);
 	} while (busy != 0);
 }
 
@@ -195,19 +194,19 @@ static void dbs_init_tx_queue(nthw_dbs_t *p_nthw_dbs, uint32_t queue, uint32_t s
 	uint32_t dummy;
 
 	do {
-		get_tx_init(p_nthw_dbs, &init, &dummy, &busy);
+		nthw_get_tx_init(p_nthw_dbs, &init, &dummy, &busy);
 	} while (busy != 0);
 
-	set_tx_init(p_nthw_dbs, start_idx, start_ptr, INIT_QUEUE, queue);
+	nthw_set_tx_init(p_nthw_dbs, start_idx, start_ptr, INIT_QUEUE, queue);
 
 	do {
-		get_tx_init(p_nthw_dbs, &init, &dummy, &busy);
+		nthw_get_tx_init(p_nthw_dbs, &init, &dummy, &busy);
 	} while (busy != 0);
 }
 
 static int nthw_virt_queue_init(struct fpga_info_s *p_fpga_info)
 {
-	assert(p_fpga_info);
+	RTE_ASSERT(p_fpga_info);
 
 	nthw_fpga_t *const p_fpga = p_fpga_info->mp_fpga;
 	nthw_dbs_t *p_nthw_dbs;
@@ -221,14 +220,14 @@ static int nthw_virt_queue_init(struct fpga_info_s *p_fpga_info)
 	if (p_nthw_dbs == NULL)
 		return -1;
 
-	res = dbs_init(NULL, p_fpga, 0);/* Check that DBS exists in FPGA */
+	res = nthw_dbs_init(NULL, p_fpga, 0);/* Check that DBS exists in FPGA */
 
 	if (res) {
 		free(p_nthw_dbs);
 		return res;
 	}
 
-	res = dbs_init(p_nthw_dbs, p_fpga, 0);	/* Create DBS module */
+	res = nthw_dbs_init(p_nthw_dbs, p_fpga, 0);	/* Create DBS module */
 
 	if (res) {
 		free(p_nthw_dbs);
@@ -242,7 +241,7 @@ static int nthw_virt_queue_init(struct fpga_info_s *p_fpga_info)
 		txvq[i].usage = NTHW_VIRTQ_UNUSED;
 	}
 
-	dbs_reset(p_nthw_dbs);
+	nthw_dbs_reset(p_nthw_dbs);
 
 	for (i = 0; i < NT_DBS_RX_QUEUES_MAX; ++i)
 		dbs_init_rx_queue(p_nthw_dbs, i, 0, 0);
@@ -250,18 +249,18 @@ static int nthw_virt_queue_init(struct fpga_info_s *p_fpga_info)
 	for (i = 0; i < NT_DBS_TX_QUEUES_MAX; ++i)
 		dbs_init_tx_queue(p_nthw_dbs, i, 0, 0);
 
-	set_rx_control(p_nthw_dbs, LAST_QUEUE, RX_AM_DISABLE, RX_AM_POLL_SPEED, RX_UW_DISABLE,
+	nthw_set_rx_control(p_nthw_dbs, LAST_QUEUE, RX_AM_DISABLE, RX_AM_POLL_SPEED, RX_UW_DISABLE,
 		RX_UW_POLL_SPEED, RX_Q_DISABLE);
-	set_rx_control(p_nthw_dbs, LAST_QUEUE, RX_AM_ENABLE, RX_AM_POLL_SPEED, RX_UW_ENABLE,
+	nthw_set_rx_control(p_nthw_dbs, LAST_QUEUE, RX_AM_ENABLE, RX_AM_POLL_SPEED, RX_UW_ENABLE,
 		RX_UW_POLL_SPEED, RX_Q_DISABLE);
-	set_rx_control(p_nthw_dbs, LAST_QUEUE, RX_AM_ENABLE, RX_AM_POLL_SPEED, RX_UW_ENABLE,
+	nthw_set_rx_control(p_nthw_dbs, LAST_QUEUE, RX_AM_ENABLE, RX_AM_POLL_SPEED, RX_UW_ENABLE,
 		RX_UW_POLL_SPEED, RX_Q_ENABLE);
 
-	set_tx_control(p_nthw_dbs, LAST_QUEUE, TX_AM_DISABLE, TX_AM_POLL_SPEED, TX_UW_DISABLE,
+	nthw_set_tx_control(p_nthw_dbs, LAST_QUEUE, TX_AM_DISABLE, TX_AM_POLL_SPEED, TX_UW_DISABLE,
 		TX_UW_POLL_SPEED, TX_Q_DISABLE);
-	set_tx_control(p_nthw_dbs, LAST_QUEUE, TX_AM_ENABLE, TX_AM_POLL_SPEED, TX_UW_ENABLE,
+	nthw_set_tx_control(p_nthw_dbs, LAST_QUEUE, TX_AM_ENABLE, TX_AM_POLL_SPEED, TX_UW_ENABLE,
 		TX_UW_POLL_SPEED, TX_Q_DISABLE);
-	set_tx_control(p_nthw_dbs, LAST_QUEUE, TX_AM_ENABLE, TX_AM_POLL_SPEED, TX_UW_ENABLE,
+	nthw_set_tx_control(p_nthw_dbs, LAST_QUEUE, TX_AM_ENABLE, TX_AM_POLL_SPEED, TX_UW_ENABLE,
 		TX_UW_POLL_SPEED, TX_Q_ENABLE);
 
 	return 0;
@@ -369,7 +368,8 @@ static struct nthw_virt_queue *nthw_setup_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	uint32_t host_id,
 	uint32_t header,
 	uint32_t vq_type,
-	int irq_vector)
+	int irq_vector,
+	uint8_t rx_deferred_start)
 {
 	uint32_t qs = dbs_qsize_log2(queue_size);
 	uint32_t int_enable;
@@ -381,8 +381,8 @@ static struct nthw_virt_queue *nthw_setup_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	 * 3. Configure the DBS.RX_DR_DATA memory; good idea to initialize all
 	 * DBS_RX_QUEUES entries.
 	 */
-	if (set_rx_dr_data(p_nthw_dbs, index, (uint64_t)desc_struct_phys_addr, host_id, qs, header,
-			0) != 0) {
+	if (nthw_set_rx_dr_data(p_nthw_dbs, index, (uint64_t)desc_struct_phys_addr,
+		host_id, qs, header, 0) != 0) {
 		return NULL;
 	}
 
@@ -397,9 +397,9 @@ static struct nthw_virt_queue *nthw_setup_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	int_enable = 0;
 	vec = 0;
 	istk = 0;
-	NT_LOG_DBGX(DBG, NTNIC, "set_rx_uw_data int=0 irq_vector=%u", irq_vector);
+	NT_LOG_DBGX(DBG, NTNIC, "nthw_set_rx_uw_data int=0 irq_vector=%i", irq_vector);
 
-	if (set_rx_uw_data(p_nthw_dbs, index,
+	if (nthw_set_rx_uw_data(p_nthw_dbs, index,
 			(uint64_t)used_struct_phys_addr,
 			host_id, qs, 0, int_enable, vec, istk) != 0) {
 		return NULL;
@@ -413,7 +413,7 @@ static struct nthw_virt_queue *nthw_setup_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	 *    at a later time (after we have enabled vfio interrupts in the kernel).
 	 */
 	if (irq_vector < 0) {
-		if (set_rx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr,
+		if (nthw_set_rx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr,
 				RX_AM_DISABLE, host_id, 0,
 				0) != 0) {
 			return NULL;
@@ -430,7 +430,8 @@ static struct nthw_virt_queue *nthw_setup_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	 * 2. Configure the DBS.RX_AM_DATA memory and enable the queues you plan to use;
 	 *  good idea to initialize all DBS_RX_QUEUES entries.
 	 */
-	if (set_rx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr, RX_AM_ENABLE,
+	uint32_t enable = rx_deferred_start ? RX_AM_DISABLE : RX_AM_ENABLE;
+	if (nthw_set_rx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr, enable,
 			host_id, 0, irq_vector >= 0 ? 1 : 0) != 0) {
 		return NULL;
 	}
@@ -464,10 +465,10 @@ static int dbs_wait_on_busy(struct nthw_virt_queue *vq, uint32_t *idle, int rx)
 
 	do {
 		if (rx)
-			err = get_rx_idle(p_nthw_dbs, idle, &queue, &busy);
+			err = nthw_get_rx_idle(p_nthw_dbs, idle, &queue, &busy);
 
 		else
-			err = get_tx_idle(p_nthw_dbs, idle, &queue, &busy);
+			err = nthw_get_tx_idle(p_nthw_dbs, idle, &queue, &busy);
 	} while (!err && busy);
 
 	return err;
@@ -483,7 +484,7 @@ static int dbs_wait_hw_queue_shutdown(struct nthw_virt_queue *vq, int rx)
 
 	if (err) {
 		if (err == -ENOTSUP) {
-			nt_os_wait_usec(200000);
+			nthw_os_wait_usec(200000);
 			return 0;
 		}
 
@@ -492,10 +493,10 @@ static int dbs_wait_hw_queue_shutdown(struct nthw_virt_queue *vq, int rx)
 
 	do {
 		if (rx)
-			err = set_rx_idle(p_nthw_dbs, 1, vq->index);
+			err = nthw_set_rx_idle(p_nthw_dbs, 1, vq->index);
 
 		else
-			err = set_tx_idle(p_nthw_dbs, 1, vq->index);
+			err = nthw_set_tx_idle(p_nthw_dbs, 1, vq->index);
 
 		if (err)
 			return -1;
@@ -518,7 +519,7 @@ static int dbs_internal_release_rx_virt_queue(struct nthw_virt_queue *rxvq)
 	/* Clear UW */
 	rxvq->used_struct_phys_addr = NULL;
 
-	if (set_rx_uw_data(p_nthw_dbs, rxvq->index, (uint64_t)rxvq->used_struct_phys_addr,
+	if (nthw_set_rx_uw_data(p_nthw_dbs, rxvq->index, (uint64_t)rxvq->used_struct_phys_addr,
 			rxvq->host_id, 0, PACKED(rxvq->vq_type), 0, 0, 0) != 0) {
 		return -1;
 	}
@@ -526,7 +527,7 @@ static int dbs_internal_release_rx_virt_queue(struct nthw_virt_queue *rxvq)
 	/* Disable AM */
 	rxvq->am_enable = RX_AM_DISABLE;
 
-	if (set_rx_am_data(p_nthw_dbs,
+	if (nthw_set_rx_am_data(p_nthw_dbs,
 			rxvq->index,
 			(uint64_t)rxvq->avail_struct_phys_addr,
 			rxvq->am_enable,
@@ -544,7 +545,7 @@ static int dbs_internal_release_rx_virt_queue(struct nthw_virt_queue *rxvq)
 	rxvq->avail_struct_phys_addr = NULL;
 	rxvq->host_id = 0;
 
-	if (set_rx_am_data(p_nthw_dbs,
+	if (nthw_set_rx_am_data(p_nthw_dbs,
 			rxvq->index,
 			(uint64_t)rxvq->avail_struct_phys_addr,
 			rxvq->am_enable,
@@ -556,7 +557,7 @@ static int dbs_internal_release_rx_virt_queue(struct nthw_virt_queue *rxvq)
 	/* Clear DR */
 	rxvq->desc_struct_phys_addr = NULL;
 
-	if (set_rx_dr_data(p_nthw_dbs,
+	if (nthw_set_rx_dr_data(p_nthw_dbs,
 			rxvq->index,
 			(uint64_t)rxvq->desc_struct_phys_addr,
 			rxvq->host_id,
@@ -592,15 +593,15 @@ static int nthw_release_mngd_rx_virt_queue(struct nthw_virt_queue *rxvq)
 
 static int dbs_internal_release_tx_virt_queue(struct nthw_virt_queue *txvq)
 {
-	nthw_dbs_t *p_nthw_dbs = txvq->mp_nthw_dbs;
-
 	if (txvq == NULL)
 		return -1;
+
+	nthw_dbs_t *p_nthw_dbs = txvq->mp_nthw_dbs;
 
 	/* Clear UW */
 	txvq->used_struct_phys_addr = NULL;
 
-	if (set_tx_uw_data(p_nthw_dbs, txvq->index, (uint64_t)txvq->used_struct_phys_addr,
+	if (nthw_set_tx_uw_data(p_nthw_dbs, txvq->index, (uint64_t)txvq->used_struct_phys_addr,
 			txvq->host_id, 0, PACKED(txvq->vq_type), 0, 0, 0,
 			txvq->in_order) != 0) {
 		return -1;
@@ -609,7 +610,7 @@ static int dbs_internal_release_tx_virt_queue(struct nthw_virt_queue *txvq)
 	/* Disable AM */
 	txvq->am_enable = TX_AM_DISABLE;
 
-	if (set_tx_am_data(p_nthw_dbs,
+	if (nthw_set_tx_am_data(p_nthw_dbs,
 			txvq->index,
 			(uint64_t)txvq->avail_struct_phys_addr,
 			txvq->am_enable,
@@ -627,7 +628,7 @@ static int dbs_internal_release_tx_virt_queue(struct nthw_virt_queue *txvq)
 	txvq->avail_struct_phys_addr = NULL;
 	txvq->host_id = 0;
 
-	if (set_tx_am_data(p_nthw_dbs,
+	if (nthw_set_tx_am_data(p_nthw_dbs,
 			txvq->index,
 			(uint64_t)txvq->avail_struct_phys_addr,
 			txvq->am_enable,
@@ -642,7 +643,7 @@ static int dbs_internal_release_tx_virt_queue(struct nthw_virt_queue *txvq)
 	txvq->port = 0;
 	txvq->header = 0;
 
-	if (set_tx_dr_data(p_nthw_dbs,
+	if (nthw_set_tx_dr_data(p_nthw_dbs,
 			txvq->index,
 			(uint64_t)txvq->desc_struct_phys_addr,
 			txvq->host_id,
@@ -698,7 +699,8 @@ static struct nthw_virt_queue *nthw_setup_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	uint32_t header,
 	uint32_t vq_type,
 	int irq_vector,
-	uint32_t in_order)
+	uint32_t in_order,
+	uint8_t tx_deferred_start)
 {
 	uint32_t int_enable;
 	uint32_t vec;
@@ -710,8 +712,8 @@ static struct nthw_virt_queue *nthw_setup_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	 * 3. Configure the DBS.TX_DR_DATA memory; good idea to initialize all
 	 *    DBS_TX_QUEUES entries.
 	 */
-	if (set_tx_dr_data(p_nthw_dbs, index, (uint64_t)desc_struct_phys_addr, host_id, qs, port,
-			header, 0) != 0) {
+	if (nthw_set_tx_dr_data(p_nthw_dbs, index, (uint64_t)desc_struct_phys_addr,
+			host_id, qs, port, header, 0) != 0) {
 		return NULL;
 	}
 
@@ -727,7 +729,7 @@ static struct nthw_virt_queue *nthw_setup_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	vec = 0;
 	istk = 0;
 
-	if (set_tx_uw_data(p_nthw_dbs, index,
+	if (nthw_set_tx_uw_data(p_nthw_dbs, index,
 			(uint64_t)used_struct_phys_addr,
 			host_id, qs, 0, int_enable, vec, istk, in_order) != 0) {
 		return NULL;
@@ -737,7 +739,7 @@ static struct nthw_virt_queue *nthw_setup_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	 * 2. Configure the DBS.TX_AM_DATA memory and enable the queues you plan to use;
 	 *    good idea to initialize all DBS_TX_QUEUES entries.
 	 */
-	if (set_tx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr, TX_AM_DISABLE,
+	if (nthw_set_tx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr, TX_AM_DISABLE,
 			host_id, 0, irq_vector >= 0 ? 1 : 0) != 0) {
 		return NULL;
 	}
@@ -760,9 +762,9 @@ static struct nthw_virt_queue *nthw_setup_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	 *            kernel).
 	 */
 	if (irq_vector < 0) {
-		if (set_tx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr,
-				TX_AM_ENABLE, host_id, 0,
-				irq_vector >= 0 ? 1 : 0) != 0) {
+		uint32_t enable = tx_deferred_start ? TX_AM_DISABLE : TX_AM_ENABLE;
+		if (nthw_set_tx_am_data(p_nthw_dbs, index, (uint64_t)avail_struct_phys_addr,
+				enable, host_id, 0, 0) != 0) {
 			return NULL;
 		}
 	}
@@ -795,7 +797,8 @@ nthw_setup_mngd_rx_virt_queue_split(nthw_dbs_t *p_nthw_dbs,
 	uint32_t header,
 	struct nthw_memory_descriptor *p_virt_struct_area,
 	struct nthw_memory_descriptor *p_packet_buffers,
-	int irq_vector)
+	int irq_vector,
+	uint8_t rx_deferred_start)
 {
 	struct virtq_struct_layout_s virtq_struct_layout = dbs_calc_struct_layout(queue_size);
 
@@ -822,8 +825,9 @@ nthw_setup_mngd_rx_virt_queue_split(nthw_dbs_t *p_nthw_dbs,
 
 	if (p_packet_buffers) {
 		rxvq[index].p_virtual_addr = malloc(queue_size * sizeof(*p_packet_buffers));
-		memcpy(rxvq[index].p_virtual_addr, p_packet_buffers,
-			queue_size * sizeof(*p_packet_buffers));
+		if (rxvq[index].p_virtual_addr)
+			memcpy(rxvq[index].p_virtual_addr, p_packet_buffers,
+				queue_size * sizeof(*p_packet_buffers));
 	}
 
 	nthw_setup_rx_virt_queue(p_nthw_dbs, index, 0, 0, (void *)p_virt_struct_area->phys_addr,
@@ -831,7 +835,7 @@ nthw_setup_mngd_rx_virt_queue_split(nthw_dbs_t *p_nthw_dbs,
 		virtq_struct_layout.used_offset,
 		(char *)p_virt_struct_area->phys_addr +
 		virtq_struct_layout.desc_offset,
-		(uint16_t)queue_size, host_id, header, SPLIT_RING, irq_vector);
+		(uint16_t)queue_size, host_id, header, SPLIT_RING, irq_vector, rx_deferred_start);
 
 	rxvq[index].usage = NTHW_VIRTQ_MANAGED;
 
@@ -849,7 +853,8 @@ nthw_setup_mngd_tx_virt_queue_split(nthw_dbs_t *p_nthw_dbs,
 	int irq_vector,
 	uint32_t in_order,
 	struct nthw_memory_descriptor *p_virt_struct_area,
-	struct nthw_memory_descriptor *p_packet_buffers)
+	struct nthw_memory_descriptor *p_packet_buffers,
+	uint8_t tx_deferred_start)
 {
 	struct virtq_struct_layout_s virtq_struct_layout = dbs_calc_struct_layout(queue_size);
 
@@ -878,8 +883,9 @@ nthw_setup_mngd_tx_virt_queue_split(nthw_dbs_t *p_nthw_dbs,
 
 	if (p_packet_buffers) {
 		txvq[index].p_virtual_addr = malloc(queue_size * sizeof(*p_packet_buffers));
-		memcpy(txvq[index].p_virtual_addr, p_packet_buffers,
-			queue_size * sizeof(*p_packet_buffers));
+		if (txvq[index].p_virtual_addr)
+			memcpy(txvq[index].p_virtual_addr, p_packet_buffers,
+				queue_size * sizeof(*p_packet_buffers));
 	}
 
 	nthw_setup_tx_virt_queue(p_nthw_dbs, index, 0, 0, (void *)p_virt_struct_area->phys_addr,
@@ -888,7 +894,7 @@ nthw_setup_mngd_tx_virt_queue_split(nthw_dbs_t *p_nthw_dbs,
 		(char *)p_virt_struct_area->phys_addr +
 		virtq_struct_layout.desc_offset,
 		(uint16_t)queue_size, host_id, port, virtual_port, header,
-		SPLIT_RING, irq_vector, in_order);
+		SPLIT_RING, irq_vector, in_order, tx_deferred_start);
 
 	txvq[index].usage = NTHW_VIRTQ_MANAGED;
 
@@ -906,10 +912,13 @@ static int nthw_setup_managed_virt_queue_packed(struct nthw_virt_queue *vq,
 	int rx)
 {
 	/* page aligned */
-	assert(((uintptr_t)p_virt_struct_area->phys_addr & 0xfff) == 0);
-	assert(p_packet_buffers);
+	RTE_ASSERT(((uintptr_t)p_virt_struct_area->phys_addr & 0xfff) == 0);
+	RTE_ASSERT(p_packet_buffers);
 
 	/* clean canvas */
+	if (p_virt_struct_area->virt_addr == NULL)
+		return -1;
+
 	memset(p_virt_struct_area->virt_addr, 0,
 		sizeof(struct pvirtq_desc) * vq->queue_size +
 		sizeof(struct pvirtq_event_suppress) * 2 + sizeof(int) * vq->queue_size);
@@ -973,7 +982,8 @@ nthw_setup_managed_rx_virt_queue_packed(nthw_dbs_t *p_nthw_dbs,
 	uint32_t header,
 	struct nthw_memory_descriptor *p_virt_struct_area,
 	struct nthw_memory_descriptor *p_packet_buffers,
-	int irq_vector)
+	int irq_vector,
+	uint8_t rx_deferred_start)
 {
 	struct pvirtq_struct_layout_s pvirtq_layout;
 	struct nthw_virt_queue *vq = &rxvq[index];
@@ -992,7 +1002,7 @@ nthw_setup_managed_rx_virt_queue_packed(nthw_dbs_t *p_nthw_dbs,
 		(void *)((uintptr_t)p_virt_struct_area->phys_addr +
 			pvirtq_layout.device_event_offset),
 		p_virt_struct_area->phys_addr, (uint16_t)queue_size, host_id,
-		header, PACKED_RING, irq_vector);
+		header, PACKED_RING, irq_vector, rx_deferred_start);
 
 	vq->usage = NTHW_VIRTQ_MANAGED;
 	return vq;
@@ -1009,7 +1019,8 @@ nthw_setup_managed_tx_virt_queue_packed(nthw_dbs_t *p_nthw_dbs,
 	int irq_vector,
 	uint32_t in_order,
 	struct nthw_memory_descriptor *p_virt_struct_area,
-	struct nthw_memory_descriptor *p_packet_buffers)
+	struct nthw_memory_descriptor *p_packet_buffers,
+	uint8_t tx_deferred_start)
 {
 	struct pvirtq_struct_layout_s pvirtq_layout;
 	struct nthw_virt_queue *vq = &txvq[index];
@@ -1026,7 +1037,7 @@ nthw_setup_managed_tx_virt_queue_packed(nthw_dbs_t *p_nthw_dbs,
 		(void *)((uintptr_t)p_virt_struct_area->phys_addr +
 			pvirtq_layout.device_event_offset),
 		p_virt_struct_area->phys_addr, (uint16_t)queue_size, host_id,
-		port, virtual_port, header, PACKED_RING, irq_vector, in_order);
+		port, virtual_port, header, PACKED_RING, irq_vector, in_order, tx_deferred_start);
 
 	vq->usage = NTHW_VIRTQ_MANAGED;
 	return vq;
@@ -1048,18 +1059,19 @@ nthw_setup_mngd_rx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	struct nthw_memory_descriptor *p_virt_struct_area,
 	struct nthw_memory_descriptor *p_packet_buffers,
 	uint32_t vq_type,
-	int irq_vector)
+	int irq_vector,
+	uint8_t rx_deferred_start)
 {
 	switch (vq_type) {
 	case SPLIT_RING:
 		return nthw_setup_mngd_rx_virt_queue_split(p_nthw_dbs, index, queue_size,
 				host_id, header, p_virt_struct_area,
-				p_packet_buffers, irq_vector);
+				p_packet_buffers, irq_vector, rx_deferred_start);
 
 	case PACKED_RING:
 		return nthw_setup_managed_rx_virt_queue_packed(p_nthw_dbs, index, queue_size,
 				host_id, header, p_virt_struct_area,
-				p_packet_buffers, irq_vector);
+				p_packet_buffers, irq_vector, rx_deferred_start);
 
 	default:
 		break;
@@ -1087,7 +1099,8 @@ nthw_setup_mngd_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 	struct nthw_memory_descriptor *p_packet_buffers,
 	uint32_t vq_type,
 	int irq_vector,
-	uint32_t in_order)
+	uint32_t in_order,
+	uint8_t tx_deferred_start)
 {
 	switch (vq_type) {
 	case SPLIT_RING:
@@ -1095,20 +1108,30 @@ nthw_setup_mngd_tx_virt_queue(nthw_dbs_t *p_nthw_dbs,
 				host_id, port, virtual_port, header,
 				irq_vector, in_order,
 				p_virt_struct_area,
-				p_packet_buffers);
+				p_packet_buffers, tx_deferred_start);
 
 	case PACKED_RING:
 		return nthw_setup_managed_tx_virt_queue_packed(p_nthw_dbs, index, queue_size,
 				host_id, port, virtual_port, header,
 				irq_vector, in_order,
 				p_virt_struct_area,
-				p_packet_buffers);
+				p_packet_buffers, tx_deferred_start);
 
 	default:
 		break;
 	}
 
 	return NULL;
+}
+
+static int nthw_switch_rx_virt_queue(nthw_dbs_t *p_nthw_dbs, uint32_t index, uint32_t enable)
+{
+	return nthw_set_rx_am_data_enable(p_nthw_dbs, index, enable);
+}
+
+static int nthw_switch_tx_virt_queue(nthw_dbs_t *p_nthw_dbs, uint32_t index, uint32_t enable)
+{
+	return nthw_set_tx_am_data_enable(p_nthw_dbs, index, enable);
 }
 
 static uint16_t nthw_get_rx_packets(struct nthw_virt_queue *rxvq,
@@ -1415,6 +1438,8 @@ static struct sg_ops_s sg_ops = {
 	.nthw_release_mngd_rx_virt_queue = nthw_release_mngd_rx_virt_queue,
 	.nthw_setup_mngd_tx_virt_queue = nthw_setup_mngd_tx_virt_queue,
 	.nthw_release_mngd_tx_virt_queue = nthw_release_mngd_tx_virt_queue,
+	.nthw_switch_rx_virt_queue = nthw_switch_rx_virt_queue,
+	.nthw_switch_tx_virt_queue = nthw_switch_tx_virt_queue,
 	.nthw_get_rx_packets = nthw_get_rx_packets,
 	.nthw_release_rx_packets = nthw_release_rx_packets,
 	.nthw_get_tx_packets = nthw_get_tx_packets,
@@ -1422,8 +1447,8 @@ static struct sg_ops_s sg_ops = {
 	.nthw_virt_queue_init = nthw_virt_queue_init
 };
 
-void sg_init(void)
+void nthw_sg_init(void)
 {
 	NT_LOG(INF, NTNIC, "SG ops initialized");
-	register_sg_ops(&sg_ops);
+	nthw_reg_sg_ops(&sg_ops);
 }

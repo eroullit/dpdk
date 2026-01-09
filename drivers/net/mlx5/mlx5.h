@@ -74,6 +74,15 @@
 /* Maximal number of field/field parts to map into sample registers .*/
 #define MLX5_FLEX_ITEM_MAPPING_NUM		32
 
+/* Number of bytes not included in MTU. */
+#define MLX5_ETH_OVERHEAD (RTE_ETHER_HDR_LEN + RTE_VLAN_HLEN + RTE_ETHER_CRC_LEN)
+
+/* Minimum allowed MTU to be reported whenever PMD cannot query it from OS. */
+#define MLX5_ETH_MIN_MTU (RTE_ETHER_MIN_MTU)
+
+/* Maximum allowed MTU to be reported whenever PMD cannot query it from OS. */
+#define MLX5_ETH_MAX_MTU (9978)
+
 enum mlx5_ipool_index {
 #if defined(HAVE_IBV_FLOW_DV_SUPPORT) || !defined(HAVE_INFINIBAND_VERBS_H)
 	MLX5_IPOOL_DECAP_ENCAP = 0, /* Pool for encap/decap resource. */
@@ -386,13 +395,13 @@ struct mlx5_sh_config {
 	uint32_t hw_fcs_strip:1; /* FCS stripping is supported. */
 	uint32_t allow_duplicate_pattern:1;
 	uint32_t lro_allowed:1; /* Whether LRO is allowed. */
+	/* Allow/Prevent the duplicate rules pattern. */
+	uint32_t fdb_def_rule:1; /* Create FDB default jump rule */
+	uint32_t txq_mem_algn; /* logarithm value of the TxQ address alignment. */
 	struct {
 		uint16_t service_core;
 		uint32_t cycle_time; /* query cycle time in milli-second. */
 	} cnt_svc; /* configure for HW steering's counter's service. */
-	/* Allow/Prevent the duplicate rules pattern. */
-	uint32_t fdb_def_rule:1; /* Create FDB default jump rule */
-	uint32_t repr_matching:1; /* Enable implicit vport matching in HWS FDB. */
 };
 
 /* Structure for VF VLAN workaround. */
@@ -499,8 +508,6 @@ struct __rte_cache_aligned mlx5_hw_q {
 #define MLX5_MAX_PENDING_QUERIES 4
 #define MLX5_CNT_MR_ALLOC_BULK 64
 #define MLX5_CNT_SHARED_OFFSET 0x80000000
-#define IS_BATCH_CNT(cnt) (((cnt) & (MLX5_CNT_SHARED_OFFSET - 1)) >= \
-			   MLX5_CNT_BATCH_OFFSET)
 #define MLX5_CNT_SIZE (sizeof(struct mlx5_flow_counter))
 #define MLX5_AGE_SIZE (sizeof(struct mlx5_age_param))
 
@@ -1249,12 +1256,16 @@ struct mlx5_flow_tbl_resource {
 #define MLX5_FLOW_TABLE_LEVEL_METER (MLX5_MAX_TABLES - 3)
 #define MLX5_FLOW_TABLE_LEVEL_POLICY (MLX5_MAX_TABLES - 4)
 #define MLX5_MAX_TABLES_EXTERNAL MLX5_FLOW_TABLE_LEVEL_POLICY
-#define MLX5_FLOW_TABLE_HWS_POLICY (MLX5_MAX_TABLES - 10)
 #define MLX5_MAX_TABLES_FDB UINT16_MAX
 #define MLX5_FLOW_TABLE_PTYPE_RSS_NUM 1024
 #define MLX5_FLOW_TABLE_PTYPE_RSS_LAST (MLX5_MAX_TABLES - 11)
 #define MLX5_FLOW_TABLE_PTYPE_RSS_BASE \
 (1 + MLX5_FLOW_TABLE_PTYPE_RSS_LAST - MLX5_FLOW_TABLE_PTYPE_RSS_NUM)
+#define MLX5_FLOW_TABLE_SAMPLE_NUM 1024
+#define MLX5_FLOW_TABLE_SAMPLE_LAST (MLX5_FLOW_TABLE_PTYPE_RSS_BASE - 1)
+#define MLX5_FLOW_TABLE_SAMPLE_BASE \
+(1 + MLX5_FLOW_TABLE_SAMPLE_LAST - MLX5_FLOW_TABLE_SAMPLE_NUM)
+
 #define MLX5_FLOW_TABLE_FACTOR 10
 
 /* ID generation structure. */
@@ -1322,7 +1333,7 @@ struct mlx5_ecpri_parser_profile {
 };
 
 /* Max member ports per bonding device. */
-#define MLX5_BOND_MAX_PORTS 2
+#define MLX5_BOND_MAX_PORTS 4
 
 /* Bonding device information. */
 struct mlx5_bond_info {
@@ -1527,7 +1538,7 @@ struct mlx5_common_nic_config {
  */
 struct mlx5_physical_device {
 	LIST_ENTRY(mlx5_physical_device) next;
-	struct mlx5_dev_ctx_shared *sh; /* Created on sherd context. */
+	void *ctx; /* CTX for creation of options. */
 	uint64_t guid; /* System image guid, the uniq ID of physical device. */
 	struct mlx5_geneve_tlv_options *tlv_options;
 	struct mlx5_common_nic_config config;
@@ -1830,8 +1841,6 @@ struct mlx5_obj_ops {
 	void (*lb_dummy_queue_release)(struct rte_eth_dev *dev);
 };
 
-#define MLX5_RSS_HASH_FIELDS_LEN RTE_DIM(mlx5_rss_hash_fields)
-
 enum mlx5_ctrl_flow_type {
 	MLX5_CTRL_FLOW_TYPE_GENERAL,
 	MLX5_CTRL_FLOW_TYPE_SQ_MISS_ROOT,
@@ -1962,6 +1971,7 @@ struct mlx5_quota_ctx {
 	struct mlx5_indexed_pool *quota_ipool; /* Manage quota objects */
 };
 
+struct mlx5_nta_sample_ctx;
 struct mlx5_priv {
 	struct rte_eth_dev_data *dev_data;  /* Pointer to device data. */
 	struct mlx5_dev_ctx_shared *sh; /* Shared device context. */
@@ -1974,6 +1984,8 @@ struct mlx5_priv {
 	unsigned int vlan_filter_n; /* Number of configured VLAN filters. */
 	/* Device properties. */
 	uint16_t mtu; /* Configured MTU. */
+	uint16_t min_mtu; /* Minimum MTU allowed on the NIC. */
+	uint16_t max_mtu; /* Maximum MTU allowed on the NIC. */
 	unsigned int isolated:1; /* Whether isolated mode is enabled. */
 	unsigned int representor:1; /* Device is a port representor. */
 	unsigned int master:1; /* Device is a E-Switch master. */
@@ -2014,7 +2026,8 @@ struct mlx5_priv {
 	rte_spinlock_t hw_ctrl_lock;
 	LIST_HEAD(hw_ctrl_flow, mlx5_ctrl_flow_entry) hw_ctrl_flows;
 	LIST_HEAD(hw_ext_ctrl_flow, mlx5_ctrl_flow_entry) hw_ext_ctrl_flows;
-	struct mlx5_flow_hw_ctrl_fdb *hw_ctrl_fdb;
+	struct mlx5_flow_hw_ctrl_fdb *hw_ctrl_fdb; /* FDB control flow context */
+	struct mlx5_flow_hw_ctrl_nic *hw_ctrl_nic; /* NIC control flow context */
 	struct rte_flow_pattern_template *hw_tx_repr_tagging_pt;
 	struct rte_flow_actions_template *hw_tx_repr_tagging_at;
 	struct rte_flow_template_table *hw_tx_repr_tagging_tbl;
@@ -2023,6 +2036,7 @@ struct mlx5_priv {
 	uint32_t ctrl_flows; /* Control flow rules. */
 	rte_spinlock_t flow_list_lock;
 	struct mlx5_obj_ops obj_ops; /* HW objects operations. */
+	LIST_HEAD(rxq, mlx5_rxq_ctrl) rxqsctrl; /* DPDK Rx queues. */
 	LIST_HEAD(rxqobj, mlx5_rxq_obj) rxqsobj; /* Verbs/DevX Rx queues. */
 	struct mlx5_list *hrxqs; /* Hash Rx queues. */
 	LIST_HEAD(txq, mlx5_txq_ctrl) txqsctrl; /* DPDK Tx queues. */
@@ -2127,8 +2141,17 @@ struct mlx5_priv {
 	 */
 	struct mlx5dr_action *action_nat64[MLX5DR_TABLE_TYPE_MAX][2];
 	struct mlx5_indexed_pool *ptype_rss_groups;
+	struct mlx5_nta_sample_ctx *nta_sample_ctx;
 #endif
 	struct rte_eth_dev *shared_host; /* Host device for HW steering. */
+	struct {
+		uint32_t sq_total_size;
+		uint32_t cq_total_size;
+		void *umem;
+		void *umem_obj;
+		uint32_t sq_cur_off;
+		uint32_t cq_cur_off;
+	} consec_tx_mem;
 	RTE_ATOMIC(uint16_t) shared_refcnt; /* HW steering host reference counter. */
 };
 
@@ -2302,6 +2325,7 @@ int mlx5_representor_info_get(struct rte_eth_dev *dev,
 		(((repr_id) >> 12) & 3)
 uint16_t mlx5_representor_id_encode(const struct mlx5_switch_info *info,
 				    enum rte_eth_representor_type hpf_type);
+uint16_t mlx5_dev_get_max_wq_size(struct mlx5_dev_ctx_shared *sh);
 int mlx5_dev_infos_get(struct rte_eth_dev *dev, struct rte_eth_dev_info *info);
 int mlx5_fw_version_get(struct rte_eth_dev *dev, char *fw_ver, size_t fw_size);
 const uint32_t *mlx5_dev_supported_ptypes_get(struct rte_eth_dev *dev,
@@ -2315,11 +2339,11 @@ struct mlx5_priv *mlx5_dev_to_eswitch_info(struct rte_eth_dev *dev);
 int mlx5_dev_configure_rss_reta(struct rte_eth_dev *dev);
 uint64_t mlx5_get_restore_flags(struct rte_eth_dev *dev,
 				enum rte_eth_dev_operation op);
+void mlx5_get_mtu_bounds(struct rte_eth_dev *dev, uint16_t *min_mtu, uint16_t *max_mtu);
 
 /* mlx5_ethdev_os.c */
 
-int mlx5_get_ifname(const struct rte_eth_dev *dev,
-			char (*ifname)[MLX5_NAMESIZE]);
+int mlx5_get_ifname(const struct rte_eth_dev *dev, char ifname[MLX5_NAMESIZE]);
 unsigned int mlx5_ifindex(const struct rte_eth_dev *dev);
 int mlx5_get_mac(struct rte_eth_dev *dev, uint8_t (*mac)[RTE_ETHER_ADDR_LEN]);
 int mlx5_get_mtu(struct rte_eth_dev *dev, uint16_t *mtu);
@@ -2354,6 +2378,7 @@ int mlx5_os_get_stats_n(struct rte_eth_dev *dev, bool bond_master,
 			uint16_t *n_stats, uint16_t *n_stats_sec);
 void mlx5_os_stats_init(struct rte_eth_dev *dev);
 int mlx5_get_flag_dropless_rq(struct rte_eth_dev *dev);
+int mlx5_os_get_mtu_bounds(struct rte_eth_dev *dev, uint16_t *min_mtu, uint16_t *max_mtu);
 
 /* mlx5_mac.c */
 
@@ -2388,7 +2413,8 @@ int mlx5_allmulticast_disable(struct rte_eth_dev *dev);
 
 /* mlx5_stats.c */
 
-int mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats);
+int mlx5_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats,
+		   struct eth_queue_stats *qstats);
 int mlx5_stats_reset(struct rte_eth_dev *dev);
 int mlx5_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *stats,
 		    unsigned int n);
@@ -2704,6 +2730,7 @@ int mlx5_flex_acquire_index(struct rte_eth_dev *dev,
 			    struct rte_flow_item_flex_handle *handle,
 			    bool acquire);
 int mlx5_flex_release_index(struct rte_eth_dev *dev, int index);
+void mlx5_flex_parser_ecpri_release(struct rte_eth_dev *dev);
 
 /* Flex parser list callbacks. */
 struct mlx5_list_entry *mlx5_flex_parser_create_cb(void *list_ctx, void *ctx);

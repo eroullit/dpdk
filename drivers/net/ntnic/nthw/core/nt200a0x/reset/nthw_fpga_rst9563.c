@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -21,7 +20,7 @@ static int nthw_fpga_rst9563_setup(nthw_fpga_t *p_fpga, struct nthw_fpga_rst_nt2
 	nthw_module_t *p_mod_rst;
 	nthw_register_t *p_curr_reg;
 
-	assert(p);
+	RTE_ASSERT(p);
 	p->mn_fpga_product_id = n_fpga_product_id;
 	p->mn_fpga_version = n_fpga_version;
 	p->mn_fpga_revision = n_fpga_revision;
@@ -58,7 +57,6 @@ static int nthw_fpga_rst9563_setup(nthw_fpga_t *p_fpga, struct nthw_fpga_rst_nt2
 	p->mp_fld_rst_pcs_rx = NULL;	/* Field not present on 9563 */
 	p->mp_fld_rst_mac_rx = nthw_register_get_field(p_curr_reg, RST9563_RST_MAC_RX);
 	p->mp_fld_rst_mac_tx = NULL;
-	p->mp_fld_rst_ptp = nthw_register_get_field(p_curr_reg, RST9563_RST_PTP);
 	p->mp_fld_rst_ptp = nthw_register_get_field(p_curr_reg, RST9563_RST_PTP);
 	p->mp_fld_rst_ts = nthw_register_get_field(p_curr_reg, RST9563_RST_TS);
 	p->mp_fld_rst_ptp_mmcm = nthw_register_get_field(p_curr_reg, RST9563_RST_PTP_MMCM);
@@ -104,11 +102,6 @@ static int nthw_fpga_rst9563_setup(nthw_fpga_t *p_fpga, struct nthw_fpga_rst_nt2
 		nthw_register_get_field(p_curr_reg, RST9563_STAT_TS_MMCM_LOCKED);
 	p->mp_fld_stat_tsm_ref_mmcm_locked = NULL;	/* Field not present on 9563 */
 
-	if (!p->mp_fld_stat_tsm_ref_mmcm_locked) {
-		NT_LOG(DBG, NTHW, "%s: No RST9563_STAT_TSM_REF_MMCM_LOCKED found",
-			p_adapter_id_str);
-	}
-
 	nthw_register_update(p_curr_reg);
 
 	/* STICKY register field pointers */
@@ -125,11 +118,6 @@ static int nthw_fpga_rst9563_setup(nthw_fpga_t *p_fpga, struct nthw_fpga_rst_nt2
 		nthw_register_get_field(p_curr_reg, RST9563_STICKY_CORE_MMCM_UNLOCKED);
 	p->mp_fld_sticky_pci_sys_mmcm_unlocked = NULL;	/* Field not present on 9563 */
 	p->mp_fld_sticky_tsm_ref_mmcm_unlocked = NULL;	/* Field not present on 9563 */
-
-	if (!p->mp_fld_sticky_tsm_ref_mmcm_unlocked) {
-		NT_LOG(DBG, NTHW, "%s: No RST9563_STICKY_TSM_REF_MMCM_UNLOCKED found",
-			p_adapter_id_str);
-	}
 
 	nthw_register_update(p_curr_reg);
 
@@ -171,7 +159,7 @@ static int nthw_fpga_rst9563_clock_synth_init(nthw_fpga_t *p_fpga,
 	const char *const p_adapter_id_str = p_fpga->p_fpga_info->mp_adapter_id_str;
 	const int n_fpga_product_id = p_fpga->mn_product_id;
 	int res;
-	const struct clk9563_ops *clk9563_ops = get_clk9563_ops();
+	const struct clk9563_ops *clk9563_ops = nthw_get_clk9563_ops();
 
 	if (clk9563_ops == NULL) {
 		NT_LOG(INF, NTNIC, "CLK9563 module not included");
@@ -195,8 +183,8 @@ static int nthw_fpga_rst9563_clock_synth_init(nthw_fpga_t *p_fpga,
 static int nthw_fpga_rst9563_init(struct fpga_info_s *p_fpga_info,
 	struct nthw_fpga_rst_nt200a0x *p_rst)
 {
-	assert(p_fpga_info);
-	assert(p_rst);
+	RTE_ASSERT(p_fpga_info);
+	RTE_ASSERT(p_rst);
 
 	const char *const p_adapter_id_str = p_fpga_info->mp_adapter_id_str;
 	(void)p_adapter_id_str;
@@ -231,7 +219,7 @@ static int nthw_fpga_rst9563_init(struct fpga_info_s *p_fpga_info,
 		return res;
 	}
 
-	const struct rst_nt200a0x_ops *rst_ops = get_rst_nt200a0x_ops();
+	const struct rst_nt200a0x_ops *rst_ops = nthw_get_rst_nt200a0x_ops();
 	res = rst_ops != NULL ? rst_ops->nthw_fpga_rst_nt200a0x_reset(p_fpga, p_rst) : -1;
 
 	if (res) {
@@ -244,8 +232,8 @@ static int nthw_fpga_rst9563_init(struct fpga_info_s *p_fpga_info,
 
 static struct rst9563_ops rst9563_ops = { .nthw_fpga_rst9563_init = nthw_fpga_rst9563_init };
 
-void rst9563_ops_init(void)
+void nthw_rst9563_ops_init(void)
 {
 	NT_LOG(DBG, NTHW, "RST9563 OPS INIT");
-	register_rst9563_ops(&rst9563_ops);
+	nthw_reg_rst9563_ops(&rst9563_ops);
 }

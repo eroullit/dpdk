@@ -81,6 +81,7 @@ static const uint32_t action_order_arr[MLX5DR_TABLE_TYPE_MAX][MLX5DR_ACTION_TYP_
 		BIT(MLX5DR_ACTION_TYP_POP_VLAN),
 		BIT(MLX5DR_ACTION_TYP_POP_VLAN),
 		BIT(MLX5DR_ACTION_TYP_CTR),
+		BIT(MLX5DR_ACTION_TYP_TAG),
 		BIT(MLX5DR_ACTION_TYP_ASO_METER),
 		BIT(MLX5DR_ACTION_TYP_ASO_CT),
 		BIT(MLX5DR_ACTION_TYP_PUSH_VLAN),
@@ -93,6 +94,7 @@ static const uint32_t action_order_arr[MLX5DR_TABLE_TYPE_MAX][MLX5DR_ACTION_TYP_
 		BIT(MLX5DR_ACTION_TYP_REFORMAT_L2_TO_TNL_L3),
 		BIT(MLX5DR_ACTION_TYP_TBL) |
 		BIT(MLX5DR_ACTION_TYP_MISS) |
+		BIT(MLX5DR_ACTION_TYP_TIR) |
 		BIT(MLX5DR_ACTION_TYP_VPORT) |
 		BIT(MLX5DR_ACTION_TYP_DROP) |
 		BIT(MLX5DR_ACTION_TYP_DEST_ROOT) |
@@ -830,16 +832,11 @@ int mlx5dr_action_root_build_attr(struct mlx5dr_rule_action rule_actions[],
 			attr[i].type = MLX5DV_FLOW_ACTION_IBV_FLOW_ACTION;
 			attr[i].action = action->flow_action;
 			break;
-#ifdef HAVE_IBV_FLOW_DEVX_COUNTERS
+#ifdef HAVE_MLX5DV_FLOW_ACTION_COUNTERS_DEVX_WITH_OFFSET
 		case MLX5DR_ACTION_TYP_CTR:
-			attr[i].type = MLX5DV_FLOW_ACTION_COUNTERS_DEVX;
-			attr[i].obj = action->devx_obj;
-
-			if (rule_actions[i].counter.offset) {
-				DR_LOG(ERR, "Counter offset not supported over root");
-				rte_errno = ENOTSUP;
-				return rte_errno;
-			}
+			attr[i].type = MLX5DV_FLOW_ACTION_COUNTERS_DEVX_WITH_OFFSET;
+			attr[i].bulk_obj.obj = action->devx_obj;
+			attr[i].bulk_obj.offset = rule_actions[i].counter.offset;
 			break;
 #endif
 		default:
@@ -875,6 +872,15 @@ mlx5dr_action_fixup_stc_attr(struct mlx5dr_context *ctx,
 		*fixup_stc_attr = *stc_attr;
 		fixup_stc_attr->ste_table.ste_obj_id = devx_obj->id;
 		use_fixup = true;
+		break;
+
+	case MLX5_IFC_STC_ACTION_TYPE_TAG:
+		if (fw_tbl_type == FS_FT_FDB_TX) {
+			fixup_stc_attr->action_type = MLX5_IFC_STC_ACTION_TYPE_NOP;
+			fixup_stc_attr->action_offset = MLX5DR_ACTION_OFFSET_DW5;
+			fixup_stc_attr->stc_offset = stc_attr->stc_offset;
+			use_fixup = true;
+		}
 		break;
 
 	case MLX5_IFC_STC_ACTION_TYPE_ALLOW:
@@ -1701,6 +1707,13 @@ mlx5dr_action_create_counter(struct mlx5dr_context *ctx,
 		return NULL;
 	}
 
+	if (mlx5dr_action_is_root_flags(flags) &&
+	    !mlx5dr_action_counter_root_is_supported()) {
+		DR_LOG(ERR, "Counter action is not supported on root");
+		rte_errno = ENOTSUP;
+		return NULL;
+	}
+
 	action = mlx5dr_action_create_generic(ctx, flags, MLX5DR_ACTION_TYP_CTR);
 	if (!action)
 		return NULL;
@@ -1879,19 +1892,67 @@ mlx5dr_action_conv_reformat_to_verbs(uint32_t action_type,
 }
 
 static int
-mlx5dr_action_conv_flags_to_ft_type(uint32_t flags, enum mlx5dv_flow_table_type *ft_type)
+mlx5dr_action_conv_root_flags_to_dv_ft(uint32_t flags,
+				       enum mlx5dv_flow_table_type *ft_type)
 {
-	if (flags & (MLX5DR_ACTION_FLAG_ROOT_RX | MLX5DR_ACTION_FLAG_HWS_RX)) {
+	uint8_t is_rx, is_tx, is_fdb;
+
+	is_rx = !!(flags & MLX5DR_ACTION_FLAG_ROOT_RX);
+	is_tx = !!(flags & MLX5DR_ACTION_FLAG_ROOT_TX);
+	is_fdb = !!(flags & MLX5DR_ACTION_FLAG_ROOT_FDB);
+
+	if (is_rx + is_tx + is_fdb != 1) {
+		DR_LOG(ERR, "Root action flags must be converted to a single ft type");
+		rte_errno = ENOTSUP;
+		return -rte_errno;
+	}
+
+	if (is_rx) {
 		*ft_type = MLX5DV_FLOW_TABLE_TYPE_NIC_RX;
-	} else if (flags & (MLX5DR_ACTION_FLAG_ROOT_TX | MLX5DR_ACTION_FLAG_HWS_TX)) {
+	} else if (is_tx) {
 		*ft_type = MLX5DV_FLOW_TABLE_TYPE_NIC_TX;
 #ifdef HAVE_MLX5DV_FLOW_MATCHER_FT_TYPE
-	} else if (flags & (MLX5DR_ACTION_FLAG_ROOT_FDB | MLX5DR_ACTION_FLAG_HWS_FDB)) {
+	} else if (is_fdb) {
 		*ft_type = MLX5DV_FLOW_TABLE_TYPE_FDB;
 #endif
 	} else {
 		rte_errno = ENOTSUP;
-		return 1;
+		return -rte_errno;
+	}
+
+	return 0;
+}
+
+static int
+mlx5dr_action_conv_hws_flags_to_dv_ft(uint32_t flags,
+				     enum mlx5dv_flow_table_type *ft_type)
+{
+	uint8_t is_rx, is_tx, is_fdb;
+
+	is_rx = !!(flags & MLX5DR_ACTION_FLAG_HWS_RX);
+	is_tx = !!(flags & MLX5DR_ACTION_FLAG_HWS_TX);
+	is_fdb = !!(flags & (MLX5DR_ACTION_FLAG_HWS_FDB |
+			     MLX5DR_ACTION_FLAG_HWS_FDB_RX |
+			     MLX5DR_ACTION_FLAG_HWS_FDB_TX |
+			     MLX5DR_ACTION_FLAG_HWS_FDB_UNIFIED));
+
+	if (is_rx + is_tx + is_fdb != 1) {
+		DR_LOG(ERR, "Action flags must be converted to a single ft type");
+		rte_errno = ENOTSUP;
+		return -rte_errno;
+	}
+
+	if (is_rx) {
+		*ft_type = MLX5DV_FLOW_TABLE_TYPE_NIC_RX;
+	} else if (is_tx) {
+		*ft_type = MLX5DV_FLOW_TABLE_TYPE_NIC_TX;
+#ifdef HAVE_MLX5DV_FLOW_MATCHER_FT_TYPE
+	} else if (is_fdb) {
+		*ft_type = MLX5DV_FLOW_TABLE_TYPE_FDB;
+#endif
+	} else {
+		rte_errno = ENOTSUP;
+		return -rte_errno;
 	}
 
 	return 0;
@@ -1908,9 +1969,9 @@ mlx5dr_action_create_reformat_root(struct mlx5dr_action *action,
 	int ret;
 
 	/* Convert action to FT type and verbs reformat type */
-	ret = mlx5dr_action_conv_flags_to_ft_type(action->flags, &ft_type);
+	ret = mlx5dr_action_conv_root_flags_to_dv_ft(action->flags, &ft_type);
 	if (ret)
-		return rte_errno;
+		return ret;
 
 	ret = mlx5dr_action_conv_reformat_to_verbs(action->type, &verb_reformat_type);
 	if (ret)
@@ -2249,9 +2310,9 @@ mlx5dr_action_create_modify_header_root(struct mlx5dr_action *action,
 	struct ibv_context *local_ibv_ctx;
 	int ret;
 
-	ret = mlx5dr_action_conv_flags_to_ft_type(action->flags, &ft_type);
+	ret = mlx5dr_action_conv_root_flags_to_dv_ft(action->flags, &ft_type);
 	if (ret)
-		return rte_errno;
+		return ret;
 
 	local_ibv_ctx = mlx5dr_context_get_local_ibv(action->ctx);
 
@@ -2655,7 +2716,7 @@ mlx5dr_action_create_dest_root(struct mlx5dr_context *ctx,
 		return NULL;
 	}
 
-	if (mlx5dr_action_conv_flags_to_ft_type(flags, &attr.ft_type))
+	if (mlx5dr_action_conv_hws_flags_to_dv_ft(flags, &attr.ft_type))
 		return NULL;
 
 	attr.priority = priority;

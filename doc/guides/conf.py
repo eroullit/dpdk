@@ -65,13 +65,6 @@ if environ.get('DTS_DOC_BUILD'):
         graphviz_output_format = "svg"
         tags.add("graphviz")
 
-    # Pydantic models require autodoc_pydantic for the right formatting. Add if installed.
-    try:
-        import sphinxcontrib.autodoc_pydantic
-        extensions.append("sphinxcontrib.autodoc_pydantic")
-    except ImportError:
-        pass
-
     # Napoleon enables the Google format of Python doscstrings.
     napoleon_numpy_docstring = False
     napoleon_attr_annotations = True
@@ -87,6 +80,7 @@ if environ.get('DTS_DOC_BUILD'):
     autodoc_typehints = 'both'
     autodoc_typehints_format = 'short'
     autodoc_typehints_description_target = 'documented'
+    autodoc_member_order = 'bysource'
 
     # DTS docstring options.
     add_module_names = False
@@ -111,6 +105,9 @@ if environ.get('DTS_DOC_BUILD'):
     # The qualified names of imported objects are fully expanded with dependencies, such as:
     # fabric.Connection (without) vs. fabric.connection.Connection (with)
     autodoc_mock_imports = importlib.import_module('check-dts-requirements').get_missing_imports()
+
+    # Always mock Pydantic to avoid autodoc introspecting its internals.
+    autodoc_mock_imports = list(set(autodoc_mock_imports + ['pydantic', 'pydantic_core']))
 
 
 # ####### :numref: fallback ########
@@ -476,10 +473,20 @@ def setup(app):
                             'Crypto adapter Features',
                             'Features availability for Crypto adapters',
                             'Feature')
-    table_file = dirname(__file__) + '/eventdevs/overview_timer_adptr_feature_table.txt'
+    table_file = dirname(__file__) + '/eventdevs/overview_dma_adptr_feature_table.txt'
     generate_overview_table(table_file, 5,
+                            'DMA adapter Features',
+                            'Features availability for DMA adapters',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_timer_adptr_feature_table.txt'
+    generate_overview_table(table_file, 6,
                             'Timer adapter Features',
                             'Features availability for Timer adapters',
+                            'Feature')
+    table_file = dirname(__file__) + '/eventdevs/overview_vector_adptr_feature_table.txt'
+    generate_overview_table(table_file, 7,
+                            'Vector adapter Features',
+                            'Features availability for Vector adapters',
                             'Feature')
 
     if Version(sphinx_version) < Version('1.3.1'):

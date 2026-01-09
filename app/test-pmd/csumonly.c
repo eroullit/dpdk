@@ -59,6 +59,8 @@
 #define GRE_SUPPORTED_FIELDS	(GRE_CHECKSUM_PRESENT | GRE_KEY_PRESENT |\
 				 GRE_SEQUENCE_PRESENT)
 
+#define MAX_VLAN_HEADERS 8
+
 /* We cannot use rte_cpu_to_be_16() on a constant in a switch/case */
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
 #define _htons(x) ((uint16_t)((((x) & 0x00ffU) << 8) | (((x) & 0xff00U) >> 8)))
@@ -466,7 +468,7 @@ pkts_ip_csum_recalc(struct rte_mbuf **pkts_burst, const uint16_t nb_pkts, uint64
 static uint32_t
 get_ethertype_by_ptype(struct rte_ether_hdr *eth_hdr, uint32_t ptype)
 {
-	struct rte_vlan_hdr *vlan_hdr;
+	struct rte_vlan_hdr *vlan_hdr, *max_vlans;
 	uint16_t ethertype;
 
 	switch (ptype) {
@@ -486,10 +488,12 @@ get_ethertype_by_ptype(struct rte_ether_hdr *eth_hdr, uint32_t ptype)
 		return _htons(RTE_ETHER_TYPE_IPV6);
 	default:
 		ethertype = eth_hdr->ether_type;
-		while (eth_hdr->ether_type == _htons(RTE_ETHER_TYPE_VLAN) ||
-			eth_hdr->ether_type == _htons(RTE_ETHER_TYPE_QINQ)) {
-			vlan_hdr = (struct rte_vlan_hdr *)
-				((char *)eth_hdr + sizeof(*eth_hdr));
+		vlan_hdr = RTE_PTR_ADD(eth_hdr, offsetof(struct rte_ether_hdr, ether_type));
+		max_vlans = vlan_hdr + MAX_VLAN_HEADERS;
+		while ((ethertype == _htons(RTE_ETHER_TYPE_VLAN) ||
+				ethertype == _htons(RTE_ETHER_TYPE_QINQ)) &&
+				vlan_hdr < max_vlans) {
+			vlan_hdr++;
 			ethertype = vlan_hdr->eth_proto;
 		}
 		return ethertype;
@@ -521,24 +525,27 @@ get_tunnel_ol_flags_by_ptype(uint32_t ptype)
 	}
 }
 
-static void
-parse_inner_l4_proto(void *outer_l3_hdr,
-			struct testpmd_offload_info *info)
-{
-	struct rte_ipv4_hdr *ipv4_hdr = outer_l3_hdr;
-	struct rte_ipv6_hdr *ipv6_hdr = outer_l3_hdr;
-	if (info->ethertype == _htons(RTE_ETHER_TYPE_IPV4))
-		info->l4_proto = ipv4_hdr->next_proto_id;
-	else
-		info->l4_proto = ipv6_hdr->proto;
-}
-
 static uint8_t
-parse_l4_proto(const struct rte_mbuf *m, uint32_t off, uint32_t ptype)
+parse_l4_proto(const struct rte_mbuf *m, uint32_t off, uint32_t ptype, bool in_tunnel)
 {
+	uint32_t align_ptype = ptype;
 	int frag = 0, ret;
 
-	if (RTE_ETH_IS_IPV4_HDR(ptype)) {
+	if (in_tunnel) {
+		uint32_t mask_ptype = ptype & RTE_PTYPE_INNER_L3_MASK;
+		if (mask_ptype == RTE_PTYPE_INNER_L3_IPV4)
+			align_ptype = RTE_PTYPE_L3_IPV4;
+		else if (mask_ptype == RTE_PTYPE_INNER_L3_IPV4_EXT)
+			align_ptype = RTE_PTYPE_L3_IPV4_EXT;
+		else if (mask_ptype == RTE_PTYPE_INNER_L3_IPV6)
+			align_ptype = RTE_PTYPE_L3_IPV6;
+		else if (mask_ptype == RTE_PTYPE_INNER_L3_IPV6_EXT)
+			align_ptype = RTE_PTYPE_L3_IPV6_EXT;
+		else
+			align_ptype = 0;
+	}
+
+	if (RTE_ETH_IS_IPV4_HDR(align_ptype)) {
 		const struct rte_ipv4_hdr *ip4h;
 		struct rte_ipv4_hdr ip4h_copy;
 		ip4h = rte_pktmbuf_read(m, off, sizeof(*ip4h), &ip4h_copy);
@@ -546,23 +553,23 @@ parse_l4_proto(const struct rte_mbuf *m, uint32_t off, uint32_t ptype)
 			return 0;
 
 		return ip4h->next_proto_id;
-	} else if (RTE_ETH_IS_IPV6_HDR(ptype)) {
+	} else if (RTE_ETH_IS_IPV6_HDR(align_ptype)) {
 		const struct rte_ipv6_hdr *ip6h;
 		struct rte_ipv6_hdr ip6h_copy;
 		ip6h = rte_pktmbuf_read(m, off, sizeof(*ip6h), &ip6h_copy);
 		if (unlikely(ip6h == NULL))
 			return 0;
 
-		if ((ptype & RTE_PTYPE_INNER_L3_MASK) ==
-				RTE_PTYPE_INNER_L3_IPV6_EXT) {
-			ret = rte_net_skip_ip6_ext(ip6h->proto, m, &off, &frag);
-			if (ret < 0)
-				return 0;
-			return ret;
-		}
+		if ((align_ptype & RTE_PTYPE_L3_MASK) != RTE_PTYPE_L3_IPV6_EXT)
+			return ip6h->proto;
 
-		return ip6h->proto;
+		off += sizeof(struct rte_ipv6_hdr);
+		ret = rte_net_skip_ip6_ext(ip6h->proto, m, &off, &frag);
+		if (ret < 0)
+			return 0;
+		return ret;
 	}
+
 	return 0;
 }
 
@@ -623,7 +630,6 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 	uint32_t rx_bad_outer_l4_csum;
 	uint32_t rx_bad_outer_ip_csum;
 	struct testpmd_offload_info info;
-	struct rte_net_hdr_lens hdr_lens = {0};
 	uint32_t ptype;
 
 	/* receive a burst of packet */
@@ -662,6 +668,8 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 #endif
 
 	for (i = 0; i < nb_rx; i++) {
+		struct rte_net_hdr_lens hdr_lens = {0};
+
 		if (likely(i < nb_rx - 1))
 			rte_prefetch0(rte_pktmbuf_mtod(pkts_burst[i + 1],
 						       void *));
@@ -700,27 +708,29 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 		info.l4_len = hdr_lens.l4_len;
 		info.ethertype = get_ethertype_by_ptype(eth_hdr,
 					ptype & RTE_PTYPE_L3_MASK);
-		info.l4_proto = parse_l4_proto(m, info.l2_len, ptype);
+		info.l4_proto = parse_l4_proto(m, info.l2_len, ptype, false);
 
 		l3_hdr = (char *)eth_hdr + info.l2_len;
 		/* check if it's a supported tunnel */
 		if (txp->parse_tunnel && RTE_ETH_IS_TUNNEL_PKT(ptype) != 0) {
 			info.is_tunnel = 1;
 			update_tunnel_outer(&info);
-			info.l2_len = hdr_lens.inner_l2_len + hdr_lens.tunnel_len;
+			info.l2_len = hdr_lens.inner_l2_len;
 			info.l3_len = hdr_lens.inner_l3_len;
 			info.l4_len = hdr_lens.inner_l4_len;
-			eth_hdr = (struct rte_ether_hdr *)(char *)l3_hdr +
-					info.outer_l3_len + hdr_lens.tunnel_len;
+			eth_hdr = (struct rte_ether_hdr *)((char *)l3_hdr +
+				hdr_lens.l3_len + hdr_lens.l4_len + hdr_lens.tunnel_len);
 			info.ethertype = get_ethertype_by_ptype(eth_hdr,
 						ptype & RTE_PTYPE_INNER_L3_MASK);
 			tx_ol_flags |= get_tunnel_ol_flags_by_ptype(ptype);
 		}
 		/* update l3_hdr and outer_l3_hdr if a tunnel was parsed */
 		if (info.is_tunnel) {
+			uint16_t l3_off = info.outer_l2_len +  info.outer_l3_len + info.l2_len;
+
 			outer_l3_hdr = l3_hdr;
 			l3_hdr = (char *)l3_hdr + info.outer_l3_len + info.l2_len;
-			parse_inner_l4_proto(l3_hdr, &info);
+			info.l4_proto = parse_l4_proto(m, l3_off, ptype, true);
 		}
 		/* step 2: depending on user command line configuration,
 		 * recompute checksum either in software or flag the
@@ -804,7 +814,7 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 				info.l2_len, rte_be_to_cpu_16(info.ethertype),
 				info.l3_len, info.l4_proto, info.l4_len, buf);
 			if (rx_ol_flags & RTE_MBUF_F_RX_LRO)
-				printf("rx: m->lro_segsz=%u\n", m->tso_segsz);
+				printf("rx: m->lro_segsz=%u\n", (unsigned int)m->tso_segsz);
 			if (info.is_tunnel == 1)
 				printf("rx: outer_l2_len=%d outer_ethertype=%x "
 					"outer_l3_len=%d\n", info.outer_l2_len,
@@ -816,28 +826,29 @@ pkt_burst_checksum_forward(struct fwd_stream *fs)
 					    RTE_ETH_TX_OFFLOAD_TCP_CKSUM |
 					    RTE_ETH_TX_OFFLOAD_SCTP_CKSUM)) ||
 				info.tso_segsz != 0)
-				printf("tx: m->l2_len=%d m->l3_len=%d "
-					"m->l4_len=%d\n",
-					m->l2_len, m->l3_len, m->l4_len);
+				printf("tx: m->l2_len=%u m->l3_len=%u "
+					"m->l4_len=%u\n",
+					(unsigned int)m->l2_len, (unsigned int)m->l3_len,
+					(unsigned int)m->l4_len);
 			if (info.is_tunnel == 1) {
 				if ((tx_offloads &
 				    RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM) ||
 				    (tx_offloads &
 				    RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM) ||
 				    (tx_ol_flags & RTE_MBUF_F_TX_OUTER_IPV6))
-					printf("tx: m->outer_l2_len=%d "
-						"m->outer_l3_len=%d\n",
-						m->outer_l2_len,
-						m->outer_l3_len);
+					printf("tx: m->outer_l2_len=%u "
+						"m->outer_l3_len=%u\n",
+						(unsigned int)m->outer_l2_len,
+						(unsigned int)m->outer_l3_len);
 				if (info.tunnel_tso_segsz != 0 &&
 						(m->ol_flags & (RTE_MBUF_F_TX_TCP_SEG |
 							RTE_MBUF_F_TX_UDP_SEG)))
-					printf("tx: m->tso_segsz=%d\n",
-						m->tso_segsz);
+					printf("tx: m->tso_segsz=%u\n",
+						(unsigned int)m->tso_segsz);
 			} else if (info.tso_segsz != 0 &&
 					(m->ol_flags & (RTE_MBUF_F_TX_TCP_SEG |
 						RTE_MBUF_F_TX_UDP_SEG)))
-				printf("tx: m->tso_segsz=%d\n", m->tso_segsz);
+				printf("tx: m->tso_segsz=%u\n", (unsigned int)m->tso_segsz);
 			rte_get_tx_ol_flag_list(m->ol_flags, buf, sizeof(buf));
 			printf("tx: flags=%s", buf);
 			printf("\n");

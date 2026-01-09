@@ -198,21 +198,21 @@ cn10k_nix_tx_compl_setup(struct cnxk_eth_dev *dev,
 static void
 cn10k_nix_tx_queue_release(struct rte_eth_dev *eth_dev, uint16_t qid)
 {
+	struct cn10k_eth_txq *txq = eth_dev->data->tx_queues[qid];
 	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
 	struct roc_nix *nix = &dev->nix;
-	struct cn10k_eth_txq *txq;
 
-	cnxk_nix_tx_queue_release(eth_dev, qid);
-	txq = eth_dev->data->tx_queues[qid];
-
-	if (nix->tx_compl_ena)
+	if (nix->tx_compl_ena) {
+		/* First process all CQ entries */
+		handle_tx_completion_pkts(txq, 0);
 		plt_free(txq->tx_compl.ptr);
+	}
+	cnxk_nix_tx_queue_release(eth_dev, qid);
 }
 
 static int
-cn10k_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
-			 uint16_t nb_desc, unsigned int socket,
-			 const struct rte_eth_txconf *tx_conf)
+cn10k_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid, uint16_t nb_desc,
+			 unsigned int socket, const struct rte_eth_txconf *tx_conf)
 {
 	struct cnxk_eth_dev *dev = cnxk_eth_pmd_priv(eth_dev);
 	struct roc_nix *nix = &dev->nix;
@@ -256,9 +256,9 @@ cn10k_nix_tx_queue_setup(struct rte_eth_dev *eth_dev, uint16_t qid,
 		inl_lf = dev->outb.lf_base + crypto_qid;
 
 		txq->cpt_io_addr = inl_lf->io_addr;
-		txq->cpt_fc = inl_lf->fc_addr;
-		txq->cpt_fc_sw = (int32_t *)((uintptr_t)dev->outb.fc_sw_mem +
-					     crypto_qid * RTE_CACHE_LINE_SIZE);
+		txq->cpt_fc = (uint64_t __rte_atomic *)inl_lf->fc_addr;
+		txq->cpt_fc_sw = (int32_t __rte_atomic *)((uintptr_t)dev->outb.fc_sw_mem +
+							  crypto_qid * RTE_CACHE_LINE_SIZE);
 
 		txq->cpt_desc = inl_lf->nb_desc * 0.7;
 		txq->sa_base = (uint64_t)dev->outb.sa_base;

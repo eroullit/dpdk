@@ -3,6 +3,7 @@
  */
 
 #include <eventdev_pmd.h>
+#include <eal_export.h>
 #include <rte_service_component.h>
 
 #include "rte_event_dma_adapter.h"
@@ -39,8 +40,8 @@ struct __rte_cache_aligned dma_ops_circular_buffer {
 	/* Size of circular buffer */
 	uint16_t size;
 
-	/* Pointer to hold rte_event_dma_adapter_op for processing */
-	struct rte_event_dma_adapter_op **op_buffer;
+	/* Pointer to hold rte_dma_op for processing */
+	struct rte_dma_op **op_buffer;
 };
 
 /* Vchan information */
@@ -201,7 +202,7 @@ edma_circular_buffer_space_for_batch(struct dma_ops_circular_buffer *bufp)
 static inline int
 edma_circular_buffer_init(const char *name, struct dma_ops_circular_buffer *buf, uint16_t sz)
 {
-	buf->op_buffer = rte_zmalloc(name, sizeof(struct rte_event_dma_adapter_op *) * sz, 0);
+	buf->op_buffer = rte_zmalloc(name, sizeof(struct rte_dma_op *) * sz, 0);
 	if (buf->op_buffer == NULL)
 		return -ENOMEM;
 
@@ -217,7 +218,7 @@ edma_circular_buffer_free(struct dma_ops_circular_buffer *buf)
 }
 
 static inline int
-edma_circular_buffer_add(struct dma_ops_circular_buffer *bufp, struct rte_event_dma_adapter_op *op)
+edma_circular_buffer_add(struct dma_ops_circular_buffer *bufp, struct rte_dma_op *op)
 {
 	uint16_t *tail = &bufp->tail;
 
@@ -235,7 +236,7 @@ edma_circular_buffer_flush_to_dma_dev(struct event_dma_adapter *adapter,
 				      struct dma_ops_circular_buffer *bufp, uint8_t dma_dev_id,
 				      uint16_t vchan, uint16_t *nb_ops_flushed)
 {
-	struct rte_event_dma_adapter_op *op;
+	struct rte_dma_op *op;
 	uint16_t *head = &bufp->head;
 	uint16_t *tail = &bufp->tail;
 	struct dma_vchan_info *tq;
@@ -340,6 +341,7 @@ edma_default_config_cb(uint8_t id, uint8_t evdev_id, struct rte_event_dma_adapte
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_create_ext, 23.11)
 int
 rte_event_dma_adapter_create_ext(uint8_t id, uint8_t evdev_id,
 				 rte_event_dma_adapter_conf_cb conf_cb,
@@ -433,6 +435,7 @@ rte_event_dma_adapter_create_ext(uint8_t id, uint8_t evdev_id,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_create, 23.11)
 int
 rte_event_dma_adapter_create(uint8_t id, uint8_t evdev_id, struct rte_event_port_conf *port_config,
 			    enum rte_event_dma_adapter_mode mode)
@@ -449,7 +452,7 @@ rte_event_dma_adapter_create(uint8_t id, uint8_t evdev_id, struct rte_event_port
 	if (pc == NULL)
 		return -ENOMEM;
 
-	rte_memcpy(pc, port_config, sizeof(struct rte_event_port_conf));
+	*pc = *port_config;
 	ret = rte_event_dma_adapter_create_ext(id, evdev_id, edma_default_config_cb, mode, pc);
 	if (ret != 0)
 		rte_free(pc);
@@ -457,6 +460,7 @@ rte_event_dma_adapter_create(uint8_t id, uint8_t evdev_id, struct rte_event_port
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_free, 23.11)
 int
 rte_event_dma_adapter_free(uint8_t id)
 {
@@ -477,6 +481,7 @@ rte_event_dma_adapter_free(uint8_t id)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_event_port_get, 23.11)
 int
 rte_event_dma_adapter_event_port_get(uint8_t id, uint8_t *event_port_id)
 {
@@ -498,7 +503,7 @@ edma_enq_to_dma_dev(struct event_dma_adapter *adapter, struct rte_event *ev, uns
 {
 	struct rte_event_dma_adapter_stats *stats = &adapter->dma_stats;
 	struct dma_vchan_info *vchan_qinfo = NULL;
-	struct rte_event_dma_adapter_op *dma_op;
+	struct rte_dma_op *dma_op;
 	uint16_t vchan, nb_enqueued = 0;
 	int16_t dma_dev_id;
 	unsigned int i, n;
@@ -641,7 +646,7 @@ edma_adapter_enq_run(struct event_dma_adapter *adapter, unsigned int max_enq)
 #define DMA_ADAPTER_MAX_EV_ENQ_RETRIES 100
 
 static inline uint16_t
-edma_ops_enqueue_burst(struct event_dma_adapter *adapter, struct rte_event_dma_adapter_op **ops,
+edma_ops_enqueue_burst(struct event_dma_adapter *adapter, struct rte_dma_op **ops,
 		       uint16_t num)
 {
 	struct rte_event_dma_adapter_stats *stats = &adapter->dma_stats;
@@ -687,7 +692,7 @@ edma_circular_buffer_flush_to_evdev(struct event_dma_adapter *adapter,
 				    struct dma_ops_circular_buffer *bufp,
 				    uint16_t *enqueue_count)
 {
-	struct rte_event_dma_adapter_op **ops = bufp->op_buffer;
+	struct rte_dma_op **ops = bufp->op_buffer;
 	uint16_t n = 0, nb_ops_flushed;
 	uint16_t *head = &bufp->head;
 	uint16_t *tail = &bufp->tail;
@@ -736,7 +741,7 @@ edma_adapter_deq_run(struct event_dma_adapter *adapter, unsigned int max_deq)
 	struct rte_event_dma_adapter_stats *stats = &adapter->dma_stats;
 	struct dma_vchan_info *vchan_info;
 	struct dma_ops_circular_buffer *tq_buf;
-	struct rte_event_dma_adapter_op *ops;
+	struct rte_dma_op *ops;
 	uint16_t n, nb_deq, nb_enqueued, i;
 	struct dma_device_info *dev_info;
 	uint16_t vchan, num_vchan;
@@ -983,6 +988,7 @@ edma_add_vchan(struct event_dma_adapter *adapter, int16_t dma_dev_id, uint16_t v
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_vchan_add, 23.11)
 int
 rte_event_dma_adapter_vchan_add(uint8_t id, int16_t dma_dev_id, uint16_t vchan,
 				const struct rte_event *event)
@@ -1097,6 +1103,7 @@ rte_event_dma_adapter_vchan_add(uint8_t id, int16_t dma_dev_id, uint16_t vchan,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_vchan_del, 23.11)
 int
 rte_event_dma_adapter_vchan_del(uint8_t id, int16_t dma_dev_id, uint16_t vchan)
 {
@@ -1163,6 +1170,7 @@ rte_event_dma_adapter_vchan_del(uint8_t id, int16_t dma_dev_id, uint16_t vchan)
 	return ret;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_service_id_get, 23.11)
 int
 rte_event_dma_adapter_service_id_get(uint8_t id, uint32_t *service_id)
 {
@@ -1222,6 +1230,7 @@ edma_adapter_ctrl(uint8_t id, int start)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_start, 23.11)
 int
 rte_event_dma_adapter_start(uint8_t id)
 {
@@ -1236,6 +1245,7 @@ rte_event_dma_adapter_start(uint8_t id)
 	return edma_adapter_ctrl(id, 1);
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_stop, 23.11)
 int
 rte_event_dma_adapter_stop(uint8_t id)
 {
@@ -1244,6 +1254,7 @@ rte_event_dma_adapter_stop(uint8_t id)
 
 #define DEFAULT_MAX_NB 128
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_runtime_params_init, 23.11)
 int
 rte_event_dma_adapter_runtime_params_init(struct rte_event_dma_adapter_runtime_params *params)
 {
@@ -1279,6 +1290,7 @@ dma_adapter_cap_check(struct event_dma_adapter *adapter)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_runtime_params_set, 23.11)
 int
 rte_event_dma_adapter_runtime_params_set(uint8_t id,
 					 struct rte_event_dma_adapter_runtime_params *params)
@@ -1308,6 +1320,7 @@ rte_event_dma_adapter_runtime_params_set(uint8_t id,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_runtime_params_get, 23.11)
 int
 rte_event_dma_adapter_runtime_params_get(uint8_t id,
 					 struct rte_event_dma_adapter_runtime_params *params)
@@ -1335,6 +1348,7 @@ rte_event_dma_adapter_runtime_params_get(uint8_t id,
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_stats_get, 23.11)
 int
 rte_event_dma_adapter_stats_get(uint8_t id, struct rte_event_dma_adapter_stats *stats)
 {
@@ -1380,6 +1394,7 @@ rte_event_dma_adapter_stats_get(uint8_t id, struct rte_event_dma_adapter_stats *
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_stats_reset, 23.11)
 int
 rte_event_dma_adapter_stats_reset(uint8_t id)
 {
@@ -1412,6 +1427,7 @@ rte_event_dma_adapter_stats_reset(uint8_t id)
 	return 0;
 }
 
+RTE_EXPORT_EXPERIMENTAL_SYMBOL(rte_event_dma_adapter_enqueue, 23.11)
 uint16_t
 rte_event_dma_adapter_enqueue(uint8_t dev_id, uint8_t port_id, struct rte_event ev[],
 			      uint16_t nb_events)

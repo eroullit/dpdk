@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -203,9 +202,11 @@ struct nic_flow_def {
 	int l3_prot;
 	int l4_prot;
 	int tunnel_prot;
+	int tunnel_l2_prot;
 	int tunnel_l3_prot;
 	int tunnel_l4_prot;
 	int vlans;
+	int tunnel_vlans;
 	int fragmentation;
 	int ip_prot;
 	int tunnel_ip_prot;
@@ -297,7 +298,7 @@ struct flow_handle {
 	enum flow_handle_type type;
 	uint32_t flm_id;
 	uint16_t caller_id;
-	uint16_t learn_ignored;
+	RTE_ATOMIC(uint16_t) learn_ignored;
 
 	struct flow_eth_dev *dev;
 	struct flow_handle *next;
@@ -396,36 +397,36 @@ struct flow_template_table {
 	uint16_t caller_id;
 };
 
-void km_attach_ndev_resource_management(struct km_flow_def_s *km, void **handle);
-void km_free_ndev_resource_management(void **handle);
+void nthw_km_attach_ndev_resource_management(struct km_flow_def_s *km, void **handle);
+void nthw_km_free_ndev_resource_management(void **handle);
 
-int km_add_match_elem(struct km_flow_def_s *km, uint32_t e_word[4], uint32_t e_mask[4],
+int nthw_km_add_match_elem(struct km_flow_def_s *km, uint32_t e_word[4], uint32_t e_mask[4],
 	uint32_t word_len, enum frame_offs_e start, int8_t offset);
 
-int km_key_create(struct km_flow_def_s *km, uint32_t port_id);
+int nthw_km_key_create(struct km_flow_def_s *km, uint32_t port_id);
 /*
  * Compares 2 KM key definitions after first collect validate and optimization.
  * km is compared against an existing km1.
  * if identical, km1 flow_type is returned
  */
-int km_key_compare(struct km_flow_def_s *km, struct km_flow_def_s *km1);
+int nthw_km_key_compare(struct km_flow_def_s *km, struct km_flow_def_s *km1);
 
-int km_rcp_set(struct km_flow_def_s *km, int index);
+int nthw_km_rcp_set(struct km_flow_def_s *km, int index);
 
-int km_write_data_match_entry(struct km_flow_def_s *km, uint32_t color);
-int km_clear_data_match_entry(struct km_flow_def_s *km);
+int nthw_km_write_data_match_entry(struct km_flow_def_s *km, uint32_t color);
+int nthw_km_clear_data_match_entry(struct km_flow_def_s *km);
 
-void kcc_free_ndev_resource_management(void **handle);
+void nthw_kcc_free_ndev_resource_mgmnt(void **handle);
 
 /*
  * Group management
  */
-int flow_group_handle_create(void **handle, uint32_t group_count);
-int flow_group_handle_destroy(void **handle);
+int nthw_flow_group_handle_create(void **handle, uint32_t group_count);
+int nthw_flow_group_handle_destroy(void **handle);
 
-int flow_group_translate_get(void *handle, uint8_t owner_id, uint8_t port_id, uint32_t group_in,
-	uint32_t *group_out);
-int flow_group_translate_get_orig_group(void *handle, uint32_t translated_group,
+int nthw_flow_group_translate_get(void *handle, uint8_t owner_id, uint8_t port_id,
+	uint32_t group_in, uint32_t *group_out);
+int nthw_flow_group_translate_get_orig_group(void *handle, uint32_t translated_group,
 	uint32_t *group_orig);
 
 #endif  /* _FLOW_API_ENGINE_H_ */

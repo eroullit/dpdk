@@ -47,6 +47,7 @@
 #include <rte_ethdev.h>
 #include <rte_dev.h>
 #include <rte_string_fns.h>
+#include <rte_pci.h>
 #ifdef RTE_NET_IXGBE
 #include <rte_pmd_ixgbe.h>
 #endif
@@ -101,12 +102,15 @@
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
 
+/* Maximum delay for exiting after primary process. */
+#define MONITOR_INTERVAL (500 * 1000)
+
 /* use main core for command line ? */
 uint8_t interactive = 0;
 uint8_t auto_start = 0;
 uint8_t tx_first;
-char cmdline_filename[PATH_MAX] = {0};
-bool echo_cmdline_file;
+struct cmdline_file_info cmdline_files[MAX_CMDLINE_FILENAMES] = {0};
+unsigned int cmdline_file_count;
 
 /*
  * NUMA support configuration.
@@ -206,6 +210,21 @@ struct fwd_engine * fwd_engines[] = {
 	&shared_rxq_engine,
 	NULL,
 };
+
+/*
+ * Bitmask for control DCB forwarding for TCs.
+ * If bit-n in tc-mask is 1, then TC-n's forwarding is enabled, and vice versa.
+ */
+uint8_t dcb_fwd_tc_mask = DEFAULT_DCB_FWD_TC_MASK;
+/*
+ * Poll cores per TC when DCB forwarding.
+ * E.g. 1 indicates that one core process all queues of a TC.
+ *      2 indicates that two cores process all queues of a TC. If there
+ *        is a TC with 8 queues, then [0, 3] belong to first core, and
+ *        [4, 7] belong to second core.
+ *      ...
+ */
+uint8_t dcb_fwd_tc_cores = 1;
 
 struct rte_mempool *mempools[RTE_MAX_NUMA_NODES * MAX_SEGS_BUFFER_SPLIT];
 uint16_t mempool_flags;
@@ -382,6 +401,7 @@ uint64_t noisy_lkup_num_reads_writes;
  * Receive Side Scaling (RSS) configuration.
  */
 uint64_t rss_hf = RTE_ETH_RSS_IP; /* RSS IP by default. */
+bool force_rss;                   /* false == for single queue don't force rss */
 
 /*
  * Port topology configuration
@@ -705,7 +725,7 @@ eth_dev_set_mtu_mp(uint16_t port_id, uint16_t mtu)
 }
 
 /* Forward function declarations */
-static void setup_attached_port(void *arg);
+static void setup_attached_port(portid_t pi);
 static void check_all_ports_link_status(uint32_t port_mask);
 static int eth_event_callback(portid_t port_id,
 			      enum rte_eth_event_type type,
@@ -1729,8 +1749,7 @@ init_config(void)
 			mempools[i] = mbuf_pool_create
 					(mbuf_data_size[i],
 					 nb_mbuf_per_pool,
-					 socket_num == UMA_NO_CONFIG ?
-					 0 : socket_num, i);
+					 SOCKET_ID_ANY, i);
 	}
 
 	init_port_config();
@@ -2906,7 +2925,6 @@ start_port(portid_t pid)
 		at_least_one_port_exist = true;
 
 		port = &ports[pi];
-
 		if (port->port_status == RTE_PORT_STOPPED) {
 			port->port_status = RTE_PORT_HANDLING;
 			all_ports_already_started = false;
@@ -3057,7 +3075,8 @@ start_port(portid_t pid)
 				} else {
 					struct rte_mempool *mp =
 						mbuf_pool_find
-							(port->socket_id, 0);
+							((numa_support ? port->socket_id :
+							(unsigned int)SOCKET_ID_ANY), 0);
 					if (mp == NULL) {
 						fprintf(stderr,
 							"Failed to setup RX queue: No mempool allocation on the socket %d\n",
@@ -3254,7 +3273,6 @@ remove_invalid_ports(void)
 	remove_invalid_ports_in(ports_ids, &nb_ports);
 	remove_invalid_ports_in(fwd_ports_ids, &nb_fwd_ports);
 	nb_cfg_ports = nb_fwd_ports;
-	printf("Now total ports is %d\n", nb_ports);
 }
 
 static void
@@ -3409,11 +3427,38 @@ reset_port(portid_t pid)
 	printf("Done\n");
 }
 
+static char *
+convert_pci_address_format(const char *identifier, char *pci_buffer, size_t buf_size)
+{
+	struct rte_devargs da;
+	struct rte_pci_addr pci_addr;
+	size_t pci_len;
+
+	if (rte_devargs_parse(&da, identifier) != 0)
+		return NULL;
+
+	if (da.bus == NULL)
+		return NULL;
+
+	if (strcmp(rte_bus_name(da.bus), "pci") != 0)
+		return NULL;
+
+	if (rte_pci_addr_parse(da.name, &pci_addr) != 0)
+		return NULL;
+
+	rte_pci_device_name(&pci_addr, pci_buffer, buf_size);
+	pci_len = strlen(pci_buffer);
+	snprintf(pci_buffer + pci_len, buf_size - pci_len, ",%s", da.args);
+	return pci_buffer;
+}
+
 void
 attach_port(char *identifier)
 {
 	portid_t pi;
 	struct rte_dev_iterator iterator;
+	char *long_format, *long_identifier;
+	size_t long_format_size;
 
 	printf("Attaching a new port...\n");
 
@@ -3421,17 +3466,31 @@ attach_port(char *identifier)
 		fprintf(stderr, "Invalid parameters are specified\n");
 		return;
 	}
+	long_format_size = strlen(identifier) + PCI_PRI_STR_SIZE;
+	long_format = alloca(long_format_size);
+	if (long_format == NULL) {
+		TESTPMD_LOG(ERR, "Failed to attach port %s - allocation failure\n", identifier);
+		return;
+	}
+
+	/* For PCI device convert to canonical format */
+	long_identifier = convert_pci_address_format(identifier, long_format, long_format_size);
+	if (long_identifier != NULL)
+		identifier = long_identifier;
 
 	if (rte_dev_probe(identifier) < 0) {
 		TESTPMD_LOG(ERR, "Failed to attach port %s\n", identifier);
 		return;
 	}
 
-	/* First attach mode: event
-	 * New port flag is updated on RTE_ETH_EVENT_NEW event
-	 */
+	/* first attach mode: event */
 	if (setup_on_probe_event) {
-		goto out;
+		/* new ports are detected on RTE_ETH_EVENT_NEW event */
+		for (pi = 0; pi < RTE_MAX_ETHPORTS; pi++)
+			if (ports[pi].port_status == RTE_PORT_HANDLING &&
+					ports[pi].need_setup != 0)
+				setup_attached_port(pi);
+		return;
 	}
 
 	/* second attach mode: iterator */
@@ -3439,17 +3498,13 @@ attach_port(char *identifier)
 		/* setup ports matching the devargs used for probing */
 		if (port_is_forwarding(pi))
 			continue; /* port was already attached before */
-		setup_attached_port((void *)(intptr_t)pi);
+		setup_attached_port(pi);
 	}
-out:
-	printf("Port %s is attached.\n", identifier);
-	printf("Done\n");
 }
 
 static void
-setup_attached_port(void *arg)
+setup_attached_port(portid_t pi)
 {
-	portid_t pi = (intptr_t)arg;
 	unsigned int socket_id;
 	int ret;
 
@@ -3464,8 +3519,14 @@ setup_attached_port(void *arg)
 			"Error during enabling promiscuous mode for port %u: %s - ignore\n",
 			pi, rte_strerror(-ret));
 
+	ports_ids[nb_ports++] = pi;
+	fwd_ports_ids[nb_fwd_ports++] = pi;
+	nb_cfg_ports = nb_fwd_ports;
 	ports[pi].need_setup = 0;
 	ports[pi].port_status = RTE_PORT_STOPPED;
+
+	printf("Port %d is attached. Now total ports is %d\n", pi, nb_ports);
+	printf("Done\n");
 }
 
 static void
@@ -3495,8 +3556,10 @@ detach_device(struct rte_device *dev)
 		TESTPMD_LOG(ERR, "Failed to detach device %s\n", rte_dev_name(dev));
 		return;
 	}
+	remove_invalid_ports();
 
 	printf("Device is detached\n");
+	printf("Now total ports is %d\n", nb_ports);
 	printf("Done\n");
 	return;
 }
@@ -3571,6 +3634,83 @@ detach_devargs(char *identifier)
 	rte_devargs_reset(&da);
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+
+enum testpmd_req_type {
+	TESTPMD_REQ_TYPE_EXIT,
+};
+
+struct testpmd_mp_req {
+	enum testpmd_req_type t;
+};
+
+struct testpmd_mp_resp {
+	int result;
+};
+
+#define TESTPMD_MP	"mp_testpmd"
+
+/* Send reply to this peer when testpmd exits */
+static RTE_ATOMIC(const char *) primary_name;
+
+static void
+reply_to_primary(const char *peer, int result)
+{
+	struct rte_mp_msg reply = { };
+	struct testpmd_mp_resp *resp = (struct testpmd_mp_resp *) &reply.param;
+
+	strlcpy(reply.name, TESTPMD_MP, RTE_MP_MAX_NAME_LEN);
+	reply.len_param = sizeof(*resp);
+	resp->result = result;
+
+	printf("Replying %d to primary\n", result);
+	fflush(stdout);
+
+	if (rte_mp_reply(&reply, peer) < 0)
+		printf("Failed to send response to primary:%s", strerror(rte_errno));
+}
+
+/* Primary process is exiting, stop secondary process */
+static void
+pmd_notify_secondary(void)
+{
+	struct testpmd_mp_req request = {
+		.t = TESTPMD_REQ_TYPE_EXIT,
+	};
+	struct rte_mp_msg mp_req = {
+		.name = TESTPMD_MP,
+		.len_param = sizeof(request),
+	};
+	struct rte_mp_reply reply;
+	struct timespec ts = {.tv_sec = 5, .tv_nsec = 0};
+
+	printf("\nPrimary: Sending 'stop_req' request to secondary...\n");
+	fflush(stdout);
+
+	memcpy(mp_req.param, &request, sizeof(request));
+	rte_mp_request_sync(&mp_req, &reply, &ts);
+}
+
+static int
+handle_testpmd_request(const struct rte_mp_msg *request, const void *peer)
+{
+	const struct testpmd_mp_req *req = (const struct testpmd_mp_req *)request->param;
+
+	if (req->t == TESTPMD_REQ_TYPE_EXIT) {
+		printf("\nReceived notification of primary exiting\n");
+		fflush(stdout);
+
+		/* Response is sent after forwarding loop exits */
+		rte_atomic_store_explicit(&primary_name, peer, rte_memory_order_relaxed);
+
+		kill(getpid(), SIGINT);
+	} else {
+		reply_to_primary(peer, -EINVAL);
+	}
+	return 0;
+}
+#endif
+
 void
 pmd_test_exit(void)
 {
@@ -3582,6 +3722,10 @@ pmd_test_exit(void)
 		stop_packet_forwarding();
 
 #ifndef RTE_EXEC_ENV_WINDOWS
+	/* Tell secondary to exit */
+	if (rte_eal_process_type() == RTE_PROC_PRIMARY)
+		pmd_notify_secondary();
+
 	for (i = 0 ; i < RTE_DIM(mempools) ; i++) {
 		if (mempools[i]) {
 			if (mp_alloc_type == MP_ALLOC_ANON)
@@ -3728,25 +3872,7 @@ rmv_port_callback(void *arg)
 		struct rte_device *device = dev_info.device;
 		close_port(port_id);
 		detach_device(device); /* might be already removed or have more ports */
-		remove_invalid_ports();
 	}
-	if (need_to_start)
-		start_packet_forwarding(0);
-}
-
-static void
-remove_invalid_ports_callback(void *arg)
-{
-	portid_t port_id = (intptr_t)arg;
-	int need_to_start = 0;
-
-	if (!test_done && port_is_forwarding(port_id)) {
-		need_to_start = 1;
-		stop_packet_forwarding();
-	}
-
-	remove_invalid_ports();
-
 	if (need_to_start)
 		start_packet_forwarding(0);
 }
@@ -3772,23 +3898,8 @@ eth_event_callback(portid_t port_id, enum rte_eth_event_type type, void *param,
 
 	switch (type) {
 	case RTE_ETH_EVENT_NEW:
-		/* The port in ports_id and fwd_ports_ids is always valid
-		 * from index 0 ~ (nb_ports - 1) due to updating their
-		 * position when one port is detached or removed.
-		 */
-		ports_ids[nb_ports++] = port_id;
-		fwd_ports_ids[nb_fwd_ports++] = port_id;
-		nb_cfg_ports = nb_fwd_ports;
-		printf("Port %d is probed. Now total ports is %d\n", port_id, nb_ports);
-
-		if (setup_on_probe_event) {
-			ports[port_id].need_setup = 1;
-			ports[port_id].port_status = RTE_PORT_HANDLING;
-		}
-		/* Can't initialize port directly in new event. */
-		if (rte_eal_alarm_set(100000, setup_attached_port,
-				      (void *)(intptr_t)port_id))
-			fprintf(stderr, "Could not set up deferred task to setup this attached port.\n");
+		ports[port_id].need_setup = 1;
+		ports[port_id].port_status = RTE_PORT_HANDLING;
 		break;
 	case RTE_ETH_EVENT_INTR_RMV:
 		if (port_id_is_invalid(port_id, DISABLED_WARN))
@@ -3801,15 +3912,6 @@ eth_event_callback(portid_t port_id, enum rte_eth_event_type type, void *param,
 	case RTE_ETH_EVENT_DESTROY:
 		ports[port_id].port_status = RTE_PORT_CLOSED;
 		printf("Port %u is closed\n", port_id);
-		/*
-		 * Defer to remove port id due to the reason that the ethdev
-		 * state is changed from 'ATTACHED' to 'UNUSED' only after the
-		 * event callback finished. Otherwise this port id can not be
-		 * removed.
-		 */
-		if (rte_eal_alarm_set(100000, remove_invalid_ports_callback,
-				      (void *)(intptr_t)port_id))
-			fprintf(stderr, "Could not set up deferred task to remove this port id.\n");
 		break;
 	case RTE_ETH_EVENT_RX_AVAIL_THRESH: {
 		uint16_t rxq_id;
@@ -4044,7 +4146,7 @@ init_port_config(void)
 		if (ret != 0)
 			return;
 
-		if (nb_rxq > 1) {
+		if (nb_rxq > 1 || force_rss) {
 			port->dev_conf.rx_adv_conf.rss_conf.rss_key = NULL;
 			port->dev_conf.rx_adv_conf.rss_conf.rss_hf =
 				rss_hf & port->dev_info.flow_type_rss_offloads;
@@ -4130,9 +4232,10 @@ const uint16_t vlan_tags[] = {
 
 static void
 get_eth_dcb_conf(struct rte_eth_conf *eth_conf, enum dcb_mode_enable dcb_mode,
-		 enum rte_eth_nb_tcs num_tcs, uint8_t pfc_en)
+		 enum rte_eth_nb_tcs num_tcs, uint8_t pfc_en,
+		 uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES], uint8_t prio_tc_en)
 {
-	uint8_t i;
+	uint8_t dcb_tc_val, i;
 
 	/*
 	 * Builds up the correct configuration for dcb+vt based on the vlan tags array
@@ -4156,11 +4259,12 @@ get_eth_dcb_conf(struct rte_eth_conf *eth_conf, enum dcb_mode_enable dcb_mode,
 		for (i = 0; i < vmdq_rx_conf->nb_pool_maps; i++) {
 			vmdq_rx_conf->pool_map[i].vlan_id = vlan_tags[i];
 			vmdq_rx_conf->pool_map[i].pools =
-				1 << (i % vmdq_rx_conf->nb_queue_pools);
+				RTE_BIT64(i % vmdq_rx_conf->nb_queue_pools);
 		}
 		for (i = 0; i < RTE_ETH_DCB_NUM_USER_PRIORITIES; i++) {
-			vmdq_rx_conf->dcb_tc[i] = i % num_tcs;
-			vmdq_tx_conf->dcb_tc[i] = i % num_tcs;
+			dcb_tc_val = prio_tc_en ? prio_tc[i] : i % num_tcs;
+			vmdq_rx_conf->dcb_tc[i] = dcb_tc_val;
+			vmdq_tx_conf->dcb_tc[i] = dcb_tc_val;
 		}
 
 		/* set DCB mode of RX and TX of multiple queues */
@@ -4178,8 +4282,9 @@ get_eth_dcb_conf(struct rte_eth_conf *eth_conf, enum dcb_mode_enable dcb_mode,
 		tx_conf->nb_tcs = num_tcs;
 
 		for (i = 0; i < RTE_ETH_DCB_NUM_USER_PRIORITIES; i++) {
-			rx_conf->dcb_tc[i] = i % num_tcs;
-			tx_conf->dcb_tc[i] = i % num_tcs;
+			dcb_tc_val = prio_tc_en ? prio_tc[i] : i % num_tcs;
+			rx_conf->dcb_tc[i] = dcb_tc_val;
+			tx_conf->dcb_tc[i] = dcb_tc_val;
 		}
 
 		eth_conf->rxmode.mq_mode =
@@ -4195,11 +4300,30 @@ get_eth_dcb_conf(struct rte_eth_conf *eth_conf, enum dcb_mode_enable dcb_mode,
 		eth_conf->dcb_capability_en = RTE_ETH_DCB_PG_SUPPORT;
 }
 
+static void
+clear_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf)
+{
+	uint32_t i;
+
+	eth_conf->rxmode.mq_mode &= ~(RTE_ETH_MQ_RX_DCB | RTE_ETH_MQ_RX_VMDQ_DCB);
+	eth_conf->txmode.mq_mode = RTE_ETH_MQ_TX_NONE;
+	eth_conf->dcb_capability_en = 0;
+	if (dcb_config) {
+		/* Unset VLAN filter configuration if already config DCB. */
+		eth_conf->rxmode.offloads &= ~RTE_ETH_RX_OFFLOAD_VLAN_FILTER;
+		for (i = 0; i < RTE_DIM(vlan_tags); i++)
+			rx_vft_set(pid, vlan_tags[i], 0);
+	}
+}
+
 int
 init_port_dcb_config(portid_t pid,
 		     enum dcb_mode_enable dcb_mode,
 		     enum rte_eth_nb_tcs num_tcs,
-		     uint8_t pfc_en)
+		     uint8_t pfc_en,
+		     uint8_t prio_tc[RTE_ETH_DCB_NUM_USER_PRIORITIES],
+		     uint8_t prio_tc_en,
+		     uint8_t keep_qnum)
 {
 	struct rte_eth_conf port_conf;
 	struct rte_port *rte_port;
@@ -4215,16 +4339,19 @@ init_port_dcb_config(portid_t pid,
 	/* retain the original device configuration. */
 	memcpy(&port_conf, &rte_port->dev_conf, sizeof(struct rte_eth_conf));
 
-	/* set configuration of DCB in vt mode and DCB in non-vt mode */
-	get_eth_dcb_conf(&port_conf, dcb_mode, num_tcs, pfc_en);
-
-	port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_VLAN_FILTER;
-	/* remove RSS HASH offload for DCB in vt mode */
-	if (port_conf.rxmode.mq_mode == RTE_ETH_MQ_RX_VMDQ_DCB) {
-		port_conf.rxmode.offloads &= ~RTE_ETH_RX_OFFLOAD_RSS_HASH;
-		for (i = 0; i < nb_rxq; i++)
-			rte_port->rxq[i].conf.offloads &=
-				~RTE_ETH_RX_OFFLOAD_RSS_HASH;
+	if (num_tcs > 1) {
+		/* set configuration of DCB in vt mode and DCB in non-vt mode */
+		get_eth_dcb_conf(&port_conf, dcb_mode, num_tcs, pfc_en, prio_tc, prio_tc_en);
+		port_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_VLAN_FILTER;
+		/* remove RSS HASH offload for DCB in vt mode */
+		if (port_conf.rxmode.mq_mode == RTE_ETH_MQ_RX_VMDQ_DCB) {
+			port_conf.rxmode.offloads &= ~RTE_ETH_RX_OFFLOAD_RSS_HASH;
+			for (i = 0; i < nb_rxq; i++)
+				rte_port->rxq[i].conf.offloads &=
+					~RTE_ETH_RX_OFFLOAD_RSS_HASH;
+		}
+	} else {
+		clear_eth_dcb_conf(pid, &port_conf);
 	}
 
 	/* re-configure the device . */
@@ -4239,7 +4366,8 @@ init_port_dcb_config(portid_t pid,
 	/* If dev_info.vmdq_pool_base is greater than 0,
 	 * the queue id of vmdq pools is started after pf queues.
 	 */
-	if (dcb_mode == DCB_VT_ENABLED &&
+	if (num_tcs > 1 &&
+	    dcb_mode == DCB_VT_ENABLED &&
 	    rte_port->dev_info.vmdq_pool_base > 0) {
 		fprintf(stderr,
 			"VMDQ_DCB multi-queue mode is nonsensical for port %d.\n",
@@ -4247,26 +4375,27 @@ init_port_dcb_config(portid_t pid,
 		return -1;
 	}
 
-	/* Assume the ports in testpmd have the same dcb capability
-	 * and has the same number of rxq and txq in dcb mode
-	 */
-	if (dcb_mode == DCB_VT_ENABLED) {
-		if (rte_port->dev_info.max_vfs > 0) {
-			nb_rxq = rte_port->dev_info.nb_rx_queues;
-			nb_txq = rte_port->dev_info.nb_tx_queues;
+	if (num_tcs > 1 && keep_qnum == 0) {
+		/* Assume the ports in testpmd have the same dcb capability
+		 * and has the same number of rxq and txq in dcb mode
+		 */
+		if (dcb_mode == DCB_VT_ENABLED) {
+			if (rte_port->dev_info.max_vfs > 0) {
+				nb_rxq = rte_port->dev_info.nb_rx_queues;
+				nb_txq = rte_port->dev_info.nb_tx_queues;
+			} else {
+				nb_rxq = rte_port->dev_info.max_rx_queues;
+				nb_txq = rte_port->dev_info.max_tx_queues;
+			}
 		} else {
-			nb_rxq = rte_port->dev_info.max_rx_queues;
-			nb_txq = rte_port->dev_info.max_tx_queues;
-		}
-	} else {
-		/*if vt is disabled, use all pf queues */
-		if (rte_port->dev_info.vmdq_pool_base == 0) {
-			nb_rxq = rte_port->dev_info.max_rx_queues;
-			nb_txq = rte_port->dev_info.max_tx_queues;
-		} else {
-			nb_rxq = (queueid_t)num_tcs;
-			nb_txq = (queueid_t)num_tcs;
-
+			/*if vt is disabled, use all pf queues */
+			if (rte_port->dev_info.vmdq_pool_base == 0) {
+				nb_rxq = rte_port->dev_info.max_rx_queues;
+				nb_txq = rte_port->dev_info.max_tx_queues;
+			} else {
+				nb_rxq = (queueid_t)num_tcs;
+				nb_txq = (queueid_t)num_tcs;
+			}
 		}
 	}
 	rx_free_thresh = 64;
@@ -4274,19 +4403,21 @@ init_port_dcb_config(portid_t pid,
 	memcpy(&rte_port->dev_conf, &port_conf, sizeof(struct rte_eth_conf));
 
 	rxtx_port_config(pid);
-	/* VLAN filter */
-	rte_port->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_VLAN_FILTER;
-	for (i = 0; i < RTE_DIM(vlan_tags); i++)
-		rx_vft_set(pid, vlan_tags[i], 1);
+	if (num_tcs > 1) {
+		/* VLAN filter */
+		rte_port->dev_conf.rxmode.offloads |= RTE_ETH_RX_OFFLOAD_VLAN_FILTER;
+		for (i = 0; i < RTE_DIM(vlan_tags); i++)
+			rx_vft_set(pid, vlan_tags[i], 1);
+	}
 
 	retval = eth_macaddr_get_print_err(pid, &rte_port->eth_addr);
 	if (retval != 0)
 		return retval;
 
-	rte_port->dcb_flag = 1;
+	rte_port->dcb_flag = num_tcs > 1 ? 1 : 0;
 
 	/* Enter DCB configuration status */
-	dcb_config = 1;
+	dcb_config = num_tcs > 1 ? 1 : 0;
 
 	return 0;
 }
@@ -4340,6 +4471,38 @@ signal_handler(int signum __rte_unused)
 	prompt_exit();
 }
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+/* Alarm signal handler, used to check that primary process */
+static void
+monitor_primary(void *arg __rte_unused)
+{
+	if (rte_eal_primary_proc_alive(NULL)) {
+		rte_eal_alarm_set(MONITOR_INTERVAL, monitor_primary, NULL);
+	} else {
+		/*
+		 * If primary process exits, then all the device information
+		 * is no longer valid. Calling any cleanup code is going to
+		 * run into use after free.
+		 */
+		fprintf(stderr, "\nPrimary process is no longer active, exiting...\n");
+		exit(EXIT_FAILURE);
+	}
+}
+
+/* Setup handler to check when primary exits. */
+static int
+enable_primary_monitor(void)
+{
+	return rte_eal_alarm_set(MONITOR_INTERVAL, monitor_primary, NULL);
+}
+
+static void
+disable_primary_monitor(void)
+{
+	rte_eal_alarm_cancel(monitor_primary, NULL);
+}
+#endif
+
 int
 main(int argc, char** argv)
 {
@@ -4370,6 +4533,15 @@ main(int argc, char** argv)
 	if (diag < 0)
 		rte_exit(EXIT_FAILURE, "Cannot init EAL: %s\n",
 			 rte_strerror(rte_errno));
+
+#ifndef RTE_EXEC_ENV_WINDOWS
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		if (enable_primary_monitor() < 0)
+			rte_exit(EXIT_FAILURE, "Cannot setup primary monitor");
+		if (rte_mp_action_register(TESTPMD_MP, handle_testpmd_request) < 0)
+			rte_exit(EXIT_FAILURE, "Failed to register message action\n");
+	}
+#endif
 
 	/* allocate port structures, and init them */
 	init_port();
@@ -4483,7 +4655,7 @@ main(int argc, char** argv)
 
 #ifdef RTE_LIB_METRICS
 	/* Init metrics library */
-	rte_metrics_init(rte_socket_id());
+	rte_metrics_init(SOCKET_ID_ANY);
 #endif
 
 #ifdef RTE_LIB_LATENCYSTATS
@@ -4516,8 +4688,13 @@ main(int argc, char** argv)
 		rte_exit(EXIT_FAILURE,
 			"Could not initialise cmdline context.\n");
 
-	if (strlen(cmdline_filename) != 0)
-		cmdline_read_from_file(cmdline_filename);
+	for (unsigned int i = 0; i < cmdline_file_count; i++) {
+		if (cmdline_read_from_file(cmdline_files[i].filename, cmdline_files[i].echo) != 0) {
+			fprintf(stderr, "Failed to process cmdline file: %s\n",
+					cmdline_files[i].filename);
+			break;
+		}
+	}
 
 	if (interactive == 1) {
 		if (auto_start) {
@@ -4564,7 +4741,23 @@ main(int argc, char** argv)
 		}
 	}
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		disable_primary_monitor();
+		rte_mp_action_unregister(TESTPMD_MP);
+	}
+#endif
+
 	pmd_test_exit();
+
+#ifndef RTE_EXEC_ENV_WINDOWS
+	if (rte_eal_process_type() == RTE_PROC_SECONDARY) {
+		const char *peer = rte_atomic_exchange_explicit(&primary_name, NULL,
+				rte_memory_order_relaxed);
+		if (peer)
+			reply_to_primary(peer, 0);
+	}
+#endif
 
 #ifdef RTE_LIB_PDUMP
 	/* uninitialize packet capture framework */

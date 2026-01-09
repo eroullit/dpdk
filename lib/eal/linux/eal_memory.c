@@ -15,13 +15,11 @@
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/resource.h>
+#include <sys/personality.h>
 #include <unistd.h>
 #include <limits.h>
 #include <signal.h>
 #include <setjmp.h>
-#ifdef F_ADD_SEALS /* if file sealing is supported, so is memfd */
-#define MEMFD_SUPPORTED
-#endif
 #ifdef RTE_EAL_NUMA_AWARE_HUGEPAGES
 #include <numa.h>
 #include <numaif.h>
@@ -34,6 +32,7 @@
 #include <rte_lcore.h>
 #include <rte_common.h>
 
+#include <eal_export.h>
 #include "eal_private.h"
 #include "eal_memalloc.h"
 #include "eal_memcfg.h"
@@ -87,6 +86,7 @@ uint64_t eal_get_baseaddr(void)
 /*
  * Get physical address of any mapped virtual address in the current process.
  */
+RTE_EXPORT_SYMBOL(rte_mem_virt2phy)
 phys_addr_t
 rte_mem_virt2phy(const void *virtaddr)
 {
@@ -144,6 +144,7 @@ rte_mem_virt2phy(const void *virtaddr)
 	return physaddr;
 }
 
+RTE_EXPORT_SYMBOL(rte_mem_virt2iova)
 rte_iova_t
 rte_mem_virt2iova(const void *virtaddr)
 {
@@ -200,6 +201,17 @@ static int
 aslr_enabled(void)
 {
 	char c;
+
+	/*
+	 * Check whether the current process is executed with the command line
+	 * "setarch ... --addr-no-randomize ..." or "setarch ... -R ..."
+	 * This complements the sysfs check to ensure comprehensive ASLR status detection.
+	 * This check is necessary to support the functionality of the "setarch" command,
+	 * which can disable ASLR by setting the ADDR_NO_RANDOMIZE personality flag.
+	 */
+	if ((personality(0xffffffff) & ADDR_NO_RANDOMIZE) == ADDR_NO_RANDOMIZE)
+		return 0;
+
 	int retval, fd = open(RANDOMIZE_VA_SPACE_FILE, O_RDONLY);
 	if (fd < 0)
 		return -errno;
@@ -282,7 +294,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 			oldpolicy = MPOL_DEFAULT;
 		}
 		for (i = 0; i < RTE_MAX_NUMA_NODES; i++)
-			if (internal_conf->socket_mem[i])
+			if (internal_conf->numa_mem[i])
 				maxnode = i + 1;
 	}
 #endif
@@ -301,7 +313,7 @@ map_all_hugepages(struct hugepage_file *hugepg_tbl, struct hugepage_info *hpi,
 
 			if (j == maxnode) {
 				node_id = (node_id + 1) % maxnode;
-				while (!internal_conf->socket_mem[node_id]) {
+				while (!internal_conf->numa_mem[node_id]) {
 					node_id++;
 					node_id %= maxnode;
 				}
@@ -1146,9 +1158,7 @@ eal_legacy_hugepage_init(void)
 		size_t mem_sz;
 		struct rte_memseg_list *msl;
 		int n_segs, fd, flags;
-#ifdef MEMFD_SUPPORTED
 		int memfd;
-#endif
 		uint64_t page_sz;
 
 		/* nohuge mode is legacy mode */
@@ -1173,7 +1183,6 @@ eal_legacy_hugepage_init(void)
 		fd = -1;
 		flags = MAP_PRIVATE | MAP_ANONYMOUS;
 
-#ifdef MEMFD_SUPPORTED
 		/* create a memfd and store it in the segment fd table */
 		memfd = memfd_create("nohuge", 0);
 		if (memfd < 0) {
@@ -1198,7 +1207,6 @@ eal_legacy_hugepage_init(void)
 				flags = MAP_SHARED;
 			}
 		}
-#endif
 		/* preallocate address space for the memory, so that it can be
 		 * fit into the DMA mask.
 		 */
@@ -1269,9 +1277,9 @@ eal_legacy_hugepage_init(void)
 
 	huge_register_sigbus();
 
-	/* make a copy of socket_mem, needed for balanced allocation. */
+	/* make a copy of numa_mem, needed for balanced allocation. */
 	for (i = 0; i < RTE_MAX_NUMA_NODES; i++)
-		memory[i] = internal_conf->socket_mem[i];
+		memory[i] = internal_conf->numa_mem[i];
 
 	/* map all hugepages and sort them */
 	for (i = 0; i < (int)internal_conf->num_hugepage_sizes; i++) {
@@ -1339,7 +1347,7 @@ eal_legacy_hugepage_init(void)
 
 	huge_recover_sigbus();
 
-	if (internal_conf->memory == 0 && internal_conf->force_sockets == 0)
+	if (internal_conf->memory == 0 && internal_conf->force_numa == 0)
 		internal_conf->memory = eal_get_hugepage_mem_size();
 
 	nr_hugefiles = nr_hugepages;
@@ -1365,9 +1373,9 @@ eal_legacy_hugepage_init(void)
 		}
 	}
 
-	/* make a copy of socket_mem, needed for number of pages calculation */
+	/* make a copy of numa_mem, needed for number of pages calculation */
 	for (i = 0; i < RTE_MAX_NUMA_NODES; i++)
-		memory[i] = internal_conf->socket_mem[i];
+		memory[i] = internal_conf->numa_mem[i];
 
 	/* calculate final number of pages */
 	nr_hugepages = eal_dynmem_calc_num_pages_per_socket(memory,
@@ -1673,6 +1681,7 @@ rte_eal_hugepage_attach(void)
 			eal_hugepage_attach();
 }
 
+RTE_EXPORT_SYMBOL(rte_eal_using_phys_addrs)
 int
 rte_eal_using_phys_addrs(void)
 {
@@ -1723,12 +1732,12 @@ memseg_primary_init_32(void)
 	 */
 	active_sockets = 0;
 	total_requested_mem = 0;
-	if (internal_conf->force_sockets)
+	if (internal_conf->force_numa)
 		for (i = 0; i < rte_socket_count(); i++) {
 			uint64_t mem;
 
 			socket_id = rte_socket_id_by_idx(i);
-			mem = internal_conf->socket_mem[socket_id];
+			mem = internal_conf->numa_mem[socket_id];
 
 			if (mem == 0)
 				continue;
@@ -1769,8 +1778,14 @@ memseg_primary_init_32(void)
 		unsigned int main_lcore_socket;
 		struct rte_config *cfg = rte_eal_get_configuration();
 		bool skip;
+		int ret;
 
-		socket_id = rte_socket_id_by_idx(i);
+		ret = rte_socket_id_by_idx(i);
+		if (ret == -1) {
+			EAL_LOG(ERR, "Cannot get socket ID for socket index %u", i);
+			return -1;
+		}
+		socket_id = (unsigned int)ret;
 
 #ifndef RTE_EAL_NUMA_AWARE_HUGEPAGES
 		/* we can still sort pages by socket in legacy mode */
@@ -1780,7 +1795,7 @@ memseg_primary_init_32(void)
 
 		/* if we didn't specifically request memory on this socket */
 		skip = active_sockets != 0 &&
-				internal_conf->socket_mem[socket_id] == 0;
+				internal_conf->numa_mem[socket_id] == 0;
 		/* ...or if we didn't specifically request memory on *any*
 		 * socket, and this is not main lcore
 		 */
@@ -1795,7 +1810,7 @@ memseg_primary_init_32(void)
 
 		/* max amount of memory on this socket */
 		max_socket_mem = (active_sockets != 0 ?
-					internal_conf->socket_mem[socket_id] :
+					internal_conf->numa_mem[socket_id] :
 					internal_conf->memory) +
 					extra_mem_per_socket;
 		cur_socket_mem = 0;
@@ -1945,7 +1960,7 @@ rte_eal_memseg_init(void)
 	if (!internal_conf->legacy_mem && rte_socket_count() > 1) {
 		EAL_LOG(WARNING, "DPDK is running on a NUMA system, but is compiled without NUMA support.");
 		EAL_LOG(WARNING, "This will have adverse consequences for performance and usability.");
-		EAL_LOG(WARNING, "Please use --"OPT_LEGACY_MEM" option, or recompile with NUMA support.");
+		EAL_LOG(WARNING, "Please use --legacy-mem option, or recompile with NUMA support.");
 	}
 #endif
 

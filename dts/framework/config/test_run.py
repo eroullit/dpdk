@@ -16,9 +16,15 @@ from collections.abc import Iterable
 from enum import Enum, auto, unique
 from functools import cached_property
 from pathlib import Path, PurePath
-from typing import Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple, Optional
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    create_model,
+    field_validator,
+    model_validator,
+)
 from typing_extensions import TYPE_CHECKING, Self
 
 from framework.exception import InternalError
@@ -27,7 +33,7 @@ from framework.utils import REGEX_FOR_PORT_LINK, StrEnum
 from .common import FrozenModel, load_fields_from_settings
 
 if TYPE_CHECKING:
-    from framework.test_suite import TestCase, TestSuite, TestSuiteSpec
+    from framework.test_suite import BaseConfig, TestCase, TestSuite, TestSuiteSpec
 
 
 @unique
@@ -206,14 +212,13 @@ class TestSuiteConfig(FrozenModel):
 
     .. code:: yaml
 
-        test_runs:
-        - test_suites:
-            # As string representation:
-            - hello_world # test all of `hello_world`, or
-            - hello_world hello_world_single_core # test only `hello_world_single_core`
-            # or as model fields:
-            - test_suite: hello_world
-              test_cases: [hello_world_single_core] # without this field all test cases are run
+        test_suites:
+        # As string representation:
+        - hello_world # test all of `hello_world`, or
+        - hello_world hello_world_single_core # test only `hello_world_single_core`
+        # or as model fields:
+        - test_suite: hello_world
+            test_cases: [hello_world_single_core] # without this field all test cases are run
     """
 
     #: The name of the test suite module without the starting ``TestSuite_``.
@@ -282,6 +287,30 @@ def fetch_all_test_suites() -> list[TestSuiteConfig]:
         for test_suite in AVAILABLE_TEST_SUITES
         if test_suite.name != "smoke_tests"
     ]
+
+
+def make_test_suite_config_field(config_obj: type["BaseConfig"]):
+    """Make a field for a test suite's configuration.
+
+    If the test suite's configuration has required fields, then make the field required. Otherwise
+    make it optional.
+    """
+    if any(f.is_required() for f in config_obj.model_fields.values()):
+        return config_obj, Field()
+    else:
+        return config_obj, Field(default_factory=config_obj)
+
+
+def create_test_suites_config_model(test_suites: list[TestSuiteConfig]) -> type[BaseModel]:
+    """Create model for the test suites configuration."""
+    complete_test_suites = [TestSuiteConfig(test_suite="smoke_tests")]
+    complete_test_suites += test_suites
+
+    test_suites_kwargs = {
+        t.test_suite_name: make_test_suite_config_field(t.test_suite_spec.config_obj)
+        for t in complete_test_suites
+    }
+    return create_model("TestSuitesConfiguration", **test_suites_kwargs)
 
 
 class LinkPortIdentifier(NamedTuple):
@@ -367,6 +396,8 @@ class TrafficGeneratorType(str, Enum):
 
     #:
     SCAPY = "SCAPY"
+    #:
+    TREX = "TREX"
 
 
 class TrafficGeneratorConfig(FrozenModel):
@@ -383,8 +414,18 @@ class ScapyTrafficGeneratorConfig(TrafficGeneratorConfig):
     type: Literal[TrafficGeneratorType.SCAPY]
 
 
+class TrexTrafficGeneratorConfig(TrafficGeneratorConfig):
+    """TRex traffic generator specific configuration."""
+
+    type: Literal[TrafficGeneratorType.TREX]
+    remote_path: PurePath
+    config: PurePath
+
+
 #: A union type discriminating traffic generators by the `type` field.
-TrafficGeneratorConfigTypes = Annotated[ScapyTrafficGeneratorConfig, Field(discriminator="type")]
+TrafficGeneratorConfigTypes = Annotated[
+    TrexTrafficGeneratorConfig, ScapyTrafficGeneratorConfig, Field(discriminator="type")
+]
 
 #: Comma-separated list of logical cores to use. An empty string or ```any``` means use all lcores.
 LogicalCores = Annotated[
@@ -419,7 +460,7 @@ class DPDKRuntimeConfiguration(FrozenModel):
 class DPDKConfiguration(DPDKRuntimeConfiguration):
     """The DPDK configuration needed to test."""
 
-    #: The DPDKD build configuration used to test.
+    #: The DPDK build configuration used to test.
     build: DPDKBuildConfiguration
 
 
@@ -432,12 +473,16 @@ class TestRunConfiguration(FrozenModel):
 
     #: The DPDK configuration used to test.
     dpdk: DPDKConfiguration
-    #: The traffic generator configuration used to test.
-    traffic_generator: TrafficGeneratorConfigTypes
+    #: The traffic generator configuration used for functional tests.
+    func_traffic_generator: Optional[ScapyTrafficGeneratorConfig] = None
+    #: The traffic generator configuration used for performance tests.
+    perf_traffic_generator: Optional[TrexTrafficGeneratorConfig] = None
     #: Whether to run performance tests.
     perf: bool
     #: Whether to run functional tests.
     func: bool
+    #: Whether to run the testing with virtual functions instead of physical functions
+    use_virtual_functions: bool
     #: Whether to skip smoke tests.
     skip_smoke_tests: bool = False
     #: The names of test suites and/or test cases to execute.
@@ -456,8 +501,8 @@ class TestRunConfiguration(FrozenModel):
     )
 
     def filter_tests(
-        self,
-    ) -> Iterable[tuple[type["TestSuite"], deque[type["TestCase"]]]]:
+        self, tests_config: dict[str, "BaseConfig"]
+    ) -> Iterable[tuple[type["TestSuite"], "BaseConfig", deque[type["TestCase"]]]]:
         """Filter test suites and cases selected for execution."""
         from framework.test_suite import TestCaseType
 
@@ -471,6 +516,7 @@ class TestRunConfiguration(FrozenModel):
         return (
             (
                 t.test_suite_spec.class_obj,
+                tests_config[t.test_suite_name],
                 deque(
                     tt
                     for tt in t.test_cases

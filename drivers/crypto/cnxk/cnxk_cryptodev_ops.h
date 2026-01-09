@@ -30,16 +30,17 @@
 /* Default command timeout in seconds */
 #define DEFAULT_COMMAND_TIMEOUT 4
 
+#define META_LEN 64
+
 #define MOD_INC(i, l) ((i) == (l - 1) ? (i) = 0 : (i)++)
 
-#define CN10K_CPT_PKTS_PER_LOOP	  64
+#define CN10K_CPT_PKTS_PER_LOOP 64
+#define CN20K_CPT_PKTS_PER_LOOP 64
 
 /* Macros to form words in CPT instruction */
-#define CNXK_CPT_INST_W2(tag, tt, grp, rvu_pf_func)                            \
-	((tag) | ((uint64_t)(tt) << 32) | ((uint64_t)(grp) << 34) |            \
-	 ((uint64_t)(rvu_pf_func) << 48))
-#define CNXK_CPT_INST_W3(qord, wqe_ptr)                                        \
-	(qord | ((uintptr_t)(wqe_ptr) >> 3) << 3)
+#define CNXK_CPT_INST_W2(tag, tt, grp, rvu_pf_func)                                                \
+	((tag) | ((uint64_t)(tt) << 32) | ((uint64_t)(grp) << 34) | ((uint64_t)(rvu_pf_func) << 48))
+#define CNXK_CPT_INST_W3(qord, wqe_ptr) (qord | ((uintptr_t)(wqe_ptr) >> 3) << 3)
 
 struct cpt_qp_meta_info {
 	struct rte_mempool *pool;
@@ -53,11 +54,14 @@ struct cpt_qp_meta_info {
 
 struct __rte_aligned(ROC_ALIGN) cpt_inflight_req {
 	union cpt_res_s res;
+	uint8_t rsvd[16];
+	uint8_t meta[META_LEN];
 	union {
 		void *opaque;
 		struct rte_crypto_op *cop;
 		struct rte_event_vector *vec;
 	};
+	void *qp;
 	void *mdata;
 	uint8_t op_flags;
 #ifdef CPT_INST_DEBUG_ENABLE
@@ -67,10 +71,10 @@ struct __rte_aligned(ROC_ALIGN) cpt_inflight_req {
 	uint8_t *dptr;
 	uint8_t *rptr;
 #endif
-	void *qp;
 };
 
 PLT_STATIC_ASSERT(sizeof(struct cpt_inflight_req) == ROC_CACHE_LINE_SZ);
+PLT_STATIC_ASSERT(offsetof(struct cpt_inflight_req, meta) == 32);
 
 struct pending_queue {
 	/** Array of pending requests */
@@ -94,6 +98,11 @@ struct crypto_adpter_info {
 	/** Maximum number of cops to combine into single vector */
 	struct rte_mempool *vector_mp;
 	/** Pool for allocating rte_event_vector */
+	uint64_t vector_timeout_ns;
+	/*
+	 * Maximum number of nanoseconds to wait for aggregating
+	 * crypto operations.
+	 */
 };
 
 struct cnxk_cpt_qp {
@@ -109,6 +118,7 @@ struct cnxk_cpt_qp {
 	/**< Crypto adapter related info */
 	struct rte_mempool *sess_mp;
 	/**< Session mempool */
+	struct cnxk_sso_evdev *evdev;
 };
 
 int cnxk_cpt_asym_get_mlen(void);
@@ -157,6 +167,12 @@ void cnxk_cpt_dump_on_err(struct cnxk_cpt_qp *qp);
 int cnxk_cpt_queue_pair_event_error_query(struct rte_cryptodev *dev, uint16_t qp_id);
 
 uint32_t cnxk_cpt_qp_depth_used(void *qptr);
+
+#ifdef CPT_INST_DEBUG_ENABLE
+void cnxk_cpt_request_data_sg_mode_dump(uint8_t *in_buffer, bool glist);
+
+void cnxk_cpt_request_data_sgv2_mode_dump(uint8_t *in_buffer, bool glist, uint16_t components);
+#endif
 
 static __rte_always_inline void
 pending_queue_advance(uint64_t *index, const uint64_t mask)
@@ -212,5 +228,48 @@ hw_ctx_cache_enable(void)
 {
 	return roc_errata_cpt_hang_on_mixed_ctx_val() || roc_model_is_cn10ka_b0() ||
 	       roc_model_is_cn10kb_a0();
+}
+
+static inline uint64_t
+cnxk_cpt_sec_inst_w7_get(struct roc_cpt *roc_cpt, void *cptr)
+{
+	union cpt_inst_w7 w7;
+
+	w7.u64 = 0;
+	if (roc_model_is_cn20k())
+		w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_SE];
+	else
+		w7.s.egrp = roc_cpt->eng_grp[CPT_ENG_TYPE_IE];
+	w7.s.ctx_val = 1;
+	w7.s.cptr = (uint64_t)cptr;
+	rte_mb();
+
+	return w7.u64;
+}
+
+static inline void
+pktmbuf_trim_chain(struct rte_mbuf *m, uint16_t len)
+{
+	uint16_t len_so_far = 0, left_over = 0, new_mlen;
+	struct rte_mbuf *cur = m;
+
+	new_mlen = m->pkt_len - len;
+
+	while (len_so_far < new_mlen) {
+		left_over = new_mlen - len_so_far;
+		if (left_over < cur->data_len)
+			break;
+		len_so_far += cur->data_len;
+		cur = cur->next;
+	}
+
+	cur->data_len = left_over;
+	cur = cur->next;
+	while (cur) {
+		cur->data_len = 0;
+		cur = cur->next;
+	}
+
+	m->pkt_len = new_mlen;
 }
 #endif /* _CNXK_CRYPTODEV_OPS_H_ */

@@ -5,6 +5,8 @@
  *
  */
 
+#include <uapi/linux/vfio.h>
+
 #include <unistd.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -21,6 +23,7 @@
 #include <sys/eventfd.h>
 #include <ctype.h>
 
+#include <eal_export.h>
 #include <eal_filesystem.h>
 #include <rte_mbuf.h>
 #include <ethdev_driver.h>
@@ -31,6 +34,7 @@
 #include <rte_kvargs.h>
 #include <dev_driver.h>
 #include <rte_eal_memconfig.h>
+#include <rte_vfio.h>
 #include <eal_vfio.h>
 
 #include "private.h"
@@ -83,6 +87,7 @@ enum {
 	FSLMC_VFIO_SOCKET_REQ_MEM
 };
 
+RTE_EXPORT_INTERNAL_SYMBOL(dpaa2_get_mcp_ptr)
 void *
 dpaa2_get_mcp_ptr(int portal_idx)
 {
@@ -154,6 +159,7 @@ fslmc_io_virt2phy(const void *virtaddr)
 }
 
 /*register a fslmc bus based dpaa2 driver */
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_object_register)
 void
 rte_fslmc_object_register(struct rte_dpaa2_object *object)
 {
@@ -187,7 +193,7 @@ fslmc_vfio_add_group(int vfio_group_fd,
 	group->groupid = iommu_group_num;
 	rte_strscpy(group->group_name, group_name, sizeof(group->group_name));
 	if (rte_vfio_noiommu_is_enabled() > 0)
-		group->iommu_type = RTE_VFIO_NOIOMMU;
+		group->iommu_type = VFIO_NOIOMMU_IOMMU;
 	else
 		group->iommu_type = VFIO_TYPE1_IOMMU;
 	LIST_INSERT_HEAD(&s_vfio_container.groups, group, next);
@@ -393,8 +399,7 @@ fslmc_vfio_open_group_fd(const char *group_name)
 	/* if primary, try to open the group */
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 		/* try regular group format */
-		snprintf(filename, sizeof(filename),
-			VFIO_GROUP_FMT, iommu_group_num);
+		snprintf(filename, sizeof(filename), RTE_VFIO_GROUP_FMT, iommu_group_num);
 		vfio_group_fd = open(filename, O_RDWR);
 
 		goto add_vfio_group;
@@ -447,8 +452,8 @@ fslmc_vfio_check_extensions(int vfio_container_fd)
 {
 	int ret;
 	uint32_t idx, n_extensions = 0;
-	static const int type_id[] = {RTE_VFIO_TYPE1, RTE_VFIO_SPAPR,
-		RTE_VFIO_NOIOMMU};
+	static const int type_id[] = {VFIO_TYPE1_IOMMU, VFIO_SPAPR_TCE_v2_IOMMU,
+		VFIO_NOIOMMU_IOMMU};
 	static const char * const type_id_nm[] = {"Type 1",
 		"sPAPR", "No-IOMMU"};
 
@@ -492,10 +497,10 @@ fslmc_vfio_open_container_fd(void)
 
 	/* if we're in a primary process, try to open the container */
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		vfio_container_fd = open(VFIO_CONTAINER_PATH, O_RDWR);
+		vfio_container_fd = open(RTE_VFIO_CONTAINER_PATH, O_RDWR);
 		if (vfio_container_fd < 0) {
 			DPAA2_BUS_ERR("Open VFIO container(%s), err(%d)",
-				VFIO_CONTAINER_PATH, vfio_container_fd);
+				RTE_VFIO_CONTAINER_PATH, vfio_container_fd);
 			ret = vfio_container_fd;
 			goto err_exit;
 		}
@@ -848,7 +853,7 @@ start_mapping:
 			return fd;
 		return -EIO;
 	}
-	if (fslmc_vfio_iommu_type(fd) == RTE_VFIO_NOIOMMU) {
+	if (fslmc_vfio_iommu_type(fd) == VFIO_NOIOMMU_IOMMU) {
 		DPAA2_BUS_DEBUG("Running in NOIOMMU mode");
 		if (phy != iovaddr) {
 			DPAA2_BUS_ERR("IOVA should support with IOMMU");
@@ -948,7 +953,7 @@ fslmc_unmap_dma(uint64_t vaddr, uint64_t iovaddr, size_t len)
 			return fd;
 		return -EIO;
 	}
-	if (fslmc_vfio_iommu_type(fd) == RTE_VFIO_NOIOMMU) {
+	if (fslmc_vfio_iommu_type(fd) == VFIO_NOIOMMU_IOMMU) {
 		DPAA2_BUS_DEBUG("Running in NOIOMMU mode");
 		return 0;
 	}
@@ -984,6 +989,7 @@ fslmc_unmap_dma(uint64_t vaddr, uint64_t iovaddr, size_t len)
 	return 0;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_cold_mem_vaddr_to_iova)
 uint64_t
 rte_fslmc_cold_mem_vaddr_to_iova(void *vaddr,
 	uint64_t size)
@@ -1002,6 +1008,7 @@ rte_fslmc_cold_mem_vaddr_to_iova(void *vaddr,
 	return RTE_BAD_IOVA;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_cold_mem_iova_to_vaddr)
 void *
 rte_fslmc_cold_mem_iova_to_vaddr(uint64_t iova,
 	uint64_t size)
@@ -1018,6 +1025,7 @@ rte_fslmc_cold_mem_iova_to_vaddr(uint64_t iova,
 	return NULL;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_mem_vaddr_to_iova)
 __rte_hot uint64_t
 rte_fslmc_mem_vaddr_to_iova(void *vaddr)
 {
@@ -1027,6 +1035,7 @@ rte_fslmc_mem_vaddr_to_iova(void *vaddr)
 	return rte_fslmc_cold_mem_vaddr_to_iova(vaddr, 0);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_mem_iova_to_vaddr)
 __rte_hot void *
 rte_fslmc_mem_iova_to_vaddr(uint64_t iova)
 {
@@ -1036,6 +1045,7 @@ rte_fslmc_mem_iova_to_vaddr(uint64_t iova)
 	return rte_fslmc_cold_mem_iova_to_vaddr(iova, 0);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_io_vaddr_to_iova)
 uint64_t
 rte_fslmc_io_vaddr_to_iova(void *vaddr)
 {
@@ -1051,6 +1061,7 @@ rte_fslmc_io_vaddr_to_iova(void *vaddr)
 	return RTE_BAD_IOVA;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_io_iova_to_vaddr)
 void *
 rte_fslmc_io_iova_to_vaddr(uint64_t iova)
 {
@@ -1141,12 +1152,14 @@ fslmc_dmamap_seg(const struct rte_memseg_list *msl __rte_unused,
 	return ret;
 }
 
+RTE_EXPORT_SYMBOL(rte_fslmc_vfio_mem_dmamap)
 int
 rte_fslmc_vfio_mem_dmamap(uint64_t vaddr, uint64_t iova, uint64_t size)
 {
 	return fslmc_map_dma(vaddr, iova, size);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_fslmc_vfio_mem_dmaunmap)
 int
 rte_fslmc_vfio_mem_dmaunmap(uint64_t iova, uint64_t size)
 {
@@ -1264,6 +1277,7 @@ MC_FAILURE:
 
 #define IRQ_SET_BUF_LEN  (sizeof(struct vfio_irq_set) + sizeof(int))
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_dpaa2_intr_enable)
 int rte_dpaa2_intr_enable(struct rte_intr_handle *intr_handle, int index)
 {
 	int len, ret;
@@ -1295,6 +1309,7 @@ int rte_dpaa2_intr_enable(struct rte_intr_handle *intr_handle, int index)
 	return ret;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_dpaa2_intr_disable)
 int rte_dpaa2_intr_disable(struct rte_intr_handle *intr_handle, int index)
 {
 	struct vfio_irq_set *irq_set;

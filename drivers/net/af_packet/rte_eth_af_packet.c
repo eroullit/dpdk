@@ -426,7 +426,7 @@ packet_drop_count(int sockfd)
 }
 
 static int
-eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
+eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats, struct eth_queue_stats *qstats)
 {
 	unsigned int i;
 	unsigned long rx_total = 0, rx_dropped_total = 0, rx_nombuf_total = 0;
@@ -448,11 +448,12 @@ eth_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 		tx_err_total += internal->tx_queue[i].err_pkts;
 		tx_bytes_total += internal->tx_queue[i].tx_bytes;
 
-		if (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
-			stats->q_ipackets[i] = internal->rx_queue[i].rx_pkts;
-			stats->q_ibytes[i] = internal->rx_queue[i].rx_bytes;
-			stats->q_opackets[i] = internal->tx_queue[i].tx_pkts;
-			stats->q_obytes[i] = internal->tx_queue[i].tx_bytes;
+		if (qstats != NULL && i < RTE_ETHDEV_QUEUE_STAT_CNTRS) {
+			qstats->q_ipackets[i] = internal->rx_queue[i].rx_pkts;
+			qstats->q_ibytes[i] = internal->rx_queue[i].rx_bytes;
+			qstats->q_opackets[i] = internal->tx_queue[i].tx_pkts;
+			qstats->q_obytes[i] = internal->tx_queue[i].tx_bytes;
+			qstats->q_errors[i] = internal->rx_queue[i].rx_nombuf;
 		}
 	}
 
@@ -525,7 +526,7 @@ eth_dev_close(struct rte_eth_dev *dev)
 		rte_free(internals->rx_queue[q].rd);
 		rte_free(internals->tx_queue[q].rd);
 	}
-	free(internals->if_name);
+	rte_free(internals->if_name);
 	rte_free(internals->rx_queue);
 	rte_free(internals->tx_queue);
 
@@ -875,9 +876,10 @@ rte_pmd_init_internals(struct rte_vdev_device *dev,
 		PMD_LOG_ERRNO(ERR, "%s: ioctl failed (SIOCGIFINDEX)", name);
 		goto free_internals;
 	}
-	(*internals)->if_name = strdup(pair->value);
+	(*internals)->if_name = rte_malloc_socket(name, ifnamelen + 1, 0, numa_node);
 	if ((*internals)->if_name == NULL)
 		goto free_internals;
+	strlcpy((*internals)->if_name, pair->value, ifnamelen + 1);
 	(*internals)->if_index = ifr.ifr_ifindex;
 
 	if (ioctl(sockfd, SIOCGIFHWADDR, &ifr) == -1) {
@@ -1063,7 +1065,7 @@ error:
 free_internals:
 	rte_free((*internals)->rx_queue);
 	rte_free((*internals)->tx_queue);
-	free((*internals)->if_name);
+	rte_free((*internals)->if_name);
 	rte_free(*internals);
 	return -1;
 }
@@ -1167,11 +1169,16 @@ rte_eth_from_packet(struct rte_vdev_device *dev,
 		return -1;
 	}
 
-	PMD_LOG(INFO, "%s: AF_PACKET MMAP parameters:", name);
-	PMD_LOG(INFO, "%s:\tblock size %d", name, blocksize);
-	PMD_LOG(INFO, "%s:\tblock count %d", name, blockcount);
-	PMD_LOG(INFO, "%s:\tframe size %d", name, framesize);
-	PMD_LOG(INFO, "%s:\tframe count %d", name, framecount);
+	PMD_LOG(DEBUG, "%s: AF_PACKET MMAP parameters:", name);
+	PMD_LOG(DEBUG, "%s:\tblock size %d", name, blocksize);
+	PMD_LOG(DEBUG, "%s:\tblock count %d", name, blockcount);
+	PMD_LOG(DEBUG, "%s:\tframe size %d", name, framesize);
+	PMD_LOG(DEBUG, "%s:\tframe count %d", name, framecount);
+	PMD_LOG(DEBUG, "%s:\tqdisc bypass %d", name, qdisc_bypass);
+	if (fanout_mode)
+		PMD_LOG(DEBUG, "%s:\tfanout mode %s", name, fanout_mode);
+	else
+		PMD_LOG(DEBUG, "%s:\tfanout mode %s", name, "default PACKET_FANOUT_HASH");
 
 	if (rte_pmd_init_internals(dev, *sockfd, qpairs,
 				   blocksize, blockcount,
@@ -1274,4 +1281,5 @@ RTE_PMD_REGISTER_PARAM_STRING(net_af_packet,
 	"blocksz=<int> "
 	"framesz=<int> "
 	"framecnt=<int> "
-	"qdisc_bypass=<0|1>");
+	"qdisc_bypass=<0|1> "
+	"fanout_mode=<hash|lb|cpu|rollover|rnd|qm>");

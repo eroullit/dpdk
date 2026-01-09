@@ -103,22 +103,17 @@ from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
-from pathlib import Path
 from types import MethodType
 from typing import ClassVar, Protocol, Union
 
 from framework.config.test_run import TestRunConfiguration
 from framework.context import Context, init_ctx
-from framework.exception import (
-    InternalError,
-    SkippedTestException,
-    TestCaseVerifyError,
-)
+from framework.exception import InternalError, SkippedTestException, TestCaseVerifyError
 from framework.logger import DTSLogger, get_dts_logger
 from framework.remote_session.dpdk import DPDKBuildEnvironment, DPDKRuntimeEnvironment
 from framework.settings import SETTINGS
-from framework.test_result import BaseResult, Result, TestCaseResult, TestRunResult, TestSuiteResult
-from framework.test_suite import TestCase, TestSuite
+from framework.test_result import Result, ResultNode, TestRunResult
+from framework.test_suite import BaseConfig, TestCase, TestCaseType, TestSuite
 from framework.testbed_model.capability import (
     Capability,
     get_supported_capabilities,
@@ -128,7 +123,7 @@ from framework.testbed_model.node import Node
 from framework.testbed_model.topology import PortLink, Topology
 from framework.testbed_model.traffic_generator import create_traffic_generator
 
-TestScenario = tuple[type[TestSuite], deque[type[TestCase]]]
+TestScenario = tuple[type[TestSuite], BaseConfig, deque[type[TestCase]]]
 
 
 class TestRun:
@@ -166,7 +161,7 @@ class TestRun:
     config: TestRunConfiguration
     logger: DTSLogger
 
-    state: "State"
+    state: Union["State", None]
     ctx: Context
     result: TestRunResult
     selected_tests: list[TestScenario]
@@ -176,11 +171,18 @@ class TestRun:
     remaining_test_cases: deque[type[TestCase]]
     supported_capabilities: set[Capability]
 
-    def __init__(self, config: TestRunConfiguration, nodes: Iterable[Node], result: TestRunResult):
+    def __init__(
+        self,
+        config: TestRunConfiguration,
+        tests_config: dict[str, BaseConfig],
+        nodes: Iterable[Node],
+        result: TestRunResult,
+    ) -> None:
         """Test run constructor.
 
         Args:
             config: The test run's own configuration.
+            tests_config: The test run's test suites configurations.
             nodes: A reference to all the available nodes.
             result: A reference to the test run result object.
         """
@@ -197,31 +199,49 @@ class TestRun:
 
         dpdk_build_env = DPDKBuildEnvironment(config.dpdk.build, sut_node)
         dpdk_runtime_env = DPDKRuntimeEnvironment(config.dpdk, sut_node, dpdk_build_env)
-        traffic_generator = create_traffic_generator(config.traffic_generator, tg_node)
 
-        self.ctx = Context(sut_node, tg_node, topology, dpdk_runtime_env, traffic_generator)
+        func_traffic_generator = (
+            create_traffic_generator(config.func_traffic_generator, tg_node)
+            if config.func and config.func_traffic_generator
+            else None
+        )
+        perf_traffic_generator = (
+            create_traffic_generator(config.perf_traffic_generator, tg_node)
+            if config.perf and config.perf_traffic_generator
+            else None
+        )
+
+        self.ctx = Context(
+            sut_node,
+            tg_node,
+            topology,
+            dpdk_build_env,
+            dpdk_runtime_env,
+            func_traffic_generator,
+            perf_traffic_generator,
+        )
         self.result = result
-        self.selected_tests = list(self.config.filter_tests())
+        self.selected_tests = list(self.config.filter_tests(tests_config))
         self.blocked = False
         self.remaining_tests = deque()
         self.remaining_test_cases = deque()
         self.supported_capabilities = set()
 
-        self.state = TestRunSetup(self, self.result)
+        self.state = TestRunSetup(self, result)
 
     @cached_property
     def required_capabilities(self) -> set[Capability]:
         """The capabilities required to run this test run in its totality."""
         caps = set()
 
-        for test_suite, test_cases in self.selected_tests:
+        for test_suite, _, test_cases in self.selected_tests:
             caps.update(test_suite.required_capabilities)
             for test_case in test_cases:
                 caps.update(test_case.required_capabilities)
 
         return caps
 
-    def spin(self):
+    def spin(self) -> None:
         """Spin the internal state machine that executes the test run."""
         self.logger.info(f"Running test run with SUT '{self.ctx.sut_node.name}'.")
 
@@ -251,13 +271,13 @@ class State(Protocol):
 
     logger_name: ClassVar[str]
     test_run: TestRun
-    result: BaseResult
+    result: TestRunResult | ResultNode
 
-    def before(self):
+    def before(self) -> None:
         """Hook before the state is processed."""
-        self.logger.set_stage(self.logger_name, self.log_file_path)
+        self.logger.set_stage(self.logger_name)
 
-    def after(self):
+    def after(self) -> None:
         """Hook after the state is processed."""
         return
 
@@ -270,26 +290,15 @@ class State(Protocol):
         """A reference to the root logger."""
         return get_dts_logger()
 
-    def get_log_file_name(self) -> str | None:
-        """Name of the log file for this state."""
-        return None
-
-    @property
-    def log_file_path(self) -> Path | None:
-        """Path to the log file for this state."""
-        if file_name := self.get_log_file_name():
-            return Path(SETTINGS.output_dir, file_name)
-        return None
-
     def next(self) -> Union["State", None]:
         """Next state."""
 
-    def on_error(self, ex: Exception) -> Union["State", None]:
+    def on_error(self, ex: BaseException) -> Union["State", None]:
         """Next state on error."""
 
-    def handle_exception(self, ex: Exception) -> Union["State", None]:
+    def handle_exception(self, ex: BaseException) -> Union["State", None]:
         """Handles an exception raised by `next`."""
-        next_state = self.on_error(ex)
+        next_state = self.on_error(Exception(ex))
 
         match ex:
             case InternalError():
@@ -333,24 +342,36 @@ class TestRunSetup(State):
         test_run.init_random_seed()
         test_run.remaining_tests = deque(test_run.selected_tests)
 
-        test_run.ctx.dpdk.setup(test_run.ctx.topology.sut_ports)
-        test_run.ctx.tg.setup(test_run.ctx.topology.tg_ports)
+        test_run.ctx.sut_node.setup()
+        test_run.ctx.tg_node.setup()
+        test_run.ctx.dpdk.setup()
+        test_run.ctx.topology.setup()
 
-        self.result.ports = test_run.ctx.topology.sut_ports + test_run.ctx.topology.tg_ports
-        self.result.sut_info = test_run.ctx.sut_node.node_info
-        self.result.dpdk_build_info = test_run.ctx.dpdk.build.get_dpdk_build_info()
+        if test_run.config.use_virtual_functions:
+            test_run.ctx.topology.instantiate_vf_ports()
+
+        test_run.ctx.topology.configure_ports("sut", "dpdk")
+        if test_run.ctx.func_tg:
+            test_run.ctx.func_tg.setup(test_run.ctx.topology)
+        if test_run.ctx.perf_tg:
+            test_run.ctx.perf_tg.setup(test_run.ctx.topology)
+
+        self.result.ports = [
+            port.to_dict()
+            for port in test_run.ctx.topology.sut_ports + test_run.ctx.topology.tg_ports
+        ]
+        self.result.sut_session_info = test_run.ctx.sut_node.node_info
+        self.result.dpdk_build_info = test_run.ctx.dpdk_build.get_dpdk_build_info()
 
         self.logger.debug(f"Found capabilities to check: {test_run.required_capabilities}")
         test_run.supported_capabilities = get_supported_capabilities(
             test_run.ctx.sut_node, test_run.ctx.topology, test_run.required_capabilities
         )
-
-        self.result.update_setup(Result.PASS)
         return TestRunExecution(test_run, self.result)
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update_setup(Result.ERROR, ex)
+        self.test_run.result.add_error(ex)
         return TestRunTeardown(self.test_run, self.result)
 
 
@@ -371,12 +392,14 @@ class TestRunExecution(State):
         """Next state."""
         test_run = self.test_run
         try:
-            test_suite_class, test_run.remaining_test_cases = test_run.remaining_tests.popleft()
-            test_suite = test_suite_class()
-            test_suite_result = test_run.result.add_test_suite(test_suite.name)
+            test_suite_class, test_config, test_run.remaining_test_cases = (
+                test_run.remaining_tests.popleft()
+            )
 
+            test_suite = test_suite_class(test_config)
+            test_suite_result = self.result.test_suites.add_child(test_suite.name)
             if test_run.blocked:
-                test_suite_result.update_setup(Result.BLOCK)
+                test_suite_result.mark_result_as(Result.BLOCK)
                 self.logger.warning(f"Test suite '{test_suite.name}' was BLOCKED.")
                 # Continue to allow the rest to mark as blocked, no need to setup.
                 return TestSuiteExecution(test_run, test_suite, test_suite_result)
@@ -384,21 +407,21 @@ class TestRunExecution(State):
             try:
                 test_if_supported(test_suite_class, test_run.supported_capabilities)
             except SkippedTestException as e:
-                self.logger.info(
-                    f"Test suite '{test_suite.name}' execution SKIPPED with reason: {e}"
-                )
-                test_suite_result.update_setup(Result.SKIP)
+                self.logger.info(f"Test suite '{test_suite.name}' execution SKIPPED: {e}")
+                test_suite_result.mark_result_as(Result.SKIP, e)
+
                 return self
 
             test_run.ctx.local.reset()
+            test_run.ctx.local.current_test_suite = test_suite
             return TestSuiteSetup(test_run, test_suite, test_suite_result)
         except IndexError:
             # No more test suites. We are done here.
             return TestRunTeardown(test_run, self.result)
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update_setup(Result.ERROR, ex)
+        self.test_run.result.add_error(ex)
         return TestRunTeardown(self.test_run, self.result)
 
 
@@ -417,14 +440,23 @@ class TestRunTeardown(State):
 
     def next(self) -> State | None:
         """Next state."""
-        self.test_run.ctx.tg.teardown(self.test_run.ctx.topology.tg_ports)
-        self.test_run.ctx.dpdk.teardown(self.test_run.ctx.topology.sut_ports)
-        self.result.update_teardown(Result.PASS)
+        if self.test_run.config.use_virtual_functions:
+            self.test_run.ctx.topology.delete_vf_ports()
+
+        self.test_run.ctx.shell_pool.terminate_current_pool()
+        if self.test_run.ctx.func_tg and self.test_run.ctx.func_tg.is_setup:
+            self.test_run.ctx.func_tg.teardown()
+        if self.test_run.ctx.perf_tg and self.test_run.ctx.perf_tg.is_setup:
+            self.test_run.ctx.perf_tg.teardown()
+        self.test_run.ctx.topology.teardown()
+        self.test_run.ctx.dpdk.teardown()
+        self.test_run.ctx.tg_node.teardown()
+        self.test_run.ctx.sut_node.teardown()
         return None
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update_teardown(Result.ERROR, ex)
+        self.test_run.result.add_error(ex)
         self.logger.warning(
             "The environment may have not been cleaned up correctly. "
             "The subsequent tests could be affected!"
@@ -438,11 +470,7 @@ class TestSuiteState(State):
 
     test_run: TestRun
     test_suite: TestSuite
-    result: TestSuiteResult
-
-    def get_log_file_name(self) -> str | None:
-        """Get the log file name."""
-        return self.test_suite.name
+    result: ResultNode
 
 
 @dataclass
@@ -451,6 +479,11 @@ class TestSuiteSetup(TestSuiteState):
 
     logger_name: ClassVar[str] = "test_suite_setup"
 
+    def before(self) -> None:
+        """Hook before the state is processed."""
+        super().before()
+        self.logger.set_custom_log_file(self.test_suite.name)
+
     @property
     def description(self) -> str:
         """State description."""
@@ -458,13 +491,21 @@ class TestSuiteSetup(TestSuiteState):
 
     def next(self) -> State | None:
         """Next state."""
-        self.test_suite.set_up_suite()
-        self.result.update_setup(Result.PASS)
-        return TestSuiteExecution(self.test_run, self.test_suite, self.result)
+        self.test_run.ctx.shell_pool.start_new_pool()
+        sut_ports_drivers = self.test_suite.sut_ports_drivers or "dpdk"
+        self.test_run.ctx.topology.configure_ports("sut", sut_ports_drivers)
 
-    def on_error(self, ex: Exception) -> State | None:
+        self.test_suite.set_up_suite()
+        self.result.mark_step_as("setup", Result.PASS)
+        return TestSuiteExecution(
+            test_run=self.test_run,
+            test_suite=self.test_suite,
+            result=self.result,
+        )
+
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update_setup(Result.ERROR, ex)
+        self.result.mark_step_as("setup", Result.ERROR, ex)
         return TestSuiteTeardown(self.test_run, self.test_suite, self.result)
 
 
@@ -483,34 +524,41 @@ class TestSuiteExecution(TestSuiteState):
         """Next state."""
         try:
             test_case = self.test_run.remaining_test_cases.popleft()
-            test_case_result = self.result.add_test_case(test_case.name)
-
+            test_case_result = self.result.add_child(test_case.name)
             if self.test_run.blocked:
-                test_case_result.update_setup(Result.BLOCK)
+                test_case_result.mark_result_as(Result.BLOCK)
                 self.logger.warning(f"Test case '{test_case.name}' execution was BLOCKED.")
-                return TestSuiteExecution(self.test_run, self.test_suite, self.result)
+                return TestSuiteExecution(
+                    test_run=self.test_run,
+                    test_suite=self.test_suite,
+                    result=self.result,
+                )
 
             try:
                 test_if_supported(test_case, self.test_run.supported_capabilities)
             except SkippedTestException as e:
-                self.logger.info(f"Test case '{test_case.name}' execution SKIPPED with reason: {e}")
-                test_case_result.update_setup(Result.SKIP)
+                self.logger.info(f"Test case '{test_case.name}' execution SKIPPED: {e}")
+                test_case_result.mark_result_as(Result.SKIP, e)
                 return self
 
+            self.test_run.ctx.local.current_test_case = test_case
             return TestCaseSetup(
-                self.test_run, self.test_suite, self.result, test_case, test_case_result
+                self.test_run,
+                self.test_suite,
+                test_case,
+                test_case_result,
             )
         except IndexError:
-            if self.test_run.blocked and self.result.setup_result.result is Result.BLOCK:
+            if self.test_run.blocked and self.result.get_overall_result() == Result.BLOCK:
                 # Skip teardown if the test case AND suite were blocked.
                 return TestRunExecution(self.test_run, self.test_run.result)
             else:
                 # No more test cases. We are done here.
                 return TestSuiteTeardown(self.test_run, self.test_suite, self.result)
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update_setup(Result.ERROR, ex)
+        self.test_run.result.add_error(ex)
         return TestSuiteTeardown(self.test_run, self.test_suite, self.result)
 
 
@@ -529,26 +577,31 @@ class TestSuiteTeardown(TestSuiteState):
         """Next state."""
         self.test_suite.tear_down_suite()
         self.test_run.ctx.dpdk.kill_cleanup_dpdk_apps()
-        self.result.update_teardown(Result.PASS)
+        self.test_run.ctx.shell_pool.terminate_current_pool()
+        self.result.mark_step_as("teardown", Result.PASS)
         return TestRunExecution(self.test_run, self.test_run.result)
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
         self.logger.warning(
             "The environment may have not been cleaned up correctly. "
             "The subsequent tests could be affected!"
         )
-        self.result.update_teardown(Result.ERROR, ex)
+        self.result.mark_step_as("teardown", Result.ERROR, ex)
         return TestRunExecution(self.test_run, self.test_run.result)
 
-    def after(self):
+    def after(self) -> None:
         """Hook after state is processed."""
-        if self.result.get_errors() and self.test_suite.is_blocking:
+        if (
+            self.result.get_overall_result() in [Result.FAIL, Result.ERROR]
+            and self.test_suite.is_blocking
+        ):
             self.logger.warning(
                 f"An error occurred within blocking {self.test_suite.name}. "
                 "The remaining test suites will be skipped."
             )
             self.test_run.blocked = True
+        self.logger.set_custom_log_file(None)
 
 
 @dataclass
@@ -557,13 +610,8 @@ class TestCaseState(State):
 
     test_run: TestRun
     test_suite: TestSuite
-    test_suite_result: TestSuiteResult
     test_case: type[TestCase]
-    result: TestCaseResult
-
-    def get_log_file_name(self) -> str | None:
-        """Get the log file name."""
-        return self.test_suite.name
+    result: ResultNode
 
 
 @dataclass
@@ -579,22 +627,51 @@ class TestCaseSetup(TestCaseState):
 
     def next(self) -> State | None:
         """Next state."""
+        self.test_run.ctx.shell_pool.start_new_pool()
+        sut_ports_drivers = (
+            self.test_case.sut_ports_drivers or self.test_suite.sut_ports_drivers or "dpdk"
+        )
+        self.test_run.ctx.topology.configure_ports("sut", sut_ports_drivers)
+
+        if (
+            self.test_run.ctx.perf_tg
+            and self.test_run.ctx.perf_tg.is_setup
+            and self.test_case.test_type is TestCaseType.FUNCTIONAL
+        ):
+            self.test_run.ctx.perf_tg.teardown()
+            self.test_run.ctx.topology.configure_ports("tg", "kernel")
+            if self.test_run.ctx.func_tg and not self.test_run.ctx.func_tg.is_setup:
+                self.test_run.ctx.func_tg.setup(self.test_run.ctx.topology)
+
+        if (
+            self.test_run.ctx.func_tg
+            and self.test_run.ctx.func_tg.is_setup
+            and self.test_case.test_type is TestCaseType.PERFORMANCE
+        ):
+            self.test_run.ctx.func_tg.teardown()
+            self.test_run.ctx.topology.configure_ports("tg", "dpdk")
+            if self.test_run.ctx.perf_tg and not self.test_run.ctx.perf_tg.is_setup:
+                self.test_run.ctx.perf_tg.setup(self.test_run.ctx.topology)
+
         self.test_suite.set_up_test_case()
-        self.result.update_setup(Result.PASS)
+        self.result.mark_step_as("setup", Result.PASS)
         return TestCaseExecution(
             self.test_run,
             self.test_suite,
-            self.test_suite_result,
             self.test_case,
             self.result,
             SETTINGS.re_run,
         )
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update_setup(Result.ERROR, ex)
+        self.result.mark_step_as("setup", Result.ERROR, ex)
+        self.result.mark_result_as(Result.BLOCK)
         return TestCaseTeardown(
-            self.test_run, self.test_suite, self.test_suite_result, self.test_case, self.result
+            self.test_run,
+            self.test_suite,
+            self.test_case,
+            self.result,
         )
 
 
@@ -624,20 +701,29 @@ class TestCaseExecution(TestCaseState):
                 self.logger.info(f"Re-attempting. {self.reattempts_left} attempts left.")
                 return self
 
-            self.result.update(Result.FAIL, e)
+            self.result.mark_result_as(Result.FAIL, e)
+        except SkippedTestException as e:
+            self.logger.info(f"{self.description.capitalize()} SKIPPED: {e}")
+            self.result.mark_result_as(Result.SKIP, e)
         else:
-            self.result.update(Result.PASS)
+            self.result.mark_result_as(Result.PASS)
             self.logger.info(f"{self.description.capitalize()} PASSED.")
 
         return TestCaseTeardown(
-            self.test_run, self.test_suite, self.test_suite_result, self.test_case, self.result
+            self.test_run,
+            self.test_suite,
+            self.test_case,
+            self.result,
         )
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
-        self.result.update(Result.ERROR, ex)
+        self.result.mark_result_as(Result.ERROR, ex)
         return TestCaseTeardown(
-            self.test_run, self.test_suite, self.test_suite_result, self.test_case, self.result
+            self.test_run,
+            self.test_suite,
+            self.test_case,
+            self.result,
         )
 
 
@@ -655,14 +741,26 @@ class TestCaseTeardown(TestCaseState):
     def next(self) -> State | None:
         """Next state."""
         self.test_suite.tear_down_test_case()
-        self.result.update_teardown(Result.PASS)
-        return TestSuiteExecution(self.test_run, self.test_suite, self.test_suite_result)
+        self.test_run.ctx.shell_pool.terminate_current_pool()
+        self.result.mark_step_as("teardown", Result.PASS)
+        assert self.result.parent is not None
+        return TestSuiteExecution(
+            test_run=self.test_run,
+            test_suite=self.test_suite,
+            result=self.result.parent,
+        )
 
-    def on_error(self, ex: Exception) -> State | None:
+    def on_error(self, ex: BaseException) -> State | None:
         """Next state on error."""
         self.logger.warning(
             "The environment may have not been cleaned up correctly. "
             "The subsequent tests could be affected!"
         )
-        self.result.update_teardown(Result.ERROR, ex)
-        return TestSuiteExecution(self.test_run, self.test_suite, self.test_suite_result)
+        self.result.mark_step_as("teardown", Result.ERROR, ex)
+
+        assert self.result.parent is not None
+        return TestSuiteExecution(
+            test_run=self.test_run,
+            test_suite=self.test_suite,
+            result=self.result.parent,
+        )

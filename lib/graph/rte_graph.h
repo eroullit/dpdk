@@ -22,6 +22,7 @@
 #include <stdio.h>
 
 #include <rte_common.h>
+#include <rte_compat.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -150,6 +151,16 @@ typedef int (*rte_graph_cluster_stats_cb_t)(bool is_first, bool is_last,
 	     void *cookie, const struct rte_graph_cluster_node_stats *stats);
 
 /**
+ * Graph dispatch enqueue notification callback.
+ *
+ * @param graph
+ *   Current graph.
+ * @param cb_priv
+ *   Opaque argument given to the callback.
+ */
+typedef void (*packets_enqueued_cb)(struct rte_graph *graph, uint64_t cb_priv);
+
+/**
  * Structure to hold configuration parameters for creating the graph.
  *
  * @see rte_graph_create()
@@ -171,6 +182,8 @@ struct rte_graph_param {
 		struct {
 			uint32_t wq_size_max; /**< Maximum size of workqueue for dispatch model. */
 			uint32_t mp_capacity; /**< Capacity of memory pool for dispatch model. */
+			packets_enqueued_cb notify_cb;
+			uint64_t cb_priv;
 		} dispatch;
 	};
 };
@@ -660,6 +673,20 @@ rte_node_is_invalid(rte_node_t id)
 {
 	return (id == RTE_NODE_ID_INVALID);
 }
+
+/**
+ * Release the memory allocated for a node created using RTE_NODE_REGISTER or rte_node_clone,
+ * if it is not linked to any graphs.
+ *
+ * @param id
+ *   Node id to check.
+ *
+ * @return
+ *   - 0: Success.
+ *   -<0: Failure.
+ */
+__rte_experimental
+int rte_node_free(rte_node_t id);
 
 /**
  * Test the validity of edge id.

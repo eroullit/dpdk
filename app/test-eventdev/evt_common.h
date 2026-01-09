@@ -39,11 +39,12 @@
 
 enum evt_prod_type {
 	EVT_PROD_TYPE_NONE,
-	EVT_PROD_TYPE_SYNT,          /* Producer type Synthetic i.e. CPU. */
-	EVT_PROD_TYPE_ETH_RX_ADPTR,  /* Producer type Eth Rx Adapter. */
+	EVT_PROD_TYPE_SYNT,		  /* Producer type Synthetic i.e. CPU. */
+	EVT_PROD_TYPE_ETH_RX_ADPTR,	  /* Producer type Eth Rx Adapter. */
 	EVT_PROD_TYPE_EVENT_TIMER_ADPTR,  /* Producer type Timer Adapter. */
-	EVT_PROD_TYPE_EVENT_CRYPTO_ADPTR,  /* Producer type Crypto Adapter. */
-	EVT_PROD_TYPE_EVENT_DMA_ADPTR,  /* Producer type DMA Adapter. */
+	EVT_PROD_TYPE_EVENT_CRYPTO_ADPTR, /* Producer type Crypto Adapter. */
+	EVT_PROD_TYPE_EVENT_DMA_ADPTR,	  /* Producer type DMA Adapter. */
+	EVT_PROD_TYPE_EVENT_VECTOR_ADPTR, /* Producer type Vector adapter. */
 	EVT_PROD_TYPE_MAX,
 };
 
@@ -136,6 +137,15 @@ evt_has_flow_id(uint8_t dev_id)
 	rte_event_dev_info_get(dev_id, &dev_info);
 	return (dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_CARRY_FLOW_ID) ?
 			true : false;
+}
+
+static inline bool
+evt_is_maintenance_free(uint8_t dev_id)
+{
+	struct rte_event_dev_info dev_info;
+
+	rte_event_dev_info_get(dev_id, &dev_info);
+	return dev_info.event_dev_cap & RTE_EVENT_DEV_CAP_MAINTENANCE_FREE;
 }
 
 static inline int

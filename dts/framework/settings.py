@@ -14,15 +14,20 @@ followed by the default value defined in this module.
 
 The command line arguments along with the supported environment variables are:
 
-.. option:: --test-runs-config-file
-.. envvar:: DTS_TEST_RUNS_CFG_FILE
+.. option:: --test-run-config-file
+.. envvar:: DTS_TEST_RUN_CFG_FILE
 
-    The path to the YAML configuration file of the test runs.
+    The path to the YAML configuration file of the test run.
 
 .. option:: --nodes-config-file
 .. envvar:: DTS_NODES_CFG_FILE
 
     The path to the YAML configuration file of the nodes.
+
+.. option:: --tests-config-file
+.. envvar:: DTS_TESTS_CFG_FILE
+
+    The path to the YAML configuration file of the test suites.
 
 .. option:: --output-dir, --output
 .. envvar:: DTS_OUTPUT_DIR
@@ -103,7 +108,7 @@ import sys
 from argparse import Action, ArgumentDefaultsHelpFormatter, _get_action_name
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NoReturn
 
 from pydantic import ValidationError
 
@@ -125,9 +130,17 @@ class Settings:
     """
 
     #:
-    test_runs_config_path: Path = Path(__file__).parent.parent.joinpath("test_runs.yaml")
+    test_run_config_path: Path = Path(__file__).parent.parent.joinpath(
+        "configurations/test_run.yaml"
+    )
     #:
-    nodes_config_path: Path = Path(__file__).parent.parent.joinpath("nodes.yaml")
+    nodes_config_path: Path = Path(__file__).parent.parent.joinpath("configurations/nodes.yaml")
+    #:
+    tests_config_path: Path | None = (
+        Path(__file__).parent.parent.joinpath("configurations/tests_config.yaml")
+        if os.path.exists("configurations/tests_config.yaml")
+        else None
+    )
     #:
     output_dir: str = "output"
     #:
@@ -167,7 +180,7 @@ def _make_env_var_name(action: Action, env_var_name: str | None) -> str:
     return env_var_name
 
 
-def _get_env_var_name(action: Action) -> str | None:
+def _get_env_var_name(action: Action | None) -> str | None:
     """Get the environment variable name of the given action."""
     return getattr(action, _ENV_VAR_NAME_ATTR, None)
 
@@ -230,12 +243,15 @@ class _DTSArgumentParser(argparse.ArgumentParser):
 
         return action
 
-    def error(self, message):
+    def error(self, message) -> NoReturn:
         """Augments :meth:`~argparse.ArgumentParser.error` with environment variable awareness."""
         for action in self._actions:
             if _is_from_env(action):
                 action_name = _get_action_name(action)
                 env_var_name = _get_env_var_name(action)
+                assert (
+                    env_var_name is not None
+                ), "Action was set from environment, but no environment variable name was found."
                 env_var_value = os.environ.get(env_var_name)
 
                 message = message.replace(
@@ -250,7 +266,7 @@ class _DTSArgumentParser(argparse.ArgumentParser):
 class _EnvVarHelpFormatter(ArgumentDefaultsHelpFormatter):
     """Custom formatter to add environment variables to the help page."""
 
-    def _get_help_string(self, action):
+    def _get_help_string(self, action: Action) -> str | None:
         """Overrides :meth:`ArgumentDefaultsHelpFormatter._get_help_string`."""
         help = super()._get_help_string(action)
 
@@ -323,14 +339,14 @@ def _get_parser() -> _DTSArgumentParser:
     )
 
     action = parser.add_argument(
-        "--test-runs-config-file",
-        default=SETTINGS.test_runs_config_path,
+        "--test-run-config-file",
+        default=SETTINGS.test_run_config_path,
         type=Path,
         help="The configuration file that describes the test cases and DPDK build options.",
         metavar="FILE_PATH",
-        dest="test_runs_config_path",
+        dest="test_run_config_path",
     )
-    _add_env_var_to_action(action, "TEST_RUNS_CFG_FILE")
+    _add_env_var_to_action(action, "TEST_RUN_CFG_FILE")
 
     action = parser.add_argument(
         "--nodes-config-file",
@@ -341,6 +357,16 @@ def _get_parser() -> _DTSArgumentParser:
         dest="nodes_config_path",
     )
     _add_env_var_to_action(action, "NODES_CFG_FILE")
+
+    action = parser.add_argument(
+        "--tests-config-file",
+        default=SETTINGS.tests_config_path,
+        type=Path,
+        help="Configuration file used to override variable values inside specific test suites.",
+        metavar="FILE_PATH",
+        dest="tests_config_path",
+    )
+    _add_env_var_to_action(action, "TESTS_CFG_FILE")
 
     action = parser.add_argument(
         "--output-dir",

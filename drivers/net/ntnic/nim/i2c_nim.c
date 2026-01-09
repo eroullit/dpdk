@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -13,7 +12,7 @@
 #include "qsfp_registers.h"
 #include "nim_defines.h"
 
-int nim_agx_read_id(struct nim_i2c_ctx *ctx);
+static int nim_agx_read_id(struct nim_i2c_ctx *ctx);
 static void nim_agx_read(struct nim_i2c_ctx *ctx, uint8_t dev_addr, uint8_t reg_addr,
 	uint8_t data_len, void *p_data);
 static void nim_agx_write(struct nim_i2c_ctx *ctx, uint8_t dev_addr, uint8_t reg_addr,
@@ -123,8 +122,7 @@ static int nim_read_write_data_lin(nim_i2c_ctx_p ctx, bool m_page_addressing, ui
 		 * Find out how much can be read from the current block in case of
 		 * single byte access
 		 */
-		if (multi_byte == 1)
-			max_seq_cnt = block_size - (lin_addr % block_size);
+		max_seq_cnt = block_size - (lin_addr % block_size);
 
 		if (m_page_addressing) {
 			if (lin_addr >= 128) {	/* Only page setup above this address */
@@ -302,10 +300,10 @@ static int qsfp_nim_state_build(nim_i2c_ctx_t *ctx, sfp_nim_state_t *state)
 {
 	int res = 0;	/* unused due to no readings from HW */
 
-	assert(ctx && state);
-	assert(ctx->nim_id != NT_NIM_UNKNOWN && "Nim is not initialized");
+	RTE_ASSERT(ctx && state);
+	RTE_ASSERT(ctx->nim_id != NT_NIM_UNKNOWN && "Nim is not initialized");
 
-	(void)memset(state, 0, sizeof(*state));
+	memset(state, 0, sizeof(*state));
 
 	switch (ctx->nim_id) {
 	case 12U:
@@ -328,12 +326,12 @@ static int qsfp_nim_state_build(nim_i2c_ctx_t *ctx, sfp_nim_state_t *state)
 	return res;
 }
 
-int nim_state_build(nim_i2c_ctx_t *ctx, sfp_nim_state_t *state)
+int nthw_nim_state_build(nim_i2c_ctx_t *ctx, sfp_nim_state_t *state)
 {
 	return qsfp_nim_state_build(ctx, state);
 }
 
-const char *nim_id_to_text(uint8_t nim_id)
+const char *nthw_nim_id_to_text(uint8_t nim_id)
 {
 	switch (nim_id) {
 	case 0x0:
@@ -356,7 +354,7 @@ const char *nim_id_to_text(uint8_t nim_id)
 /*
  * Disable laser for specific lane or all lanes
  */
-int nim_qsfp_plus_nim_set_tx_laser_disable(nim_i2c_ctx_p ctx, bool disable, int lane_idx)
+int nthw_nim_qsfp_plus_nim_set_tx_laser_disable(nim_i2c_ctx_p ctx, bool disable, int lane_idx)
 {
 	uint8_t value;
 	uint8_t mask;
@@ -419,7 +417,7 @@ static int qsfpplus_read_basic_data(nim_i2c_ctx_t *ctx)
 	const char *yes_no[2] = { "No", "Yes" };
 	(void)yes_no;
 	NT_LOG(DBG, NTNIC, "Instance %d: NIM id: %s (%d)", ctx->instance,
-		nim_id_to_text(ctx->nim_id), ctx->nim_id);
+		nthw_nim_id_to_text(ctx->nim_id), ctx->nim_id);
 
 	/* Read DMI options */
 	if (nim_read_write_data_lin(ctx, pg_addr, QSFP_DMI_OPTION_LIN_ADDR, sizeof(options),
@@ -628,7 +626,7 @@ static void qsfpplus_set_speed_mask(nim_i2c_ctx_p ctx)
 
 static void qsfpplus_construct(nim_i2c_ctx_p ctx, int8_t lane_idx)
 {
-	assert(lane_idx < 4);
+	RTE_ASSERT(lane_idx < 4);
 	ctx->specific_u.qsfp.qsfp28 = false;
 	ctx->lane_idx = lane_idx;
 	ctx->lane_count = 4;
@@ -705,7 +703,7 @@ static void qsfp28_wait_for_ready_after_reset(nim_i2c_ctx_p ctx)
 	 * Probably because access to the paged address space is required.
 	 */
 	if (!init_complete_flag_present) {
-		nt_os_wait_usec(500000);
+		nthw_os_wait_usec(500000);
 		return;
 	}
 
@@ -725,7 +723,7 @@ static void qsfp28_wait_for_ready_after_reset(nim_i2c_ctx_p ctx)
 			break;
 		}
 
-		nt_os_wait_usec(100000);/* 100 ms */
+		nthw_os_wait_usec(100000);/* 100 ms */
 		count++;
 	}
 }
@@ -788,7 +786,7 @@ static int qsfp28_preinit(nim_i2c_ctx_p ctx, int8_t lane_idx)
 	return res;
 }
 
-int construct_and_preinit_nim(nim_i2c_ctx_p ctx, void *extra)
+int nthw_construct_and_preinit_nim(nim_i2c_ctx_p ctx, void *extra)
 {
 	int res = i2c_nim_common_construct(ctx);
 
@@ -803,7 +801,7 @@ int construct_and_preinit_nim(nim_i2c_ctx_p ctx, void *extra)
 
 	default:
 		res = 1;
-		NT_LOG(ERR, NTHW, "NIM type %s is not supported.", nim_id_to_text(ctx->nim_id));
+		NT_LOG(ERR, NTHW, "NIM type %s is not supported", nthw_nim_id_to_text(ctx->nim_id));
 	}
 
 	return res;
@@ -815,7 +813,7 @@ int construct_and_preinit_nim(nim_i2c_ctx_p ctx, void *extra)
  * When cleared (= 0b), modules with power classes 5 to 7 must dissipate less
  * than 3.5W (but are not required to be fully functional). Default 0.
  */
-void qsfp28_set_high_power(nim_i2c_ctx_p ctx)
+void nthw_qsfp28_set_high_power(nim_i2c_ctx_p ctx)
 {
 	const uint16_t addr = 93;
 	uint8_t data;
@@ -834,7 +832,7 @@ void qsfp28_set_high_power(nim_i2c_ctx_p ctx)
  *  register must be avoided as this introduces I2C errors on NT200A01.
  */
 
-bool qsfp28_set_fec_enable(nim_i2c_ctx_p ctx, bool media_side_fec, bool host_side_fec)
+bool nthw_qsfp28_set_fec_enable(nim_i2c_ctx_p ctx, bool media_side_fec, bool host_side_fec)
 {
 	/*
 	 * If the current FEC state does not match the wanted and the FEC cannot be
@@ -878,11 +876,11 @@ bool qsfp28_set_fec_enable(nim_i2c_ctx_p ctx, bool media_side_fec, bool host_sid
 
 	write_data_lin(ctx, addr, sizeof(data), &data);
 	ctx->specific_u.qsfp.specific_u.qsfp28.media_side_fec_ena = media_side_fec;
-	ctx->specific_u.qsfp.specific_u.qsfp28.media_side_fec_ena = host_side_fec;
+	ctx->specific_u.qsfp.specific_u.qsfp28.host_side_fec_ena = host_side_fec;
 	return true;
 }
 
-void nim_agx_setup(struct nim_i2c_ctx *ctx, nthw_pcal6416a_t *p_io_nim, nthw_i2cm_t *p_nt_i2cm,
+void nthw_nim_agx_setup(struct nim_i2c_ctx *ctx, nthw_pcal6416a_t *p_io_nim, nthw_i2cm_t *p_nt_i2cm,
 	nthw_pca9849_t *p_ca9849)
 {
 	ctx->hwagx.p_nt_i2cm = p_nt_i2cm;
@@ -932,7 +930,7 @@ static void nim_agx_write(struct nim_i2c_ctx *ctx,
 	rte_spinlock_unlock(&p_nt_i2cm->i2cmmutex);
 }
 
-int nim_agx_read_id(struct nim_i2c_ctx *ctx)
+static int nim_agx_read_id(struct nim_i2c_ctx *ctx)
 {
 	nim_agx_read(ctx, 0xA0, 0, sizeof(ctx->nim_id), &ctx->nim_id);
 	return 0;

@@ -57,6 +57,7 @@ enum ena_admin_aq_feature_id {
 	ENA_ADMIN_EXTRA_PROPERTIES_STRINGS          = 5,
 	ENA_ADMIN_EXTRA_PROPERTIES_FLAGS            = 6,
 	ENA_ADMIN_MAX_QUEUES_EXT                    = 7,
+	ENA_ADMIN_FRAG_BYPASS                       = 8,
 	ENA_ADMIN_RSS_HASH_FUNCTION                 = 10,
 	ENA_ADMIN_STATELESS_OFFLOAD_CONFIG          = 11,
 	ENA_ADMIN_RSS_INDIRECTION_TABLE_CONFIG      = 12,
@@ -67,6 +68,7 @@ enum ena_admin_aq_feature_id {
 	ENA_ADMIN_LINK_CONFIG                       = 27,
 	ENA_ADMIN_HOST_ATTR_CONFIG                  = 28,
 	ENA_ADMIN_PHC_CONFIG                        = 29,
+	ENA_ADMIN_HW_TIMESTAMP                      = 31,
 	ENA_ADMIN_FEATURES_OPCODE_NUM               = 32,
 };
 
@@ -163,6 +165,26 @@ enum ena_admin_ena_srd_flags {
 	ENA_ADMIN_ENA_SRD_UDP_ENABLED               = BIT(1),
 	/* Bypass Rx UDP ordering */
 	ENA_ADMIN_ENA_SRD_UDP_ORDERING_BYPASS_ENABLED = BIT(2),
+};
+
+enum ena_admin_frag_bypass_feature_version {
+	/* Enable only */
+	ENA_ADMIN_FRAG_BYPASS_FEATURE_VERSION_0     = 0,
+};
+
+enum ena_admin_hw_timestamp_feature_version {
+	/* RX only - NONE/All Traffic */
+	ENA_ADMIN_HW_TIMESTAMP_FEATURE_VERSION_1    = 1,
+};
+
+enum ena_admin_hw_timestamp_tx_support {
+	ENA_ADMIN_HW_TIMESTAMP_TX_SUPPORT_NONE      = 0,
+	ENA_ADMIN_HW_TIMESTAMP_TX_SUPPORT_ALL       = 1,
+};
+
+enum ena_admin_hw_timestamp_rx_support {
+	ENA_ADMIN_HW_TIMESTAMP_RX_SUPPORT_NONE      = 0,
+	ENA_ADMIN_HW_TIMESTAMP_RX_SUPPORT_ALL       = 1,
 };
 
 struct ena_admin_aq_common_desc {
@@ -706,6 +728,35 @@ struct ena_admin_feature_llq_desc {
 	struct ena_admin_accel_mode_req accel_mode;
 };
 
+struct ena_admin_feature_hw_ts_desc {
+	/* HW timestamp version as defined in
+	 * enum ena_admin_hw_timestamp_feature_version,
+	 * used only for GET command as max supported HW timestamp version by
+	 * device.
+	 */
+	uint8_t version;
+
+	/* TX state
+	 * Used for GET command as device support indication
+	 * Used for SET command as enable/disable
+	 * Supported values from enum ena_admin_hw_timestamp_tx_support
+	 */
+	uint8_t tx;
+
+	/* RX state
+	 * Used for GET command as device support indication
+	 * Used for SET command as enable/disable
+	 * Supported values from enum ena_admin_hw_timestamp_rx_support
+	 */
+	uint8_t rx;
+};
+
+struct ena_admin_feature_frag_bypass_desc {
+	/* Enable frag_bypass */
+	uint8_t enable;
+
+	uint8_t reserved[3];
+};
 struct ena_admin_queue_ext_feature_fields {
 	uint32_t max_tx_sq_num;
 
@@ -1141,6 +1192,8 @@ struct ena_admin_get_feat_resp {
 
 		struct ena_admin_feature_phc_desc phc;
 
+		struct ena_admin_feature_hw_ts_desc hw_ts;
+
 		struct ena_admin_get_extra_properties_strings_desc extra_properties_strings;
 
 		struct ena_admin_get_extra_properties_flags_desc extra_properties_flags;
@@ -1180,6 +1233,11 @@ struct ena_admin_set_feat_cmd {
 
 		/* PHC configuration */
 		struct ena_admin_feature_phc_desc phc;
+
+		/* Fragment bypass configuration */
+		struct ena_admin_feature_frag_bypass_desc frag_bypass;
+
+		struct ena_admin_feature_hw_ts_desc hw_ts;
 	} u;
 };
 

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -89,8 +88,7 @@ int nthw_tsm_get_ts(nthw_tsm_t *p, uint64_t *p_ts)
 
 	val = ((((uint64_t)n_ts_hi) << 32UL) | n_ts_lo);
 
-	if (p_ts)
-		*p_ts = val;
+	*p_ts = val;
 
 	return 0;
 }
@@ -108,8 +106,7 @@ int nthw_tsm_get_time(nthw_tsm_t *p, uint64_t *p_time)
 
 	val = ((((uint64_t)n_time_hi) << 32UL) | n_time_lo);
 
-	if (p_time)
-		*p_time = val;
+	*p_time = val;
 
 	return 0;
 }

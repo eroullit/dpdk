@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -10,7 +9,7 @@
  */
 #define si5340_revd_register_t type_9563_si5340_nt200a02_u23_v5
 #define si5340_revd_registers data_9563_si5340_nt200a02_u23_v5
-#include "NT200A02_U23_Si5340_adr0_v5-Registers.h"
+#include "nt200a02_u23_si5340_adr0_v5_registers.h"
 static_assert(sizeof(type_9563_si5340_nt200a02_u23_v5) == sizeof(clk_profile_data_fmt2_t),
 	clk_profile_size_error_msg);
 static const int n_data_9563_si5340_nt200a02_u23_v5 = SI5340_REVD_REG_CONFIG_NUM_REGS;
@@ -33,9 +32,9 @@ static struct clk9563_ops ops = { .get_n_data_9563_si5340_nt200a02_u23_v5 =
 			get_p_data_9563_si5340_nt200a02_u23_v5
 };
 
-void clk9563_ops_init(void)
+void nthw_clk9563_ops_init(void)
 {
-	register_clk9563_ops(&ops);
+	nthw_reg_clk9563_ops(&ops);
 }
 
 #undef si5340_revd_registers

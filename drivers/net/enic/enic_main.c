@@ -111,7 +111,8 @@ int enic_dev_stats_clear(struct enic *enic)
 	return 0;
 }
 
-int enic_dev_stats_get(struct enic *enic, struct rte_eth_stats *r_stats)
+int enic_dev_stats_get(struct enic *enic, struct rte_eth_stats *r_stats,
+			struct eth_queue_stats *qstats __rte_unused)
 {
 	struct vnic_stats *stats;
 	struct enic_soft_stats *soft_stats = &enic->soft_stats;
@@ -1236,7 +1237,7 @@ int enic_set_rss_reta(struct enic *enic, union vnic_rss_cpu *rss_cpu)
 	if (!rss_cpu_buf_va)
 		return -ENOMEM;
 
-	rte_memcpy(rss_cpu_buf_va, rss_cpu, sizeof(union vnic_rss_cpu));
+	*rss_cpu_buf_va = *rss_cpu;
 
 	err = enic_set_rss_cpu(enic,
 		rss_cpu_buf_pa,

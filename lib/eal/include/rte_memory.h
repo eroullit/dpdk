@@ -728,6 +728,63 @@ rte_mem_alloc_validator_register(const char *name,
 int
 rte_mem_alloc_validator_unregister(const char *name, int socket_id);
 
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Fill memory with zero's (e.g. sensitive keys).
+ * Normally using memset() is fine, but in cases where clearing out local data
+ * before going out of scope is required, use rte_memzero_explicit() instead
+ * to prevent the compiler from optimizing away the zeroing operation.
+ *
+ * @param dst
+ *   Target buffer.
+ * @param sz
+ *   Number of bytes to fill.
+ */
+__rte_experimental
+void
+rte_memzero_explicit(void *dst, size_t sz);
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this API may change without prior notice.
+ *
+ * Timing-safe memory equality comparison.
+ *
+ * This function compares two memory regions in constant time,
+ * making it resistant to timing side-channel attacks.
+ * The execution time depends only on the length parameter,
+ * not on the actual data values being compared.
+ *
+ * This is particularly important for cryptographic operations
+ * where timing differences could leak information
+ * about secret keys, passwords, or other sensitive data.
+ *
+ * @param a
+ *   Pointer to the first memory region to compare.
+ * @param b
+ *   Pointer to the second memory region to compare.
+ * @param n
+ *   Number of bytes to compare.
+ * @return
+ *   true if the memory regions are identical, false if they differ.
+ */
+__rte_experimental
+static inline bool
+rte_memeq_timingsafe(const void *a, const void *b, size_t n)
+{
+	const volatile uint8_t *pa = (const volatile uint8_t *)a;
+	const volatile uint8_t *pb = (const volatile uint8_t *)b;
+	uint8_t result = 0;
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		result |= pa[i] ^ pb[i];
+
+	return result == UINT8_C(0);
+}
+
 #ifdef __cplusplus
 }
 #endif

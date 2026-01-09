@@ -9,7 +9,7 @@
 # - DPDK_CHECKPATCH_OPTIONS
 . $(dirname $(readlink -f $0))/load-devel-config
 
-VALIDATE_NEW_API=$(dirname $(readlink -f $0))/check-symbol-change.sh
+VALIDATE_NEW_API=$(dirname $(readlink -f $0))/check-symbol-change.py
 
 # Enable codespell by default. This can be overwritten from a config file.
 # Codespell can also be enabled by setting DPDK_CHECKPATCH_CODESPELL to a valid path
@@ -33,7 +33,8 @@ VOLATILE,PREFER_PACKED,PREFER_ALIGNED,PREFER_PRINTF,STRLCPY,\
 PREFER_KERNEL_TYPES,PREFER_FALLTHROUGH,BIT_MACRO,CONST_STRUCT,\
 SPLIT_STRING,LONG_LINE_STRING,C99_COMMENT_TOLERANCE,\
 LINE_SPACING,PARENTHESIS_ALIGNMENT,NETWORKING_BLOCK_COMMENT_STYLE,\
-NEW_TYPEDEFS,COMPARISON_TO_NULL,AVOID_BUG"
+NEW_TYPEDEFS,COMPARISON_TO_NULL,AVOID_BUG,EXPORT_SYMBOL,\
+BAD_REPORTED_BY_LINK"
 options="$options $DPDK_CHECKPATCH_OPTIONS"
 
 print_usage () {
@@ -63,7 +64,7 @@ check_forbidden_additions() { # <patch>
 
 	# refrain from new calls to RTE_LOG in drivers (but leave some leeway for base drivers)
 	awk -v FOLDERS="drivers" \
-		-v SKIP_FILES='osdep.h$' \
+		-v SKIP_FILES='.*osdep.h$' \
 		-v EXPRESSIONS="RTE_LOG\\\( RTE_LOG_DP\\\( rte_log\\\(" \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Prefer RTE_LOG_LINE/RTE_LOG_DP_LINE' \
@@ -84,6 +85,14 @@ check_forbidden_additions() { # <patch>
 		-v EXPRESSIONS="rte_panic\\\( rte_exit\\\(" \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using rte_panic/rte_exit' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
+	# don't call directly install_headers()
+	awk -v FOLDERS="lib drivers" \
+		-v EXPRESSIONS="\\\<install_headers\\\>" \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Using install_headers()' \
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
@@ -139,6 +148,7 @@ check_forbidden_additions() { # <patch>
 
 	# refrain from using compiler __atomic_xxx builtins
 	awk -v FOLDERS="lib drivers app examples" \
+		-v SKIP_FILES='drivers/common/cnxk/' \
 		-v EXPRESSIONS="__atomic_.*\\\( __ATOMIC_(RELAXED|CONSUME|ACQUIRE|RELEASE|ACQ_REL|SEQ_CST)" \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Using __atomic_xxx/__ATOMIC_XXX built-ins, prefer rte_atomic_xxx/rte_memory_order_xxx' \
@@ -210,6 +220,15 @@ check_forbidden_additions() { # <patch>
 		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
 		"$1" || res=1
 
+	# forbid use of #pragma
+	awk -v FOLDERS='lib drivers app examples' \
+		-v SKIP_FILES='lib/eal/include/rte_common.h' \
+		-v EXPRESSIONS='(#pragma|_Pragma)' \
+		-v RET_ON_FAIL=1 \
+		-v MESSAGE='Using compilers pragma is not allowed' \
+		-f $(dirname $(readlink -f $0))/check-forbidden-tokens.awk \
+		"$1" || res=1
+
 	# forbid use of experimental build flag except in examples
 	awk -v FOLDERS='lib drivers app' \
 		-v EXPRESSIONS='-DALLOW_EXPERIMENTAL_API allow_experimental_apis' \
@@ -236,7 +255,7 @@ check_forbidden_additions() { # <patch>
 
 	# forbid rte_ symbols in cnxk base driver
 	awk -v FOLDERS='drivers/common/cnxk/roc_*' \
-		-v SKIP_FILES='roc_platform*' \
+		-v SKIP_FILES='.*roc_platform.*' \
 		-v EXPRESSIONS="rte_ RTE_" \
 		-v RET_ON_FAIL=1 \
 		-v MESSAGE='Use plt_ symbols instead of rte_ API in cnxk base driver' \
@@ -403,8 +422,8 @@ check_release_notes() { # <patch>
 		grep -v $current_rel_notes
 }
 
-number=0
-range='origin/main..'
+number=
+range=
 quiet=false
 verbose=false
 while getopts hn:qr:v ARG ; do
@@ -472,7 +491,7 @@ check () { # <patch-file> <commit>
 	fi
 
 	! $verbose || printf '\nChecking API additions/removals:\n'
-	report=$($VALIDATE_NEW_API "$tmpinput")
+	report=$($VALIDATE_NEW_API --patch "$tmpinput")
 	if [ $? -ne 0 ] ; then
 		$headline_printed || print_headline "$subject"
 		printf '%s\n' "$report"
@@ -540,17 +559,20 @@ if [ -n "$1" ] ; then
 	for patch in "$@" ; do
 		check "$patch" ''
 	done
-elif [ ! -t 0 ] ; then # stdin
-	check '' ''
-else
-	if [ $number -eq 0 ] ; then
-		commits=$(git rev-list --reverse $range)
-	else
+elif [ -n "$number" ] || [ -n "$range" ] || [ -t 0 ]; then
+	if [ -n "$number" ] ; then
 		commits=$(git rev-list --reverse --max-count=$number HEAD)
+	else
+		if [ -z "$range" ] ; then
+			range='origin/main..' # default
+		fi
+		commits=$(git rev-list --reverse $range)
 	fi
 	for commit in $commits ; do
 		check '' $commit
 	done
+else # stdin
+	check '' ''
 fi
 pass=$(($total - $status))
 $quiet || printf '\n%d/%d valid patch' $pass $total

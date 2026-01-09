@@ -8,71 +8,6 @@
 #include "../common/rx.h"
 #include "ice_rxtx.h"
 
-static inline uint16_t
-ice_rx_reassemble_packets(struct ice_rx_queue *rxq, struct rte_mbuf **rx_bufs,
-			  uint16_t nb_bufs, uint8_t *split_flags)
-{
-	struct rte_mbuf *pkts[ICE_VPMD_RX_BURST] = {0}; /*finished pkts*/
-	struct rte_mbuf *start = rxq->pkt_first_seg;
-	struct rte_mbuf *end =  rxq->pkt_last_seg;
-	unsigned int pkt_idx, buf_idx;
-
-	for (buf_idx = 0, pkt_idx = 0; buf_idx < nb_bufs; buf_idx++) {
-		if (end) {
-			/* processing a split packet */
-			end->next = rx_bufs[buf_idx];
-			rx_bufs[buf_idx]->data_len += rxq->crc_len;
-
-			start->nb_segs++;
-			start->pkt_len += rx_bufs[buf_idx]->data_len;
-			end = end->next;
-
-			if (!split_flags[buf_idx]) {
-				/* it's the last packet of the set */
-				start->hash = end->hash;
-				start->vlan_tci = end->vlan_tci;
-				start->ol_flags = end->ol_flags;
-				/* we need to strip crc for the whole packet */
-				start->pkt_len -= rxq->crc_len;
-				if (end->data_len > rxq->crc_len) {
-					end->data_len -= rxq->crc_len;
-				} else {
-					/* free up last mbuf */
-					struct rte_mbuf *secondlast = start;
-
-					start->nb_segs--;
-					while (secondlast->next != end)
-						secondlast = secondlast->next;
-					secondlast->data_len -= (rxq->crc_len -
-							end->data_len);
-					secondlast->next = NULL;
-					rte_pktmbuf_free_seg(end);
-				}
-				pkts[pkt_idx++] = start;
-				start = NULL;
-				end = NULL;
-			}
-		} else {
-			/* not processing a split packet */
-			if (!split_flags[buf_idx]) {
-				/* not a split packet, save and skip */
-				pkts[pkt_idx++] = rx_bufs[buf_idx];
-				continue;
-			}
-			start = rx_bufs[buf_idx];
-			end = start;
-			rx_bufs[buf_idx]->data_len += rxq->crc_len;
-			rx_bufs[buf_idx]->pkt_len += rxq->crc_len;
-		}
-	}
-
-	/* save the partial packet for next time */
-	rxq->pkt_first_seg = start;
-	rxq->pkt_last_seg = end;
-	memcpy(rx_bufs, pkts, pkt_idx * (sizeof(*pkts)));
-	return pkt_idx;
-}
-
 static inline int
 ice_tx_desc_done(struct ci_tx_queue *txq, uint16_t idx)
 {
@@ -82,7 +17,7 @@ ice_tx_desc_done(struct ci_tx_queue *txq, uint16_t idx)
 }
 
 static inline void
-_ice_rx_queue_release_mbufs_vec(struct ice_rx_queue *rxq)
+_ice_rx_queue_release_mbufs_vec(struct ci_rx_queue *rxq)
 {
 	const unsigned int mask = rxq->nb_rx_desc - 1;
 	unsigned int i;
@@ -118,47 +53,39 @@ _ice_rx_queue_release_mbufs_vec(struct ice_rx_queue *rxq)
 
 #define ICE_TX_NO_VECTOR_FLAGS (			\
 		RTE_ETH_TX_OFFLOAD_MULTI_SEGS |		\
+		RTE_ETH_TX_OFFLOAD_QINQ_INSERT |	\
 		RTE_ETH_TX_OFFLOAD_OUTER_IPV4_CKSUM |	\
 		RTE_ETH_TX_OFFLOAD_TCP_TSO |	\
 		RTE_ETH_TX_OFFLOAD_VXLAN_TNL_TSO |    \
 		RTE_ETH_TX_OFFLOAD_GRE_TNL_TSO |    \
 		RTE_ETH_TX_OFFLOAD_IPIP_TNL_TSO |    \
 		RTE_ETH_TX_OFFLOAD_GENEVE_TNL_TSO |    \
-		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM)
+		RTE_ETH_TX_OFFLOAD_OUTER_UDP_CKSUM |	\
+		RTE_ETH_TX_OFFLOAD_SEND_ON_TIMESTAMP)
 
 #define ICE_TX_VECTOR_OFFLOAD (				\
 		RTE_ETH_TX_OFFLOAD_VLAN_INSERT |		\
-		RTE_ETH_TX_OFFLOAD_QINQ_INSERT |		\
 		RTE_ETH_TX_OFFLOAD_IPV4_CKSUM |		\
 		RTE_ETH_TX_OFFLOAD_SCTP_CKSUM |		\
 		RTE_ETH_TX_OFFLOAD_UDP_CKSUM |		\
 		RTE_ETH_TX_OFFLOAD_TCP_CKSUM)
 
-#define ICE_RX_VECTOR_OFFLOAD (				\
-		RTE_ETH_RX_OFFLOAD_CHECKSUM |		\
-		RTE_ETH_RX_OFFLOAD_SCTP_CKSUM |		\
-		RTE_ETH_RX_OFFLOAD_VLAN |			\
-		RTE_ETH_RX_OFFLOAD_RSS_HASH)
-
 #define ICE_VECTOR_PATH		0
 #define ICE_VECTOR_OFFLOAD_PATH	1
 
 static inline int
-ice_rx_vec_queue_default(struct ice_rx_queue *rxq)
+ice_rx_vec_queue_default(struct ci_rx_queue *rxq)
 {
 	if (!rxq)
 		return -1;
 
-	if (!ci_rxq_vec_capable(rxq->nb_rx_desc, rxq->rx_free_thresh, rxq->offloads))
+	if (!ci_rxq_vec_capable(rxq->nb_rx_desc, rxq->rx_free_thresh))
 		return -1;
 
 	if (rxq->proto_xtr != PROTO_XTR_NONE)
 		return -1;
 
-	if (rxq->offloads & ICE_RX_VECTOR_OFFLOAD)
-		return ICE_VECTOR_OFFLOAD_PATH;
-
-	return ICE_VECTOR_PATH;
+	return 0;
 }
 
 static inline int
@@ -184,20 +111,17 @@ static inline int
 ice_rx_vec_dev_check_default(struct rte_eth_dev *dev)
 {
 	int i;
-	struct ice_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	int ret = 0;
-	int result = 0;
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {
 		rxq = dev->data->rx_queues[i];
 		ret = (ice_rx_vec_queue_default(rxq));
 		if (ret < 0)
-			return -1;
-		if (ret == ICE_VECTOR_OFFLOAD_PATH)
-			result = ret;
+			break;
 	}
 
-	return result;
+	return ret;
 }
 
 static inline int
@@ -271,8 +195,8 @@ ice_txd_enable_offload(struct rte_mbuf *tx_pkt,
 
 	*txd_hi |= ((uint64_t)td_offset) << ICE_TXD_QW1_OFFSET_S;
 
-	/* Tx VLAN/QINQ insertion Offload */
-	if (ol_flags & (RTE_MBUF_F_TX_VLAN | RTE_MBUF_F_TX_QINQ)) {
+	/* Tx VLAN insertion Offload */
+	if (ol_flags & RTE_MBUF_F_TX_VLAN) {
 		td_cmd |= ICE_TX_DESC_CMD_IL2TAG1;
 		*txd_hi |= ((uint64_t)tx_pkt->vlan_tci <<
 				ICE_TXD_QW1_L2TAG1_S);

@@ -2,6 +2,8 @@
  * Copyright(C) 2023 Marvell.
  */
 
+#include <uapi/linux/vfio.h>
+
 #include <dirent.h>
 #include <inttypes.h>
 #include <stdlib.h>
@@ -13,6 +15,7 @@
 
 #include <bus_driver.h>
 #include <bus_platform_driver.h>
+#include <eal_export.h>
 #include <eal_filesystem.h>
 #include <rte_bus.h>
 #include <rte_devargs.h>
@@ -24,16 +27,16 @@
 
 #include "private.h"
 
-#ifdef VFIO_PRESENT
-
 #define PLATFORM_BUS_DEVICES_PATH "/sys/bus/platform/devices"
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_platform_register)
 void
 rte_platform_register(struct rte_platform_driver *pdrv)
 {
 	TAILQ_INSERT_TAIL(&platform_bus.driver_list, pdrv, next);
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_platform_unregister)
 void
 rte_platform_unregister(struct rte_platform_driver *pdrv)
 {
@@ -644,5 +647,3 @@ struct rte_platform_bus platform_bus = {
 
 RTE_REGISTER_BUS(platform, platform_bus.bus);
 RTE_LOG_REGISTER_DEFAULT(platform_bus_logtype, NOTICE);
-
-#endif /* VFIO_PRESENT */

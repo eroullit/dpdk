@@ -29,7 +29,6 @@
 #define ENA_RX_BUF_MIN_SIZE	1400
 #define ENA_DEFAULT_RING_SIZE	1024
 
-
 #define ENA_MIN_MTU		128
 
 #define ENA_MMIO_DISABLE_REG_READ	BIT(0)
@@ -42,7 +41,8 @@
 #define ENA_MONITORED_TX_QUEUES		3
 #define ENA_DEFAULT_MISSING_COMP	256U
 
-#define ENA_MAX_CONTROL_PATH_POLL_INTERVAL_MSEC 1000
+#define ENA_MAX_CONTROL_PATH_POLL_INTERVAL_MSEC 1000U
+#define ENA_MIN_CONTROL_PATH_POLL_INTERVAL_MSEC 500U
 
 /* While processing submitted and completed descriptors (rx and tx path
  * respectively) in a loop it is desired to:
@@ -140,6 +140,18 @@ struct ena_stats_rx {
 	u64 unknown_error;
 };
 
+struct ena_timestamp_config {
+	u8 hw_tx_supported;
+	u8 hw_rx_supported;
+};
+
+struct ena_timestamp_mbuf {
+	/* Dynamic mbuf timestamp flag */
+	uint64_t rx_flag;
+	/* Dynamic mbuf timestamp field offset */
+	int offset;
+};
+
 struct __rte_cache_aligned ena_ring {
 	u16 next_to_use;
 	u16 next_to_clean;
@@ -198,6 +210,9 @@ struct __rte_cache_aligned ena_ring {
 	unsigned int numa_socket_id;
 
 	uint32_t missing_tx_completion_threshold;
+
+	/* Dynamic mbuf params for HW timestamping */
+	struct ena_timestamp_mbuf ts_mbuf;
 };
 
 enum ena_adapter_state {
@@ -348,6 +363,10 @@ struct ena_adapter {
 	/* Time (in microseconds) of the control path queues monitoring interval */
 	uint64_t control_path_poll_interval;
 
+	bool enable_frag_bypass;
+
+	/* HW timestamp support by the device */
+	struct ena_timestamp_config ts;
 	/*
 	 * Helper variables for holding the information about the supported
 	 * metrics.

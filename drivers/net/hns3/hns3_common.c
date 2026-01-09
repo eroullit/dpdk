@@ -723,12 +723,12 @@ hns3_init_mac_addrs(struct rte_eth_dev *dev)
 	eth_addr = (struct rte_ether_addr *)hw->mac.mac_addr;
 	if (!hns->is_vf) {
 		if (!rte_is_valid_assigned_ether_addr(eth_addr)) {
+			hns3_warn(hw, "MAC address " RTE_ETHER_ADDR_PRT_FMT " from firmware is invalid",
+				  RTE_ETHER_ADDR_BYTES(eth_addr));
 			rte_eth_random_addr(hw->mac.mac_addr);
 			hns3_ether_format_addr(mac_str, RTE_ETHER_ADDR_FMT_SIZE,
 				(struct rte_ether_addr *)hw->mac.mac_addr);
-			hns3_warn(hw, "default mac_addr from firmware is an invalid "
-				  "unicast address, using random MAC address %s",
-				  mac_str);
+			hns3_warn(hw, "using random MAC address %s", mac_str);
 		}
 	} else {
 		/*
@@ -882,8 +882,8 @@ hns3_unmap_rx_interrupt(struct rte_eth_dev *dev)
 	struct rte_intr_handle *intr_handle = pci_dev->intr_handle;
 	struct hns3_adapter *hns = dev->data->dev_private;
 	struct hns3_hw *hw = &hns->hw;
-	uint8_t base = RTE_INTR_VEC_ZERO_OFFSET;
-	uint8_t vec = RTE_INTR_VEC_ZERO_OFFSET;
+	uint16_t base = RTE_INTR_VEC_ZERO_OFFSET;
+	uint16_t vec = RTE_INTR_VEC_ZERO_OFFSET;
 	uint16_t q_id;
 
 	if (dev->data->dev_conf.intr_conf.rxq == 0)
@@ -944,9 +944,8 @@ hns3_get_pci_revision_id(struct hns3_hw *hw, uint8_t *revision_id)
 
 	eth_dev = &rte_eth_devices[hw->data->port_id];
 	pci_dev = RTE_ETH_DEV_TO_PCI(eth_dev);
-	ret = rte_pci_read_config(pci_dev, &revision, HNS3_PCI_REVISION_ID_LEN,
-				  HNS3_PCI_REVISION_ID);
-	if (ret != HNS3_PCI_REVISION_ID_LEN) {
+	ret = rte_pci_read_config(pci_dev, &revision, 1, RTE_PCI_REVISION_ID);
+	if (ret != 1) {
 		hns3_err(hw, "failed to read pci revision id, ret = %d", ret);
 		return -EIO;
 	}

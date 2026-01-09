@@ -36,11 +36,9 @@
 #ifdef RTE_LIBRTE_VHOST_POSTCOPY
 #include <linux/userfaultfd.h>
 #endif
-#ifdef F_ADD_SEALS /* if file sealing is supported, so is memfd */
 #include <linux/memfd.h>
-#define MEMFD_SUPPORTED
-#endif
 
+#include <eal_export.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
 #include <rte_log.h>
@@ -1626,11 +1624,7 @@ inflight_mem_alloc(struct virtio_net *dev, const char *name, size_t size, int *f
 	char fname[20] = "/tmp/memfd-XXXXXX";
 
 	*fd = -1;
-#ifdef MEMFD_SUPPORTED
 	mfd = memfd_create(name, MFD_CLOEXEC);
-#else
-	RTE_SET_USED(name);
-#endif
 	if (mfd == -1) {
 		mfd = mkstemp(fname);
 		if (mfd == -1) {
@@ -3186,7 +3180,7 @@ vhost_user_msg_handler(int vid, int fd)
 	handled = false;
 	if (dev->extern_ops.pre_msg_handle) {
 		RTE_BUILD_BUG_ON(offsetof(struct vhu_msg_context, msg) != 0);
-		msg_result = (*dev->extern_ops.pre_msg_handle)(dev->vid, &ctx);
+		msg_result = dev->extern_ops.pre_msg_handle(dev->vid, &ctx);
 		switch (msg_result) {
 		case RTE_VHOST_MSG_RESULT_REPLY:
 			send_vhost_reply(dev, fd, &ctx);
@@ -3238,7 +3232,7 @@ skip_to_post_handle:
 	if (msg_result != RTE_VHOST_MSG_RESULT_ERR &&
 			dev->extern_ops.post_msg_handle) {
 		RTE_BUILD_BUG_ON(offsetof(struct vhu_msg_context, msg) != 0);
-		msg_result = (*dev->extern_ops.post_msg_handle)(dev->vid, &ctx);
+		msg_result = dev->extern_ops.post_msg_handle(dev->vid, &ctx);
 		switch (msg_result) {
 		case RTE_VHOST_MSG_RESULT_REPLY:
 			send_vhost_reply(dev, fd, &ctx);
@@ -3359,6 +3353,7 @@ vhost_user_iotlb_miss(struct virtio_net *dev, uint64_t iova, uint8_t perm)
 	return 0;
 }
 
+RTE_EXPORT_SYMBOL(rte_vhost_backend_config_change)
 int
 rte_vhost_backend_config_change(int vid, bool need_reply)
 {
@@ -3421,6 +3416,7 @@ static int vhost_user_backend_set_vring_host_notifier(struct virtio_net *dev,
 	return ret;
 }
 
+RTE_EXPORT_INTERNAL_SYMBOL(rte_vhost_host_notifier_ctrl)
 int rte_vhost_host_notifier_ctrl(int vid, uint16_t qid, bool enable)
 {
 	struct virtio_net *dev;

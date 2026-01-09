@@ -1490,11 +1490,9 @@ igb_get_tx_port_offloads_capa(struct rte_eth_dev *dev)
 uint64_t
 igb_get_tx_queue_offloads_capa(struct rte_eth_dev *dev)
 {
-	uint64_t tx_queue_offload_capa;
+	RTE_SET_USED(dev);
 
-	tx_queue_offload_capa = igb_get_tx_port_offloads_capa(dev);
-
-	return tx_queue_offload_capa;
+	return 0;
 }
 
 int
@@ -1792,7 +1790,7 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 	return 0;
 }
 
-uint32_t
+int
 eth_igb_rx_queue_count(void *rx_queue)
 {
 #define IGB_RXQ_SCAN_INTERVAL 4

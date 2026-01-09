@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -9,6 +8,7 @@
 #include "ntlog.h"
 #include "i2c_nim.h"
 #include "ntnic_mod_reg.h"
+#include "nt_service.h"
 
 /*
  * Swap tx/rx polarity
@@ -49,9 +49,9 @@ static int _reset_rx(adapter_info_t *drv, nthw_mac_pcs_t *mac_pcs)
 	(void)drv;
 
 	nthw_mac_pcs_rx_path_rst(mac_pcs, true);
-	nt_os_wait_usec(10000);	/* 10ms */
+	nthw_os_wait_usec(10000);	/* 10ms */
 	nthw_mac_pcs_rx_path_rst(mac_pcs, false);
-	nt_os_wait_usec(10000);	/* 10ms */
+	nthw_os_wait_usec(10000);	/* 10ms */
 
 	return 0;
 }
@@ -109,7 +109,7 @@ static void _set_loopback(struct adapter_info_s *p_adapter_info,
 	/* After changing the loopback the system must be properly reset */
 	_reset_rx(p_adapter_info, mac_pcs);
 
-	nt_os_wait_usec(10000);	/* 10ms - arbitrary choice */
+	nthw_os_wait_usec(10000);	/* 10ms - arbitrary choice */
 
 	if (!nthw_mac_pcs_is_rx_path_rst(mac_pcs)) {
 		nthw_mac_pcs_reset_bip_counters(mac_pcs);
@@ -137,6 +137,8 @@ static int _link_state_build(adapter_info_t *drv, nthw_mac_pcs_t *mac_pcs,
 	uint32_t lh_internal_local_fault;
 	uint32_t lh_received_local_fault;
 
+	RTE_ASSERT(state);
+
 	memset(state, 0, sizeof(*state));
 	state->link_disabled = is_port_disabled;
 	nthw_mac_pcs_get_link_summary(mac_pcs, &abs, &phy_link_state, &lh_abs, &ll_phy_link_state,
@@ -144,7 +146,7 @@ static int _link_state_build(adapter_info_t *drv, nthw_mac_pcs_t *mac_pcs,
 		&lh_remote_fault, &lh_internal_local_fault,
 		&lh_received_local_fault);
 
-	assert(port >= 0 && port < NUM_ADAPTER_PORTS_MAX);
+	RTE_ASSERT(port >= 0 && port < NUM_ADAPTER_PORTS_MAX);
 	state->nim_present = nthw_gpio_phy_is_module_present(gpio_phy, (uint8_t)port);
 	state->lh_nim_absent = !state->nim_present;
 	state->link_up = phy_link_state ? true : false;
@@ -177,7 +179,7 @@ static int _link_state_build(adapter_info_t *drv, nthw_mac_pcs_t *mac_pcs,
  */
 static bool _nim_is_present(nthw_gpio_phy_t *gpio_phy, uint8_t if_no)
 {
-	assert(if_no < NUM_ADAPTER_PORTS_MAX);
+	RTE_ASSERT(if_no < NUM_ADAPTER_PORTS_MAX);
 
 	return nthw_gpio_phy_is_module_present(gpio_phy, if_no);
 }
@@ -256,11 +258,11 @@ static int _create_nim(adapter_info_t *drv, int port, bool enable)
 	nim_i2c_ctx_t *nim_ctx;
 	sfp_nim_state_t nim;
 	nt4ga_link_t *link_info = &drv->nt4ga_link;
+
+	RTE_ASSERT(port >= 0 && port < NUM_ADAPTER_PORTS_MAX);
+	RTE_ASSERT(link_info->variables_initialized);
+
 	nthw_mac_pcs_t *mac_pcs = &link_info->u.var100g.mac_pcs100g[port];
-
-	assert(port >= 0 && port < NUM_ADAPTER_PORTS_MAX);
-	assert(link_info->variables_initialized);
-
 	gpio_phy = &link_info->u.var100g.gpio_phy[port];
 	nim_ctx = &link_info->u.var100g.nim_ctx[port];
 
@@ -283,14 +285,14 @@ static int _create_nim(adapter_info_t *drv, int port, bool enable)
 	 */
 	NT_LOG(DBG, NTNIC, "%s: Performing NIM reset", drv->mp_port_id_str[port]);
 	nthw_gpio_phy_set_reset(gpio_phy, (uint8_t)port, true);
-	nt_os_wait_usec(100000);/* pause 0.1s */
+	nthw_os_wait_usec(100000);/* pause 0.1s */
 	nthw_gpio_phy_set_reset(gpio_phy, (uint8_t)port, false);
 
 	/*
 	 * Wait a little after a module has been inserted before trying to access I2C
 	 * data, otherwise the module will not respond correctly.
 	 */
-	nt_os_wait_usec(1000000);	/* pause 1.0s */
+	nthw_os_wait_usec(1000000);	/* pause 1.0s */
 
 	if (!_nim_is_present(gpio_phy, (uint8_t)port)) {
 		NT_LOG(DBG, NTNIC, "%s: NIM module is no longer absent!",
@@ -304,28 +306,28 @@ static int _create_nim(adapter_info_t *drv, int port, bool enable)
 		return -1;
 	}
 
-	res = construct_and_preinit_nim(nim_ctx, NULL);
+	res = nthw_construct_and_preinit_nim(nim_ctx, NULL);
 
 	if (res)
 		return res;
 
-	res = nim_state_build(nim_ctx, &nim);
+	res = nthw_nim_state_build(nim_ctx, &nim);
 
 	if (res)
 		return res;
 
 	NT_LOG(DBG, NTHW, "%s: NIM id = %u (%s), br = %u, vendor = '%s', pn = '%s', sn='%s'",
-		drv->mp_port_id_str[port], nim_ctx->nim_id, nim_id_to_text(nim_ctx->nim_id), nim.br,
-		nim_ctx->vendor_name, nim_ctx->prod_no, nim_ctx->serial_no);
+		drv->mp_port_id_str[port], nim_ctx->nim_id, nthw_nim_id_to_text(nim_ctx->nim_id),
+		nim.br, nim_ctx->vendor_name, nim_ctx->prod_no, nim_ctx->serial_no);
 
 	/*
 	 * Does the driver support the NIM module type?
 	 */
 	if (nim_ctx->nim_id != valid_nim_id) {
 		NT_LOG(ERR, NTHW, "%s: The driver does not support the NIM module type %s",
-			drv->mp_port_id_str[port], nim_id_to_text(nim_ctx->nim_id));
+			drv->mp_port_id_str[port], nthw_nim_id_to_text(nim_ctx->nim_id));
 		NT_LOG(DBG, NTHW, "%s: The driver supports the NIM module type %s",
-			drv->mp_port_id_str[port], nim_id_to_text(valid_nim_id));
+			drv->mp_port_id_str[port], nthw_nim_id_to_text(valid_nim_id));
 		return -1;
 	}
 
@@ -355,8 +357,8 @@ static int _port_init(adapter_info_t *drv, nthw_fpga_t *fpga, int port)
 
 	nthw_mac_pcs_t *mac_pcs;
 
-	assert(port >= 0 && port < NUM_ADAPTER_PORTS_MAX);
-	assert(link_info->variables_initialized);
+	RTE_ASSERT(port >= 0 && port < NUM_ADAPTER_PORTS_MAX);
+	RTE_ASSERT(link_info->variables_initialized);
 
 	if (fpga && fpga->p_fpga_info) {
 		adapter_id = fpga->p_fpga_info->n_nthw_adapter_id;
@@ -371,7 +373,7 @@ static int _port_init(adapter_info_t *drv, nthw_fpga_t *fpga, int port)
 
 	/*
 	 * Phase 1. Pre-state machine (`port init` functions)
-	 * 1.1) nt4ga_adapter::port_init()
+	 * 1.1) nt4ga_adapter::nthw_port_init()
 	 */
 
 	/* No adapter set-up here, only state variables */
@@ -444,7 +446,7 @@ static int _port_init(adapter_info_t *drv, nthw_fpga_t *fpga, int port)
 
 	} else {
 		NT_LOG(ERR, NTNIC, "Unhandled AdapterId/HwId: %02x_hwid%d", adapter_id, hw_id);
-		assert(0);
+		RTE_ASSERT(0);
 	}
 
 	_reset_rx(drv, mac_pcs);
@@ -476,169 +478,178 @@ static int _port_init(adapter_info_t *drv, nthw_fpga_t *fpga, int port)
  */
 static int _common_ptp_nim_state_machine(void *data)
 {
-	adapter_info_t *drv = (adapter_info_t *)data;
-	fpga_info_t *fpga_info = &drv->fpga_info;
-	nt4ga_link_t *link_info = &drv->nt4ga_link;
-	nthw_fpga_t *fpga = fpga_info->mp_fpga;
-	const int adapter_no = drv->adapter_no;
-	const int nb_ports = fpga_info->n_phy_ports;
-	uint32_t last_lpbk_mode[NUM_ADAPTER_PORTS_MAX];
+	static adapter_info_t *drv;
+	static nt4ga_link_t *link_info;
+	static nthw_fpga_t *fpga;
+	static int nb_ports;
+	static nim_i2c_ctx_t *nim_ctx;
+	static link_state_t *link_state;
+	static nthw_mac_pcs_t *mac_pcs;
+	static nthw_gpio_phy_t *gpio_phy;
+	static uint32_t last_lpbk_mode[NUM_ADAPTER_PORTS_MAX];
 
-	nim_i2c_ctx_t *nim_ctx;
-	link_state_t *link_state;
-	nthw_mac_pcs_t *mac_pcs;
-	nthw_gpio_phy_t *gpio_phy;
+	struct nt_service *adapter_mon_srv = nthw_service_get_info(RTE_NTNIC_SERVICE_ADAPTER_MON);
+	RTE_ASSERT(adapter_mon_srv != NULL);
 
-	if (!fpga) {
-		NT_LOG(ERR, NTNIC, "%s: fpga is NULL", drv->mp_adapter_id_str);
-		goto NT4GA_LINK_100G_MON_EXIT;
-	}
+	if (!NT_SERVICE_GET_STATE(adapter_mon_srv)) {
+		drv = (adapter_info_t *)data;
+		RTE_ASSERT(drv != NULL);
 
-	assert(adapter_no >= 0 && adapter_no < NUM_ADAPTER_MAX);
-	nim_ctx = link_info->u.var100g.nim_ctx;
-	link_state = link_info->link_state;
-	mac_pcs = link_info->u.var100g.mac_pcs100g;
-	gpio_phy = link_info->u.var100g.gpio_phy;
+		fpga_info_t *fpga_info = &drv->fpga_info;
+		int adapter_no = drv->adapter_no;
 
-	monitor_task_is_running[adapter_no] = 1;
-	memset(last_lpbk_mode, 0, sizeof(last_lpbk_mode));
+		link_info = &drv->nt4ga_link;
+		fpga = fpga_info->mp_fpga;
+		nb_ports = fpga_info->n_phy_ports;
 
-	if (monitor_task_is_running[adapter_no])
+		if (!fpga) {
+			NT_LOG(ERR, NTNIC, "%s: fpga is NULL", drv->mp_adapter_id_str);
+			return -1;
+		}
+
+		RTE_ASSERT(adapter_no >= 0 && adapter_no < NUM_ADAPTER_MAX);
+		nim_ctx = link_info->u.var100g.nim_ctx;
+		link_state = link_info->link_state;
+		mac_pcs = link_info->u.var100g.mac_pcs100g;
+		gpio_phy = link_info->u.var100g.gpio_phy;
+
+		memset(last_lpbk_mode, 0, sizeof(last_lpbk_mode));
+
 		NT_LOG(DBG, NTNIC, "%s: link state machine running...", drv->mp_adapter_id_str);
 
-	while (monitor_task_is_running[adapter_no]) {
-		int i;
-		static bool reported_link[NUM_ADAPTER_PORTS_MAX] = { false };
-
-		for (i = 0; i < nb_ports; i++) {
-			link_state_t new_link_state;
-			const bool is_port_disabled = link_info->port_action[i].port_disable;
-			const bool was_port_disabled = link_state[i].link_disabled;
-			const bool disable_port = is_port_disabled && !was_port_disabled;
-			const bool enable_port = !is_port_disabled && was_port_disabled;
-
-			if (!monitor_task_is_running[adapter_no])	/* stop quickly */
-				break;
-
-			/* Has the administrative port state changed? */
-			assert(!(disable_port && enable_port));
-
-			if (disable_port) {
-				memset(&link_state[i], 0, sizeof(link_state[i]));
-				link_info->link_info[i].link_speed = NT_LINK_SPEED_UNKNOWN;
-				link_state[i].link_disabled = true;
-				reported_link[i] = false;
-				/* Turn off laser and LED, etc. */
-				(void)_create_nim(drv, i, false);
-				NT_LOG(DBG, NTNIC, "%s: Port %i is disabled",
-					drv->mp_port_id_str[i], i);
-				continue;
-			}
-
-			if (enable_port) {
-				link_state[i].link_disabled = false;
-				NT_LOG(DBG, NTNIC, "%s: Port %i is enabled",
-					drv->mp_port_id_str[i], i);
-			}
-
-			if (is_port_disabled)
-				continue;
-
-			if (link_info->port_action[i].port_lpbk_mode != last_lpbk_mode[i]) {
-				/* Loopback mode has changed. Do something */
-				if (!_nim_is_present(&gpio_phy[i], (uint8_t)i)) {
-					/*
-					 * If there is no Nim present, we need to initialize the
-					 * port anyway
-					 */
-					_port_init(drv, fpga, i);
-				}
-
-				NT_LOG(INF, NTNIC, "%s: Loopback mode changed=%u",
-					drv->mp_port_id_str[i],
-					link_info->port_action[i].port_lpbk_mode);
-				_set_loopback(drv,
-					&mac_pcs[i],
-					i,
-					link_info->port_action[i].port_lpbk_mode,
-					last_lpbk_mode[i]);
-
-				if (link_info->port_action[i].port_lpbk_mode == 1)
-					link_state[i].link_up = true;
-
-				last_lpbk_mode[i] = link_info->port_action[i].port_lpbk_mode;
-				continue;
-			}
-
-			(void)_link_state_build(drv, &mac_pcs[i], &gpio_phy[i], i, &new_link_state,
-				is_port_disabled);
-
-			if (!new_link_state.nim_present) {
-				if (link_state[i].nim_present) {
-					NT_LOG(INF, NTNIC, "%s: NIM module removed",
-						drv->mp_port_id_str[i]);
-				}
-
-				link_state[i] = new_link_state;
-				continue;
-			}
-
-			/* NIM module is present */
-			if (new_link_state.lh_nim_absent || !link_state[i].nim_present) {
-				sfp_nim_state_t new_state;
-
-				NT_LOG(DBG, NTNIC, "%s: NIM module inserted",
-					drv->mp_port_id_str[i]);
-
-				if (_port_init(drv, fpga, i)) {
-					NT_LOG(ERR, NTNIC,
-						"%s: Failed to initialize NIM module",
-						drv->mp_port_id_str[i]);
-					continue;
-				}
-
-				if (nim_state_build(&nim_ctx[i], &new_state)) {
-					NT_LOG(ERR, NTNIC, "%s: Cannot read basic NIM data",
-						drv->mp_port_id_str[i]);
-					continue;
-				}
-
-				assert(new_state.br);	/* Cannot be zero if NIM is present */
-				NT_LOG(DBG, NTNIC,
-					"%s: NIM id = %u (%s), br = %u, vendor = '%s', pn = '%s', sn='%s'",
-					drv->mp_port_id_str[i], nim_ctx->nim_id,
-					nim_id_to_text(nim_ctx->nim_id), (unsigned int)new_state.br,
-					nim_ctx->vendor_name, nim_ctx->prod_no, nim_ctx->serial_no);
-
-				(void)_link_state_build(drv, &mac_pcs[i], &gpio_phy[i], i,
-					&link_state[i], is_port_disabled);
-
-				NT_LOG(DBG, NTNIC, "%s: NIM module initialized",
-					drv->mp_port_id_str[i]);
-				continue;
-			}
-
-			if (reported_link[i] != new_link_state.link_up) {
-				NT_LOG(INF, NTNIC, "%s: link is %s", drv->mp_port_id_str[i],
-					(new_link_state.link_up ? "up" : "down"));
-				link_info->link_info[i].link_speed =
-					(new_link_state.link_up ? NT_LINK_SPEED_100G
-						: NT_LINK_SPEED_UNKNOWN);
-				link_state[i].link_up = new_link_state.link_up;
-				reported_link[i] = new_link_state.link_up;
-			}
-
-			check_link_state(drv, &mac_pcs[i]);
-		}	/* end-for */
-
-		if (monitor_task_is_running[adapter_no])
-			nt_os_wait_usec(5 * 100000U);	/* 5 x 0.1s = 0.5s */
+		NT_LOG(INF, NTNIC, "Adapter monitor service started on lcore %i", rte_lcore_id());
+		adapter_mon_srv->lcore = rte_lcore_id();
+		NT_SERVICE_SET_STATE(adapter_mon_srv, true);
+		return 0;
 	}
 
-NT4GA_LINK_100G_MON_EXIT:
+	int i;
+	static bool reported_link[NUM_ADAPTER_PORTS_MAX] = { false };
 
-	NT_LOG(DBG, NTNIC, "%s: Stopped NT4GA 100 Gbps link monitoring thread.",
-		drv->mp_adapter_id_str);
+	for (i = 0; i < nb_ports; i++) {
+		link_state_t new_link_state;
+		const bool is_port_disabled = link_info->port_action[i].port_disable;
+		const bool was_port_disabled = link_state[i].link_disabled;
+		const bool disable_port = is_port_disabled && !was_port_disabled;
+		const bool enable_port = !is_port_disabled && was_port_disabled;
+
+		if (!rte_service_runstate_get(adapter_mon_srv->id))	/* stop quickly */
+			break;
+
+		/* Has the administrative port state changed? */
+		RTE_ASSERT(!(disable_port && enable_port));
+
+		if (disable_port) {
+			memset(&link_state[i], 0, sizeof(link_state[i]));
+			link_info->link_info[i].link_speed = NT_LINK_SPEED_UNKNOWN;
+			link_state[i].link_disabled = true;
+			reported_link[i] = false;
+			/* Turn off laser and LED, etc. */
+			(void)_create_nim(drv, i, false);
+			NT_LOG(DBG, NTNIC, "%s: Port %i is disabled",
+				drv->mp_port_id_str[i], i);
+			continue;
+		}
+
+		if (enable_port) {
+			link_state[i].link_disabled = false;
+			NT_LOG(DBG, NTNIC, "%s: Port %i is enabled",
+				drv->mp_port_id_str[i], i);
+		}
+
+		if (is_port_disabled)
+			continue;
+
+		if (link_info->port_action[i].port_lpbk_mode != last_lpbk_mode[i]) {
+			/* Loopback mode has changed. Do something */
+			if (!_nim_is_present(&gpio_phy[i], (uint8_t)i)) {
+				/*
+				 * If there is no Nim present, we need to initialize the
+				 * port anyway
+				 */
+				_port_init(drv, fpga, i);
+			}
+
+			NT_LOG(INF, NTNIC, "%s: Loopback mode changed=%u",
+				drv->mp_port_id_str[i],
+				link_info->port_action[i].port_lpbk_mode);
+			_set_loopback(drv,
+				&mac_pcs[i],
+				i,
+				link_info->port_action[i].port_lpbk_mode,
+				last_lpbk_mode[i]);
+
+			if (link_info->port_action[i].port_lpbk_mode == 1)
+				link_state[i].link_up = true;
+
+			last_lpbk_mode[i] = link_info->port_action[i].port_lpbk_mode;
+			continue;
+		}
+
+		(void)_link_state_build(drv, &mac_pcs[i], &gpio_phy[i], i, &new_link_state,
+			is_port_disabled);
+
+		if (!new_link_state.nim_present) {
+			if (link_state[i].nim_present) {
+				NT_LOG(INF, NTNIC, "%s: NIM module removed",
+					drv->mp_port_id_str[i]);
+			}
+
+			link_state[i] = new_link_state;
+			continue;
+		}
+
+		/* NIM module is present */
+		if (new_link_state.lh_nim_absent || !link_state[i].nim_present) {
+			sfp_nim_state_t new_state;
+
+			NT_LOG(DBG, NTNIC, "%s: NIM module inserted",
+				drv->mp_port_id_str[i]);
+
+			if (_port_init(drv, fpga, i)) {
+				NT_LOG(ERR, NTNIC,
+					"%s: Failed to initialize NIM module",
+					drv->mp_port_id_str[i]);
+				continue;
+			}
+
+			if (nthw_nim_state_build(&nim_ctx[i], &new_state)) {
+				NT_LOG(ERR, NTNIC, "%s: Cannot read basic NIM data",
+					drv->mp_port_id_str[i]);
+				continue;
+			}
+
+			RTE_ASSERT(new_state.br); /* Cannot be zero if NIM is present */
+			NT_LOG(DBG, NTNIC,
+				"%s: NIM id = %u (%s), br = %u, vendor = '%s', pn = '%s', sn='%s'",
+				drv->mp_port_id_str[i], nim_ctx->nim_id,
+				nthw_nim_id_to_text(nim_ctx->nim_id),
+				(unsigned int)new_state.br, nim_ctx->vendor_name,
+				nim_ctx->prod_no, nim_ctx->serial_no);
+
+			(void)_link_state_build(drv, &mac_pcs[i], &gpio_phy[i], i,
+				&link_state[i], is_port_disabled);
+
+			NT_LOG(DBG, NTNIC, "%s: NIM module initialized",
+				drv->mp_port_id_str[i]);
+			continue;
+		}
+
+		if (reported_link[i] != new_link_state.link_up) {
+			NT_LOG(INF, NTNIC, "%s: link is %s", drv->mp_port_id_str[i],
+				(new_link_state.link_up ? "up" : "down"));
+			link_info->link_info[i].link_speed =
+				(new_link_state.link_up ? NT_LINK_SPEED_100G
+					: NT_LINK_SPEED_UNKNOWN);
+			link_state[i].link_up = new_link_state.link_up;
+			reported_link[i] = new_link_state.link_up;
+		}
+
+		check_link_state(drv, &mac_pcs[i]);
+	}	/* end-for */
+
+	if (rte_service_runstate_get(adapter_mon_srv->id))
+		nthw_os_wait_usec(5 * 100000U);	/* 5 x 0.1s = 0.5s */
 
 	return 0;
 }
@@ -646,11 +657,9 @@ NT4GA_LINK_100G_MON_EXIT:
 /*
  * Userland NIM state machine
  */
-static uint32_t nt4ga_link_100g_mon(void *data)
+static int nt4ga_link_100g_mon(void *data)
 {
-	(void)_common_ptp_nim_state_machine(data);
-
-	return 0;
+	return _common_ptp_nim_state_machine(data);
 }
 
 /*
@@ -669,9 +678,9 @@ static int nt4ga_link_100g_ports_init(struct adapter_info_s *p_adapter_info, nth
 	/*
 	 * Initialize global variables
 	 */
-	assert(adapter_no >= 0 && adapter_no < NUM_ADAPTER_MAX);
+	RTE_ASSERT(adapter_no >= 0 && adapter_no < NUM_ADAPTER_MAX);
 
-	if (res == 0 && !p_adapter_info->nt4ga_link.variables_initialized) {
+	if (!p_adapter_info->nt4ga_link.variables_initialized) {
 		nthw_mac_pcs_t *mac_pcs = p_adapter_info->nt4ga_link.u.var100g.mac_pcs100g;
 		nim_i2c_ctx_t *nim_ctx = p_adapter_info->nt4ga_link.u.var100g.nim_ctx;
 		nthw_gpio_phy_t *gpio_phy = p_adapter_info->nt4ga_link.u.var100g.gpio_phy;
@@ -707,11 +716,21 @@ static int nt4ga_link_100g_ports_init(struct adapter_info_s *p_adapter_info, nth
 		}
 	}
 
-	/* Create state-machine thread */
+	/* Create state-machine service */
 	if (res == 0) {
-		if (!monitor_task_is_running[adapter_no]) {
-			res = rte_thread_create(&monitor_tasks[adapter_no], NULL,
-					nt4ga_link_100g_mon, p_adapter_info);
+		struct rte_service_spec adapter_monitor_service = {
+			.name = "ntnic-adapter-monitor",
+			.callback = nt4ga_link_100g_mon,
+			.socket_id = SOCKET_ID_ANY,
+			.capabilities = RTE_SERVICE_CAP_MT_SAFE,
+			.callback_userdata = p_adapter_info,
+		};
+
+		res = nthw_service_add(&adapter_monitor_service, RTE_NTNIC_SERVICE_ADAPTER_MON);
+		if (res) {
+			NT_LOG(ERR, NTNIC, "%s: Failed to create adapter monitor service",
+				p_adapter_info->mp_adapter_id_str);
+			return res;
 		}
 	}
 
@@ -725,7 +744,7 @@ static struct link_ops_s link_100g_ops = {
 	.link_init = nt4ga_link_100g_ports_init,
 };
 
-void link_100g_init(void)
+void nthw_link_100g_init(void)
 {
-	register_100g_link_ops(&link_100g_ops);
+	nthw_reg_100g_link_ops(&link_100g_ops);
 }

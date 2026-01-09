@@ -94,8 +94,8 @@ i40e_monitor_callback(const uint64_t value,
 int
 i40e_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
 {
-	struct i40e_rx_queue *rxq = rx_queue;
-	volatile union i40e_rx_desc *rxdp;
+	struct ci_rx_queue *rxq = rx_queue;
+	volatile union ci_rx_desc *rxdp;
 	uint16_t desc;
 
 	desc = rxq->rx_tail;
@@ -113,7 +113,7 @@ i40e_get_monitor_addr(void *rx_queue, struct rte_power_monitor_cond *pmc)
 }
 
 static inline void
-i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union i40e_rx_desc *rxdp)
+i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union ci_rx_desc *rxdp)
 {
 	if (rte_le_to_cpu_64(rxdp->wb.qword1.status_error_len) &
 		(1 << I40E_RX_DESC_STATUS_L2TAG1P_SHIFT)) {
@@ -125,12 +125,16 @@ i40e_rxd_to_vlan_tci(struct rte_mbuf *mb, volatile union i40e_rx_desc *rxdp)
 	} else {
 		mb->vlan_tci = 0;
 	}
-#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 	if (rte_le_to_cpu_16(rxdp->wb.qword2.ext_status) &
 		(1 << I40E_RX_DESC_EXT_STATUS_L2TAG2P_SHIFT)) {
-		mb->ol_flags |= RTE_MBUF_F_RX_QINQ_STRIPPED | RTE_MBUF_F_RX_QINQ |
-			RTE_MBUF_F_RX_VLAN_STRIPPED | RTE_MBUF_F_RX_VLAN;
-		mb->vlan_tci_outer = mb->vlan_tci;
+		if ((mb->ol_flags & RTE_MBUF_F_RX_VLAN_STRIPPED) == 0) {
+			mb->ol_flags |= RTE_MBUF_F_RX_VLAN | RTE_MBUF_F_RX_VLAN_STRIPPED;
+		} else {
+			/* if two tags, move Tag1 to outer tag field */
+			mb->ol_flags |= RTE_MBUF_F_RX_QINQ_STRIPPED | RTE_MBUF_F_RX_QINQ;
+			mb->vlan_tci_outer = mb->vlan_tci;
+		}
 		mb->vlan_tci = rte_le_to_cpu_16(rxdp->wb.qword2.l2tag2_2);
 		PMD_RX_LOG(DEBUG, "Descriptor l2tag2_1: %u, l2tag2_2: %u",
 			   rte_le_to_cpu_16(rxdp->wb.qword2.l2tag2_1),
@@ -214,10 +218,10 @@ i40e_get_iee15888_flags(struct rte_mbuf *mb, uint64_t qword)
 #endif
 
 static inline uint64_t
-i40e_rxd_build_fdir(volatile union i40e_rx_desc *rxdp, struct rte_mbuf *mb)
+i40e_rxd_build_fdir(volatile union ci_rx_desc *rxdp, struct rte_mbuf *mb)
 {
 	uint64_t flags = 0;
-#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 	uint16_t flexbh, flexbl;
 
 	flexbh = (rte_le_to_cpu_32(rxdp->wb.qword2.ext_status) >>
@@ -274,6 +278,7 @@ i40e_parse_tunneling_params(uint64_t ol_flags,
 		break;
 	case RTE_MBUF_F_TX_TUNNEL_VXLAN:
 	case RTE_MBUF_F_TX_TUNNEL_GENEVE:
+	case RTE_MBUF_F_TX_TUNNEL_GTP:
 		*cd_tunneling |= I40E_TXD_CTX_UDP_TUNNELING;
 		break;
 	case RTE_MBUF_F_TX_TUNNEL_GRE:
@@ -416,19 +421,19 @@ i40e_xmit_cleanup(struct ci_tx_queue *txq)
 
 static inline int
 #ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
-check_rx_burst_bulk_alloc_preconditions(struct i40e_rx_queue *rxq)
+check_rx_burst_bulk_alloc_preconditions(struct ci_rx_queue *rxq)
 #else
-check_rx_burst_bulk_alloc_preconditions(__rte_unused struct i40e_rx_queue *rxq)
+check_rx_burst_bulk_alloc_preconditions(__rte_unused struct ci_rx_queue *rxq)
 #endif
 {
 	int ret = 0;
 
 #ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
-	if (!(rxq->rx_free_thresh >= RTE_PMD_I40E_RX_MAX_BURST)) {
+	if (!(rxq->rx_free_thresh >= I40E_RX_MAX_BURST)) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions: "
 			     "rxq->rx_free_thresh=%d, "
-			     "RTE_PMD_I40E_RX_MAX_BURST=%d",
-			     rxq->rx_free_thresh, RTE_PMD_I40E_RX_MAX_BURST);
+			     "I40E_RX_MAX_BURST=%d",
+			     rxq->rx_free_thresh, I40E_RX_MAX_BURST);
 		ret = -EINVAL;
 	} else if (!(rxq->rx_free_thresh < rxq->nb_rx_desc)) {
 		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions: "
@@ -456,10 +461,10 @@ check_rx_burst_bulk_alloc_preconditions(__rte_unused struct i40e_rx_queue *rxq)
 #error "PMD I40E: I40E_LOOK_AHEAD must be 8\n"
 #endif
 static inline int
-i40e_rx_scan_hw_ring(struct i40e_rx_queue *rxq)
+i40e_rx_scan_hw_ring(struct ci_rx_queue *rxq)
 {
-	volatile union i40e_rx_desc *rxdp;
-	struct i40e_rx_entry *rxep;
+	volatile union ci_rx_desc *rxdp;
+	struct ci_rx_entry *rxep;
 	struct rte_mbuf *mb;
 	uint16_t pkt_len;
 	uint64_t qword1;
@@ -467,7 +472,7 @@ i40e_rx_scan_hw_ring(struct i40e_rx_queue *rxq)
 	int32_t s[I40E_LOOK_AHEAD], var, nb_dd;
 	int32_t i, j, nb_rx = 0;
 	uint64_t pkt_flags;
-	uint32_t *ptype_tbl = rxq->vsi->adapter->ptype_tbl;
+	uint32_t *ptype_tbl = rxq->i40e_vsi->adapter->ptype_tbl;
 
 	rxdp = &rxq->rx_ring[rxq->rx_tail];
 	rxep = &rxq->sw_ring[rxq->rx_tail];
@@ -484,7 +489,7 @@ i40e_rx_scan_hw_ring(struct i40e_rx_queue *rxq)
 	 * Scan LOOK_AHEAD descriptors at a time to determine which
 	 * descriptors reference packets that are ready to be received.
 	 */
-	for (i = 0; i < RTE_PMD_I40E_RX_MAX_BURST; i+=I40E_LOOK_AHEAD,
+	for (i = 0; i < I40E_RX_MAX_BURST; i += I40E_LOOK_AHEAD,
 			rxdp += I40E_LOOK_AHEAD, rxep += I40E_LOOK_AHEAD) {
 		/* Read desc statuses backwards to avoid race condition */
 		for (j = I40E_LOOK_AHEAD - 1; j >= 0; j--) {
@@ -558,7 +563,7 @@ i40e_rx_scan_hw_ring(struct i40e_rx_queue *rxq)
 }
 
 static inline uint16_t
-i40e_rx_fill_from_stage(struct i40e_rx_queue *rxq,
+i40e_rx_fill_from_stage(struct ci_rx_queue *rxq,
 			struct rte_mbuf **rx_pkts,
 			uint16_t nb_pkts)
 {
@@ -577,10 +582,10 @@ i40e_rx_fill_from_stage(struct i40e_rx_queue *rxq,
 }
 
 static inline int
-i40e_rx_alloc_bufs(struct i40e_rx_queue *rxq)
+i40e_rx_alloc_bufs(struct ci_rx_queue *rxq)
 {
-	volatile union i40e_rx_desc *rxdp;
-	struct i40e_rx_entry *rxep;
+	volatile union ci_rx_desc *rxdp;
+	struct ci_rx_entry *rxep;
 	struct rte_mbuf *mb;
 	uint16_t alloc_idx, i;
 	uint64_t dma_addr;
@@ -590,7 +595,7 @@ i40e_rx_alloc_bufs(struct i40e_rx_queue *rxq)
 	alloc_idx = (uint16_t)(rxq->rx_free_trigger -
 				(rxq->rx_free_thresh - 1));
 	rxep = &(rxq->sw_ring[alloc_idx]);
-	diag = rte_mempool_get_bulk(rxq->mp, (void *)rxep,
+	diag = rte_mbuf_raw_alloc_bulk(rxq->mp, (void *)rxep,
 					rxq->rx_free_thresh);
 	if (unlikely(diag != 0)) {
 		PMD_DRV_LOG(ERR, "Failed to get mbufs in bulk");
@@ -629,7 +634,7 @@ i40e_rx_alloc_bufs(struct i40e_rx_queue *rxq)
 static inline uint16_t
 rx_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
-	struct i40e_rx_queue *rxq = (struct i40e_rx_queue *)rx_queue;
+	struct ci_rx_queue *rxq = (struct ci_rx_queue *)rx_queue;
 	struct rte_eth_dev *dev;
 	uint16_t nb_rx = 0;
 
@@ -648,7 +653,7 @@ rx_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		if (i40e_rx_alloc_bufs(rxq) != 0) {
 			uint16_t i, j;
 
-			dev = I40E_VSI_TO_ETH_DEV(rxq->vsi);
+			dev = I40E_VSI_TO_ETH_DEV(rxq->i40e_vsi);
 			dev->data->rx_mbuf_alloc_failed +=
 				rxq->rx_free_thresh;
 
@@ -680,11 +685,11 @@ i40e_recv_pkts_bulk_alloc(void *rx_queue,
 	if (unlikely(nb_pkts == 0))
 		return 0;
 
-	if (likely(nb_pkts <= RTE_PMD_I40E_RX_MAX_BURST))
+	if (likely(nb_pkts <= I40E_RX_MAX_BURST))
 		return rx_recv_pkts(rx_queue, rx_pkts, nb_pkts);
 
 	while (nb_pkts) {
-		n = RTE_MIN(nb_pkts, RTE_PMD_I40E_RX_MAX_BURST);
+		n = RTE_MIN(nb_pkts, I40E_RX_MAX_BURST);
 		count = rx_recv_pkts(rx_queue, &rx_pkts[nb_rx], n);
 		nb_rx = (uint16_t)(nb_rx + count);
 		nb_pkts = (uint16_t)(nb_pkts - count);
@@ -707,12 +712,12 @@ i40e_recv_pkts_bulk_alloc(void __rte_unused *rx_queue,
 uint16_t
 i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 {
-	struct i40e_rx_queue *rxq;
-	volatile union i40e_rx_desc *rx_ring;
-	volatile union i40e_rx_desc *rxdp;
-	union i40e_rx_desc rxd;
-	struct i40e_rx_entry *sw_ring;
-	struct i40e_rx_entry *rxe;
+	struct ci_rx_queue *rxq;
+	volatile union ci_rx_desc *rx_ring;
+	volatile union ci_rx_desc *rxdp;
+	union ci_rx_desc rxd;
+	struct ci_rx_entry *sw_ring;
+	struct ci_rx_entry *rxe;
 	struct rte_eth_dev *dev;
 	struct rte_mbuf *rxm;
 	struct rte_mbuf *nmb;
@@ -731,7 +736,7 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 	rx_id = rxq->rx_tail;
 	rx_ring = rxq->rx_ring;
 	sw_ring = rxq->sw_ring;
-	ptype_tbl = rxq->vsi->adapter->ptype_tbl;
+	ptype_tbl = rxq->i40e_vsi->adapter->ptype_tbl;
 
 	while (nb_rx < nb_pkts) {
 		rxdp = &rx_ring[rx_id];
@@ -745,7 +750,7 @@ i40e_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 
 		nmb = rte_mbuf_raw_alloc(rxq->mp);
 		if (unlikely(!nmb)) {
-			dev = I40E_VSI_TO_ETH_DEV(rxq->vsi);
+			dev = I40E_VSI_TO_ETH_DEV(rxq->i40e_vsi);
 			dev->data->rx_mbuf_alloc_failed++;
 			break;
 		}
@@ -837,12 +842,12 @@ i40e_recv_scattered_pkts(void *rx_queue,
 			 struct rte_mbuf **rx_pkts,
 			 uint16_t nb_pkts)
 {
-	struct i40e_rx_queue *rxq = rx_queue;
-	volatile union i40e_rx_desc *rx_ring = rxq->rx_ring;
-	volatile union i40e_rx_desc *rxdp;
-	union i40e_rx_desc rxd;
-	struct i40e_rx_entry *sw_ring = rxq->sw_ring;
-	struct i40e_rx_entry *rxe;
+	struct ci_rx_queue *rxq = rx_queue;
+	volatile union ci_rx_desc *rx_ring = rxq->rx_ring;
+	volatile union ci_rx_desc *rxdp;
+	union ci_rx_desc rxd;
+	struct ci_rx_entry *sw_ring = rxq->sw_ring;
+	struct ci_rx_entry *rxe;
 	struct rte_mbuf *first_seg = rxq->pkt_first_seg;
 	struct rte_mbuf *last_seg = rxq->pkt_last_seg;
 	struct rte_mbuf *nmb, *rxm;
@@ -853,7 +858,7 @@ i40e_recv_scattered_pkts(void *rx_queue,
 	uint64_t qword1;
 	uint64_t dma_addr;
 	uint64_t pkt_flags;
-	uint32_t *ptype_tbl = rxq->vsi->adapter->ptype_tbl;
+	uint32_t *ptype_tbl = rxq->i40e_vsi->adapter->ptype_tbl;
 
 	while (nb_rx < nb_pkts) {
 		rxdp = &rx_ring[rx_id];
@@ -867,7 +872,7 @@ i40e_recv_scattered_pkts(void *rx_queue,
 
 		nmb = rte_mbuf_raw_alloc(rxq->mp);
 		if (unlikely(!nmb)) {
-			dev = I40E_VSI_TO_ETH_DEV(rxq->vsi);
+			dev = I40E_VSI_TO_ETH_DEV(rxq->i40e_vsi);
 			dev->data->rx_mbuf_alloc_failed++;
 			break;
 		}
@@ -1334,9 +1339,9 @@ i40e_tx_free_bufs(struct ci_tx_queue *txq)
 	struct ci_tx_entry *txep;
 	uint16_t tx_rs_thresh = txq->tx_rs_thresh;
 	uint16_t i = 0, j = 0;
-	struct rte_mbuf *free[RTE_I40E_TX_MAX_FREE_BUF_SZ];
-	const uint16_t k = RTE_ALIGN_FLOOR(tx_rs_thresh, RTE_I40E_TX_MAX_FREE_BUF_SZ);
-	const uint16_t m = tx_rs_thresh % RTE_I40E_TX_MAX_FREE_BUF_SZ;
+	struct rte_mbuf *free[I40E_TX_MAX_FREE_BUF_SZ];
+	const uint16_t k = RTE_ALIGN_FLOOR(tx_rs_thresh, I40E_TX_MAX_FREE_BUF_SZ);
+	const uint16_t m = tx_rs_thresh % I40E_TX_MAX_FREE_BUF_SZ;
 
 	if ((txq->i40e_tx_ring[txq->tx_next_dd].cmd_type_offset_bsz &
 			rte_cpu_to_le_64(I40E_TXD_QW1_DTYPE_MASK)) !=
@@ -1350,13 +1355,13 @@ i40e_tx_free_bufs(struct ci_tx_queue *txq)
 
 	if (txq->offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) {
 		if (k) {
-			for (j = 0; j != k; j += RTE_I40E_TX_MAX_FREE_BUF_SZ) {
-				for (i = 0; i < RTE_I40E_TX_MAX_FREE_BUF_SZ; ++i, ++txep) {
+			for (j = 0; j != k; j += I40E_TX_MAX_FREE_BUF_SZ) {
+				for (i = 0; i < I40E_TX_MAX_FREE_BUF_SZ; ++i, ++txep) {
 					free[i] = txep->mbuf;
 					txep->mbuf = NULL;
 				}
-				rte_mempool_put_bulk(free[0]->pool, (void **)free,
-						RTE_I40E_TX_MAX_FREE_BUF_SZ);
+				rte_mbuf_raw_free_bulk(free[0]->pool, free,
+						I40E_TX_MAX_FREE_BUF_SZ);
 			}
 		}
 
@@ -1365,7 +1370,7 @@ i40e_tx_free_bufs(struct ci_tx_queue *txq)
 				free[i] = txep->mbuf;
 				txep->mbuf = NULL;
 			}
-			rte_mempool_put_bulk(free[0]->pool, (void **)free, m);
+			rte_mbuf_raw_free_bulk(free[0]->pool, free, m);
 		}
 	} else {
 		for (i = 0; i < txq->tx_rs_thresh; ++i, ++txep) {
@@ -1798,7 +1803,7 @@ i40e_get_queue_offset_by_qindex(struct i40e_pf *pf, uint16_t queue_idx)
 int
 i40e_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	int err;
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -1841,7 +1846,7 @@ i40e_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 int
 i40e_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	int err;
 	struct i40e_hw *hw = I40E_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -2004,7 +2009,7 @@ i40e_dev_first_queue(uint16_t idx, void **queues, int num)
 
 static int
 i40e_dev_rx_queue_setup_runtime(struct rte_eth_dev *dev,
-				struct i40e_rx_queue *rxq)
+				struct ci_rx_queue *rxq)
 {
 	struct i40e_adapter *ad =
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
@@ -2081,7 +2086,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 	struct i40e_vsi *vsi;
 	struct i40e_pf *pf = NULL;
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	const struct rte_memzone *rz;
 	uint32_t ring_size;
 	uint16_t len, i;
@@ -2116,7 +2121,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 
 	/* Allocate the rx queue data structure */
 	rxq = rte_zmalloc_socket("i40e rx queue",
-				 sizeof(struct i40e_rx_queue),
+				 sizeof(struct ci_rx_queue),
 				 RTE_CACHE_LINE_SIZE,
 				 socket_id);
 	if (!rxq) {
@@ -2135,7 +2140,7 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	else
 		rxq->crc_len = 0;
 	rxq->drop_en = rx_conf->rx_drop_en;
-	rxq->vsi = vsi;
+	rxq->i40e_vsi = vsi;
 	rxq->rx_deferred_start = rx_conf->rx_deferred_start;
 	rxq->offloads = offloads;
 
@@ -2146,9 +2151,9 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	 * Allocating a little more memory because vectorized/bulk_alloc Rx
 	 * functions doesn't check boundaries each time.
 	 */
-	len += RTE_PMD_I40E_RX_MAX_BURST;
+	len += I40E_RX_MAX_BURST;
 
-	ring_size = RTE_ALIGN(len * sizeof(union i40e_rx_desc),
+	ring_size = RTE_ALIGN(len * sizeof(union ci_rx_desc),
 			      I40E_DMA_MEM_ALIGN);
 
 	rz = rte_eth_dma_zone_reserve(dev, "rx_ring", queue_idx,
@@ -2164,14 +2169,14 @@ i40e_dev_rx_queue_setup(struct rte_eth_dev *dev,
 	memset(rz->addr, 0, ring_size);
 
 	rxq->rx_ring_phys_addr = rz->iova;
-	rxq->rx_ring = (union i40e_rx_desc *)rz->addr;
+	rxq->rx_ring = (union ci_rx_desc *)rz->addr;
 
-	len = (uint16_t)(nb_desc + RTE_PMD_I40E_RX_MAX_BURST);
+	len = (uint16_t)(nb_desc + I40E_RX_MAX_BURST);
 
 	/* Allocate the software ring. */
 	rxq->sw_ring =
 		rte_zmalloc_socket("i40e rx sw ring",
-				   sizeof(struct i40e_rx_entry) * len,
+				   sizeof(struct ci_rx_entry) * len,
 				   RTE_CACHE_LINE_SIZE,
 				   socket_id);
 	if (!rxq->sw_ring) {
@@ -2242,7 +2247,7 @@ i40e_dev_tx_queue_release(struct rte_eth_dev *dev, uint16_t qid)
 void
 i40e_rx_queue_release(void *rxq)
 {
-	struct i40e_rx_queue *q = (struct i40e_rx_queue *)rxq;
+	struct ci_rx_queue *q = (struct ci_rx_queue *)rxq;
 
 	if (!q) {
 		PMD_DRV_LOG(DEBUG, "Pointer to rxq is NULL");
@@ -2255,12 +2260,12 @@ i40e_rx_queue_release(void *rxq)
 	rte_free(q);
 }
 
-uint32_t
+int
 i40e_dev_rx_queue_count(void *rx_queue)
 {
 #define I40E_RXQ_SCAN_INTERVAL 4
-	volatile union i40e_rx_desc *rxdp;
-	struct i40e_rx_queue *rxq;
+	volatile union ci_rx_desc *rxdp;
+	struct ci_rx_queue *rxq;
 	uint16_t desc = 0;
 
 	rxq = rx_queue;
@@ -2287,7 +2292,7 @@ i40e_dev_rx_queue_count(void *rx_queue)
 int
 i40e_dev_rx_descriptor_status(void *rx_queue, uint16_t offset)
 {
-	struct i40e_rx_queue *rxq = rx_queue;
+	struct ci_rx_queue *rxq = rx_queue;
 	volatile uint64_t *status;
 	uint64_t mask;
 	uint32_t desc;
@@ -2370,7 +2375,7 @@ i40e_dev_tx_queue_setup_runtime(struct rte_eth_dev *dev,
 
 	/* check vector conflict */
 	if (ad->tx_vec_allowed) {
-		if (txq->tx_rs_thresh > RTE_I40E_TX_MAX_FREE_BUF_SZ ||
+		if (txq->tx_rs_thresh > I40E_TX_MAX_FREE_BUF_SZ ||
 		    i40e_txq_vec_setup(txq)) {
 			PMD_DRV_LOG(ERR, "Failed vector tx setup.");
 			return -EINVAL;
@@ -2379,7 +2384,7 @@ i40e_dev_tx_queue_setup_runtime(struct rte_eth_dev *dev,
 	/* check simple tx conflict */
 	if (ad->tx_simple_allowed) {
 		if ((txq->offloads & ~RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) != 0 ||
-				txq->tx_rs_thresh < RTE_PMD_I40E_TX_MAX_BURST) {
+				txq->tx_rs_thresh < I40E_TX_MAX_BURST) {
 			PMD_DRV_LOG(ERR, "No-simple tx is required.");
 			return -EINVAL;
 		}
@@ -2628,12 +2633,12 @@ i40e_memzone_reserve(const char *name, uint32_t len, int socket_id)
 }
 
 void
-i40e_rx_queue_release_mbufs(struct i40e_rx_queue *rxq)
+i40e_rx_queue_release_mbufs(struct ci_rx_queue *rxq)
 {
 	uint16_t i;
 
 	/* SSE Vector driver has a different way of releasing mbufs. */
-	if (rxq->rx_using_sse) {
+	if (rxq->vector_rx) {
 		i40e_rx_queue_release_mbufs_vec(rxq);
 		return;
 	}
@@ -2663,7 +2668,7 @@ i40e_rx_queue_release_mbufs(struct i40e_rx_queue *rxq)
 }
 
 void
-i40e_reset_rx_queue(struct i40e_rx_queue *rxq)
+i40e_reset_rx_queue(struct ci_rx_queue *rxq)
 {
 	unsigned i;
 	uint16_t len;
@@ -2675,16 +2680,16 @@ i40e_reset_rx_queue(struct i40e_rx_queue *rxq)
 
 #ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
 	if (check_rx_burst_bulk_alloc_preconditions(rxq) == 0)
-		len = (uint16_t)(rxq->nb_rx_desc + RTE_PMD_I40E_RX_MAX_BURST);
+		len = (uint16_t)(rxq->nb_rx_desc + I40E_RX_MAX_BURST);
 	else
 #endif /* RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC */
 		len = rxq->nb_rx_desc;
 
-	for (i = 0; i < len * sizeof(union i40e_rx_desc); i++)
+	for (i = 0; i < len * sizeof(union ci_rx_desc); i++)
 		((volatile char *)rxq->rx_ring)[i] = 0;
 
 	memset(&rxq->fake_mbuf, 0x0, sizeof(rxq->fake_mbuf));
-	for (i = 0; i < RTE_PMD_I40E_RX_MAX_BURST; ++i)
+	for (i = 0; i < I40E_RX_MAX_BURST; ++i)
 		rxq->sw_ring[rxq->nb_rx_desc + i].mbuf = &rxq->fake_mbuf;
 
 #ifdef RTE_LIBRTE_I40E_RX_ALLOW_BULK_ALLOC
@@ -2898,14 +2903,14 @@ i40e_tx_queue_init(struct ci_tx_queue *txq)
 }
 
 int
-i40e_alloc_rx_queue_mbufs(struct i40e_rx_queue *rxq)
+i40e_alloc_rx_queue_mbufs(struct ci_rx_queue *rxq)
 {
-	struct i40e_rx_entry *rxe = rxq->sw_ring;
+	struct ci_rx_entry *rxe = rxq->sw_ring;
 	uint64_t dma_addr;
 	uint16_t i;
 
 	for (i = 0; i < rxq->nb_rx_desc; i++) {
-		volatile union i40e_rx_desc *rxd;
+		volatile union ci_rx_desc *rxd;
 		struct rte_mbuf *mbuf = rte_mbuf_raw_alloc(rxq->mp);
 
 		if (unlikely(!mbuf)) {
@@ -2925,10 +2930,10 @@ i40e_alloc_rx_queue_mbufs(struct i40e_rx_queue *rxq)
 		rxd = &rxq->rx_ring[i];
 		rxd->read.pkt_addr = dma_addr;
 		rxd->read.hdr_addr = 0;
-#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 		rxd->read.rsvd1 = 0;
 		rxd->read.rsvd2 = 0;
-#endif /* RTE_LIBRTE_I40E_16BYTE_RX_DESC */
+#endif /* RTE_NET_INTEL_USE_16BYTE_DESC */
 
 		rxe[i].mbuf = mbuf;
 	}
@@ -2941,10 +2946,10 @@ i40e_alloc_rx_queue_mbufs(struct i40e_rx_queue *rxq)
  * and maximum packet length.
  */
 static int
-i40e_rx_queue_config(struct i40e_rx_queue *rxq)
+i40e_rx_queue_config(struct ci_rx_queue *rxq)
 {
-	struct i40e_pf *pf = I40E_VSI_TO_PF(rxq->vsi);
-	struct i40e_hw *hw = I40E_VSI_TO_HW(rxq->vsi);
+	struct i40e_pf *pf = I40E_VSI_TO_PF(rxq->i40e_vsi);
+	struct i40e_hw *hw = I40E_VSI_TO_HW(rxq->i40e_vsi);
 	struct rte_eth_dev_data *data = pf->dev_data;
 	uint16_t buf_size;
 
@@ -2988,11 +2993,11 @@ i40e_rx_queue_config(struct i40e_rx_queue *rxq)
 
 /* Init the RX queue in hardware */
 int
-i40e_rx_queue_init(struct i40e_rx_queue *rxq)
+i40e_rx_queue_init(struct ci_rx_queue *rxq)
 {
 	int err = I40E_SUCCESS;
-	struct i40e_hw *hw = I40E_VSI_TO_HW(rxq->vsi);
-	struct rte_eth_dev_data *dev_data = I40E_VSI_TO_DEV_DATA(rxq->vsi);
+	struct i40e_hw *hw = I40E_VSI_TO_HW(rxq->i40e_vsi);
+	struct rte_eth_dev_data *dev_data = I40E_VSI_TO_DEV_DATA(rxq->i40e_vsi);
 	uint16_t pf_q = rxq->reg_idx;
 	uint16_t buf_size;
 	struct i40e_hmc_obj_rxq rx_ctx;
@@ -3010,7 +3015,7 @@ i40e_rx_queue_init(struct i40e_rx_queue *rxq)
 
 	rx_ctx.base = rxq->rx_ring_phys_addr / I40E_QUEUE_BASE_ADDR_UNIT;
 	rx_ctx.qlen = rxq->nb_rx_desc;
-#ifndef RTE_LIBRTE_I40E_16BYTE_RX_DESC
+#ifndef RTE_NET_INTEL_USE_16BYTE_DESC
 	rx_ctx.dsize = 1;
 #endif
 	rx_ctx.dtype = rxq->hs_mode;
@@ -3166,7 +3171,7 @@ i40e_fdir_setup_tx_resources(struct i40e_pf *pf)
 enum i40e_status_code
 i40e_fdir_setup_rx_resources(struct i40e_pf *pf)
 {
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	const struct rte_memzone *rz = NULL;
 	uint32_t ring_size;
 	struct rte_eth_dev *dev;
@@ -3180,7 +3185,7 @@ i40e_fdir_setup_rx_resources(struct i40e_pf *pf)
 
 	/* Allocate the RX queue data structure. */
 	rxq = rte_zmalloc_socket("i40e fdir rx queue",
-				  sizeof(struct i40e_rx_queue),
+				  sizeof(struct ci_rx_queue),
 				  RTE_CACHE_LINE_SIZE,
 				  SOCKET_ID_ANY);
 	if (!rxq) {
@@ -3190,7 +3195,7 @@ i40e_fdir_setup_rx_resources(struct i40e_pf *pf)
 	}
 
 	/* Allocate RX hardware ring descriptors. */
-	ring_size = sizeof(union i40e_rx_desc) * I40E_FDIR_NUM_RX_DESC;
+	ring_size = sizeof(union ci_rx_desc) * I40E_FDIR_NUM_RX_DESC;
 	ring_size = RTE_ALIGN(ring_size, I40E_DMA_MEM_ALIGN);
 
 	rz = rte_eth_dma_zone_reserve(dev, "fdir_rx_ring",
@@ -3206,11 +3211,11 @@ i40e_fdir_setup_rx_resources(struct i40e_pf *pf)
 	rxq->nb_rx_desc = I40E_FDIR_NUM_RX_DESC;
 	rxq->queue_id = I40E_FDIR_QUEUE_ID;
 	rxq->reg_idx = pf->fdir.fdir_vsi->base_queue;
-	rxq->vsi = pf->fdir.fdir_vsi;
+	rxq->i40e_vsi = pf->fdir.fdir_vsi;
 
 	rxq->rx_ring_phys_addr = rz->iova;
-	memset(rz->addr, 0, I40E_FDIR_NUM_RX_DESC * sizeof(union i40e_rx_desc));
-	rxq->rx_ring = (union i40e_rx_desc *)rz->addr;
+	memset(rz->addr, 0, I40E_FDIR_NUM_RX_DESC * sizeof(union ci_rx_desc));
+	rxq->rx_ring = (union ci_rx_desc *)rz->addr;
 
 	/*
 	 * Don't need to allocate software ring and reset for the fdir
@@ -3226,7 +3231,7 @@ void
 i40e_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	struct rte_eth_rxq_info *qinfo)
 {
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 
 	rxq = dev->data->rx_queues[queue_id];
 
@@ -3264,7 +3269,7 @@ void
 i40e_recycle_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	struct rte_eth_recycle_rxq_info *recycle_rxq_info)
 {
-	struct i40e_rx_queue *rxq;
+	struct ci_rx_queue *rxq;
 	struct i40e_adapter *ad =
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
 
@@ -3276,7 +3281,7 @@ i40e_recycle_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	recycle_rxq_info->receive_tail = &rxq->rx_tail;
 
 	if (ad->rx_vec_allowed) {
-		recycle_rxq_info->refill_requirement = RTE_I40E_RXQ_REARM_THRESH;
+		recycle_rxq_info->refill_requirement = I40E_VPMD_RXQ_REARM_THRESH;
 		recycle_rxq_info->refill_head = &rxq->rxrearm_start;
 	} else {
 		recycle_rxq_info->refill_requirement = rxq->rx_free_thresh;
@@ -3284,192 +3289,189 @@ i40e_recycle_rxq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 	}
 }
 
+static const struct ci_rx_path_info i40e_rx_path_infos[] = {
+	[I40E_RX_DEFAULT] = {
+		.pkt_burst = i40e_recv_pkts,
+		.info = "Scalar",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS
+		}
+	},
+	[I40E_RX_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts,
+		.info = "Scalar Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.extra.scattered = true
+		}
+	},
+	[I40E_RX_BULK_ALLOC] = {
+		.pkt_burst = i40e_recv_pkts_bulk_alloc,
+		.info = "Scalar Bulk Alloc",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.extra.bulk_alloc = true
+		}
+	},
 #ifdef RTE_ARCH_X86
-static inline bool
-get_avx_supported(bool request_avx512)
-{
-	if (request_avx512) {
-		if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_512 &&
-		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1 &&
-		rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512BW) == 1)
+	[I40E_RX_SSE] = {
+		.pkt_burst = i40e_recv_pkts_vec,
+		.info = "Vector SSE",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_SSE_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec,
+		.info = "Vector SSE Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_AVX2] = {
+		.pkt_burst = i40e_recv_pkts_vec_avx2,
+		.info = "Vector AVX2",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_AVX2_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec_avx2,
+		.info = "Vector AVX2 Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_256,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
 #ifdef CC_AVX512_SUPPORT
-			return true;
-#else
-		PMD_DRV_LOG(NOTICE,
-			"AVX512 is not supported in build env");
-		return false;
+	[I40E_RX_AVX512] = {
+		.pkt_burst = i40e_recv_pkts_vec_avx512,
+		.info = "Vector AVX512",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_512,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_AVX512_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec_avx512,
+		.info = "Vector AVX512 Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_VECTOR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_512,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
 #endif
-	} else {
-		if (rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_256 &&
-				rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX2) == 1 &&
-				rte_cpu_get_flag_enabled(RTE_CPUFLAG_AVX512F) == 1)
-			return true;
-	}
-
-	return false;
-}
-#endif /* RTE_ARCH_X86 */
-
+#elif defined(RTE_ARCH_ARM64)
+	[I40E_RX_NEON] = {
+		.pkt_burst = i40e_recv_pkts_vec,
+		.info = "Vector Neon",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_NEON_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec,
+		.info = "Vector Neon Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
+#elif defined(RTE_ARCH_PPC_64)
+	[I40E_RX_ALTIVEC] = {
+		.pkt_burst = i40e_recv_pkts_vec,
+		.info = "Vector AltiVec",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.bulk_alloc = true
+		}
+	},
+	[I40E_RX_ALTIVEC_SCATTERED] = {
+		.pkt_burst = i40e_recv_scattered_pkts_vec,
+		.info = "Vector AltiVec Scattered",
+		.features = {
+			.rx_offloads = I40E_RX_SCALAR_OFFLOADS,
+			.simd_width = RTE_VECT_SIMD_128,
+			.extra.scattered = true,
+			.extra.bulk_alloc = true
+		}
+	},
+#endif
+};
 
 void __rte_cold
 i40e_set_rx_function(struct rte_eth_dev *dev)
 {
 	struct i40e_adapter *ad =
 		I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
-	uint16_t rx_using_sse, i;
+	struct ci_rx_path_features req_features = {
+		.rx_offloads = dev->data->dev_conf.rxmode.offloads,
+		.simd_width = RTE_VECT_SIMD_DISABLED,
+	};
+	uint16_t i;
+	enum rte_vect_max_simd rx_simd_width = i40e_get_max_simd_bitwidth();
+
+	/* The primary process selects the rx path for all processes. */
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		goto out;
+
 	/* In order to allow Vector Rx there are a few configuration
 	 * conditions to be met and Rx Bulk Allocation should be allowed.
 	 */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-#ifdef RTE_ARCH_X86
-		ad->rx_use_avx512 = false;
-		ad->rx_use_avx2 = false;
-#endif
-		if (i40e_rx_vec_dev_conf_condition_check(dev) ||
-		    !ad->rx_bulk_alloc_allowed) {
-			PMD_INIT_LOG(DEBUG, "Port[%d] doesn't meet"
-				     " Vector Rx preconditions",
-				     dev->data->port_id);
 
-			ad->rx_vec_allowed = false;
-		}
-		if (ad->rx_vec_allowed) {
-			for (i = 0; i < dev->data->nb_rx_queues; i++) {
-				struct i40e_rx_queue *rxq =
-					dev->data->rx_queues[i];
+	if (i40e_rx_vec_dev_conf_condition_check(dev) || !ad->rx_bulk_alloc_allowed) {
+		PMD_INIT_LOG(DEBUG, "Port[%d] doesn't meet"
+				" Vector Rx preconditions",
+				dev->data->port_id);
 
-				if (rxq && i40e_rxq_vec_setup(rxq)) {
-					ad->rx_vec_allowed = false;
-					break;
-				}
-			}
-#ifdef RTE_ARCH_X86
-			ad->rx_use_avx512 = get_avx_supported(1);
-
-			if (!ad->rx_use_avx512)
-				ad->rx_use_avx2 = get_avx_supported(0);
-#endif
-		}
+		rx_simd_width = RTE_VECT_SIMD_DISABLED;
 	}
 
-	if (ad->rx_vec_allowed  &&
-	    rte_vect_get_max_simd_bitwidth() >= RTE_VECT_SIMD_128) {
-#ifdef RTE_ARCH_X86
-		if (dev->data->scattered_rx) {
-			if (ad->rx_use_avx512) {
-#ifdef CC_AVX512_SUPPORT
-				PMD_DRV_LOG(NOTICE,
-					"Using AVX512 Vector Scattered Rx (port %d).",
-					dev->data->port_id);
-				dev->rx_pkt_burst =
-					i40e_recv_scattered_pkts_vec_avx512;
-#endif
-			} else {
-				PMD_INIT_LOG(DEBUG,
-					"Using %sVector Scattered Rx (port %d).",
-					ad->rx_use_avx2 ? "avx2 " : "",
-					dev->data->port_id);
-				dev->rx_pkt_burst = ad->rx_use_avx2 ?
-					i40e_recv_scattered_pkts_vec_avx2 :
-					i40e_recv_scattered_pkts_vec;
-				dev->recycle_rx_descriptors_refill =
-					i40e_recycle_rx_descriptors_refill_vec;
-			}
-		} else {
-			if (ad->rx_use_avx512) {
-#ifdef CC_AVX512_SUPPORT
-				PMD_DRV_LOG(NOTICE,
-					"Using AVX512 Vector Rx (port %d).",
-					dev->data->port_id);
-				dev->rx_pkt_burst =
-					i40e_recv_pkts_vec_avx512;
-#endif
-			} else {
-				PMD_INIT_LOG(DEBUG,
-					"Using %sVector Rx (port %d).",
-					ad->rx_use_avx2 ? "avx2 " : "",
-					dev->data->port_id);
-				dev->rx_pkt_burst = ad->rx_use_avx2 ?
-					i40e_recv_pkts_vec_avx2 :
-					i40e_recv_pkts_vec;
-				dev->recycle_rx_descriptors_refill =
-					i40e_recycle_rx_descriptors_refill_vec;
-			}
-		}
-#else /* RTE_ARCH_X86 */
+	req_features.simd_width = rx_simd_width;
+	if (dev->data->scattered_rx)
+		req_features.extra.scattered = true;
+	if (ad->rx_bulk_alloc_allowed)
+		req_features.extra.bulk_alloc = true;
+
+	ad->rx_func_type = ci_rx_path_select(req_features,
+						&i40e_rx_path_infos[0],
+						RTE_DIM(i40e_rx_path_infos),
+						I40E_RX_DEFAULT);
+	if (i40e_rx_path_infos[ad->rx_func_type].features.simd_width >= RTE_VECT_SIMD_128) {
+		/* Vector function selected. Prepare the rxq accordingly. */
+		for (i = 0; i < dev->data->nb_rx_queues; i++)
+			if (dev->data->rx_queues[i])
+				i40e_rxq_vec_setup(dev->data->rx_queues[i]);
+		ad->rx_vec_allowed = true;
+	}
+
+	if (i40e_rx_path_infos[ad->rx_func_type].features.simd_width >= RTE_VECT_SIMD_128 &&
+			i40e_rx_path_infos[ad->rx_func_type].features.simd_width <
+				RTE_VECT_SIMD_512)
 		dev->recycle_rx_descriptors_refill = i40e_recycle_rx_descriptors_refill_vec;
-		if (dev->data->scattered_rx) {
-			PMD_INIT_LOG(DEBUG,
-				     "Using Vector Scattered Rx (port %d).",
-				     dev->data->port_id);
-			dev->rx_pkt_burst = i40e_recv_scattered_pkts_vec;
-		} else {
-			PMD_INIT_LOG(DEBUG, "Using Vector Rx (port %d).",
-				     dev->data->port_id);
-			dev->rx_pkt_burst = i40e_recv_pkts_vec;
-		}
-#endif /* RTE_ARCH_X86 */
-	} else if (!dev->data->scattered_rx && ad->rx_bulk_alloc_allowed) {
-		PMD_INIT_LOG(DEBUG, "Rx Burst Bulk Alloc Preconditions are "
-				    "satisfied. Rx Burst Bulk Alloc function "
-				    "will be used on port=%d.",
-			     dev->data->port_id);
 
-		dev->rx_pkt_burst = i40e_recv_pkts_bulk_alloc;
-	} else {
-		/* Simple Rx Path. */
-		PMD_INIT_LOG(DEBUG, "Simple Rx path will be used on port=%d.",
-			     dev->data->port_id);
-		dev->rx_pkt_burst = dev->data->scattered_rx ?
-					i40e_recv_scattered_pkts :
-					i40e_recv_pkts;
-	}
-
-	/* Propagate information about RX function choice through all queues. */
-	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		rx_using_sse =
-			(dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec ||
-#ifdef CC_AVX512_SUPPORT
-			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx512 ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx512 ||
-#endif
-			 dev->rx_pkt_burst == i40e_recv_scattered_pkts_vec_avx2 ||
-			 dev->rx_pkt_burst == i40e_recv_pkts_vec_avx2);
-
-		for (i = 0; i < dev->data->nb_rx_queues; i++) {
-			struct i40e_rx_queue *rxq = dev->data->rx_queues[i];
-
-			if (rxq)
-				rxq->rx_using_sse = rx_using_sse;
-		}
-	}
+out:
+	dev->rx_pkt_burst = i40e_rx_path_infos[ad->rx_func_type].pkt_burst;
+	PMD_DRV_LOG(NOTICE, "Using %s (port %d).",
+			i40e_rx_path_infos[ad->rx_func_type].info, dev->data->port_id);
 }
-
-static const struct {
-	eth_rx_burst_t pkt_burst;
-	const char *info;
-} i40e_rx_burst_infos[] = {
-	{ i40e_recv_scattered_pkts,          "Scalar Scattered" },
-	{ i40e_recv_pkts_bulk_alloc,         "Scalar Bulk Alloc" },
-	{ i40e_recv_pkts,                    "Scalar" },
-#ifdef RTE_ARCH_X86
-#ifdef CC_AVX512_SUPPORT
-	{ i40e_recv_scattered_pkts_vec_avx512, "Vector AVX512 Scattered" },
-	{ i40e_recv_pkts_vec_avx512,           "Vector AVX512" },
-#endif
-	{ i40e_recv_scattered_pkts_vec_avx2, "Vector AVX2 Scattered" },
-	{ i40e_recv_pkts_vec_avx2,           "Vector AVX2" },
-	{ i40e_recv_scattered_pkts_vec,      "Vector SSE Scattered" },
-	{ i40e_recv_pkts_vec,                "Vector SSE" },
-#elif defined(RTE_ARCH_ARM64)
-	{ i40e_recv_scattered_pkts_vec,      "Vector Neon Scattered" },
-	{ i40e_recv_pkts_vec,                "Vector Neon" },
-#elif defined(RTE_ARCH_PPC_64)
-	{ i40e_recv_scattered_pkts_vec,      "Vector AltiVec Scattered" },
-	{ i40e_recv_pkts_vec,                "Vector AltiVec" },
-#endif
-};
 
 int
 i40e_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
@@ -3479,10 +3481,10 @@ i40e_rx_burst_mode_get(struct rte_eth_dev *dev, __rte_unused uint16_t queue_id,
 	int ret = -EINVAL;
 	unsigned int i;
 
-	for (i = 0; i < RTE_DIM(i40e_rx_burst_infos); ++i) {
-		if (pkt_burst == i40e_rx_burst_infos[i].pkt_burst) {
+	for (i = 0; i < RTE_DIM(i40e_rx_path_infos); ++i) {
+		if (pkt_burst == i40e_rx_path_infos[i].pkt_burst) {
 			snprintf(mode->info, sizeof(mode->info), "%s",
-				 i40e_rx_burst_infos[i].info);
+				 i40e_rx_path_infos[i].info);
 			ret = 0;
 			break;
 		}
@@ -3501,9 +3503,9 @@ i40e_set_tx_function_flag(struct rte_eth_dev *dev, struct ci_tx_queue *txq)
 	ad->tx_simple_allowed =
 		(txq->offloads ==
 		 (txq->offloads & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) &&
-		 txq->tx_rs_thresh >= RTE_PMD_I40E_TX_MAX_BURST);
+		 txq->tx_rs_thresh >= I40E_TX_MAX_BURST);
 	ad->tx_vec_allowed = (ad->tx_simple_allowed &&
-			txq->tx_rs_thresh <= RTE_I40E_TX_MAX_FREE_BUF_SZ);
+			txq->tx_rs_thresh <= I40E_TX_MAX_FREE_BUF_SZ);
 
 	if (ad->tx_vec_allowed)
 		PMD_INIT_LOG(DEBUG, "Vector Tx can be enabled on Tx queue %u.",
@@ -3527,8 +3529,7 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
 #ifdef RTE_ARCH_X86
-		ad->tx_use_avx2 = false;
-		ad->tx_use_avx512 = false;
+		ad->tx_simd_width = i40e_get_max_simd_bitwidth();
 #endif
 		if (ad->tx_vec_allowed) {
 			for (i = 0; i < dev->data->nb_tx_queues; i++) {
@@ -3540,12 +3541,6 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 					break;
 				}
 			}
-#ifdef RTE_ARCH_X86
-			ad->tx_use_avx512 = get_avx_supported(1);
-
-			if (!ad->tx_use_avx512)
-				ad->tx_use_avx2 = get_avx_supported(0);
-#endif
 		}
 	}
 
@@ -3555,17 +3550,22 @@ i40e_set_tx_function(struct rte_eth_dev *dev)
 	if (ad->tx_simple_allowed) {
 		if (ad->tx_vec_allowed) {
 #ifdef RTE_ARCH_X86
-			if (ad->tx_use_avx512) {
+			if (ad->tx_simd_width == RTE_VECT_SIMD_512) {
 #ifdef CC_AVX512_SUPPORT
 				PMD_DRV_LOG(NOTICE, "Using AVX512 Vector Tx (port %d).",
 					    dev->data->port_id);
 				dev->tx_pkt_burst = i40e_xmit_pkts_vec_avx512;
+#else
+				PMD_DRV_LOG(ERR, "Invalid Tx SIMD width reported, defaulting to "
+						"using scalar Tx (port %d).",
+						dev->data->port_id);
+				dev->tx_pkt_burst = i40e_xmit_pkts;
 #endif
 			} else {
 				PMD_INIT_LOG(DEBUG, "Using %sVector Tx (port %d).",
-					     ad->tx_use_avx2 ? "avx2 " : "",
+					     ad->tx_simd_width == RTE_VECT_SIMD_256 ? "avx2 " : "",
 					     dev->data->port_id);
-				dev->tx_pkt_burst = ad->tx_use_avx2 ?
+				dev->tx_pkt_burst = ad->tx_simd_width == RTE_VECT_SIMD_256 ?
 						    i40e_xmit_pkts_vec_avx2 :
 						    i40e_xmit_pkts_vec;
 				dev->recycle_tx_mbufs_reuse = i40e_recycle_tx_mbufs_reuse_vec;
@@ -3657,6 +3657,8 @@ i40e_set_default_pctype_table(struct rte_eth_dev *dev)
 	ad->flow_types_mask = 0ULL;
 	ad->pctypes_mask = 0ULL;
 
+	ad->pctypes_tbl[RTE_ETH_FLOW_IPV4] =
+				(1ULL << I40E_FILTER_PCTYPE_NONF_IPV4_OTHER);
 	ad->pctypes_tbl[RTE_ETH_FLOW_FRAG_IPV4] =
 				(1ULL << I40E_FILTER_PCTYPE_FRAG_IPV4);
 	ad->pctypes_tbl[RTE_ETH_FLOW_NONFRAG_IPV4_UDP] =

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2023 Napatech A/S
  */
 
@@ -304,7 +303,7 @@ static int nthw_gfg_setup(nthw_gfg_t *p,
 		(size_t)n_intf_no >= ARRAY_SIZE(p->mpa_fld_ctrl_size) ||
 		n_intf_no >= ARRAY_SIZE(p->mpa_fld_stream_id_val) ||
 		(size_t)n_intf_no >= ARRAY_SIZE(p->mpa_fld_burst_size_val)) {
-		assert(false);
+		RTE_ASSERT(false);
 		return -1;
 	}
 
@@ -312,7 +311,7 @@ static int nthw_gfg_setup(nthw_gfg_t *p,
 		p->mpa_fld_ctrl_size[n_intf_no] == NULL ||
 		p->mpa_fld_stream_id_val[n_intf_no] == NULL ||
 		p->mpa_fld_burst_size_val[n_intf_no] == NULL) {
-		assert(false);
+		RTE_ASSERT(false);
 		return -1;
 	}
 

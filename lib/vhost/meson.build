@@ -8,11 +8,6 @@ endif
 if has_libnuma
     dpdk_conf.set10('RTE_LIBRTE_VHOST_NUMA', true)
 endif
-if (toolchain == 'gcc' and cc.version().version_compare('>=8.3.0'))
-    cflags += '-DVHOST_GCC_UNROLL_PRAGMA'
-elif (toolchain == 'clang' and cc.version().version_compare('>=3.7.0'))
-    cflags += '-DVHOST_CLANG_UNROLL_PRAGMA'
-endif
 dpdk_conf.set('RTE_LIBRTE_VHOST_POSTCOPY', cc.has_header('linux/userfaultfd.h'))
 
 cflags += no_wvla_cflag
@@ -33,16 +28,13 @@ sources = files(
         'iotlb.c',
         'socket.c',
         'vdpa.c',
+        'vduse.c',
         'vhost.c',
         'vhost_crypto.c',
         'vhost_user.c',
         'virtio_net.c',
         'virtio_net_ctrl.c',
 )
-if cc.has_header('linux/vduse.h')
-    sources += files('vduse.c')
-    cflags += '-DVHOST_HAS_VDUSE'
-endif
 headers = files(
         'rte_vdpa.h',
         'rte_vhost.h',
